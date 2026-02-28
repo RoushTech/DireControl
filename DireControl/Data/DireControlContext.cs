@@ -1,0 +1,19 @@
+using DireControl.Data.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace DireControl.Data;
+
+public class DireControlContext(DbContextOptions<DireControlContext> options) : DbContext(options)
+{
+    public DbSet<Station> Stations => Set<Station>();
+    public DbSet<Packet> Packets => Set<Packet>();
+    public DbSet<Message> Messages => Set<Message>();
+    public DbSet<Alert> Alerts => Set<Alert>();
+    public DbSet<Geofence> Geofences => Set<Geofence>();
+    public DbSet<StationStatistic> StationStatistics => Set<StationStatistic>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(DireControlContext).Assembly);
+    }
+}
