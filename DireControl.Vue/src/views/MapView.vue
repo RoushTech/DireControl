@@ -930,7 +930,7 @@ async function loadStations() {
 
 async function connectSignalR() {
   connection = new HubConnectionBuilder()
-    .withUrl('http://localhost:5010/hubs/packets')
+    .withUrl('/hubs/packets')
     .withAutomaticReconnect()
     .configureLogging(LogLevel.Warning)
     .build()

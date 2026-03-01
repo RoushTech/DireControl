@@ -80,7 +80,7 @@ async function seedFromApi() {
 async function connectSignalR() {
   connectionStatus.value = 'connecting'
   connection = new HubConnectionBuilder()
-    .withUrl('http://localhost:5010/hubs/packets')
+    .withUrl('/hubs/packets')
     .withAutomaticReconnect()
     .configureLogging(LogLevel.Warning)
     .build()

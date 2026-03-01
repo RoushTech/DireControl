@@ -96,7 +96,7 @@ export const useAlertsStore = defineStore('alerts', () => {
     connectionStarted = true
 
     const connection = new HubConnectionBuilder()
-      .withUrl('http://localhost:5010/hubs/packets')
+      .withUrl('/hubs/packets')
       .withAutomaticReconnect()
       .build()
 
