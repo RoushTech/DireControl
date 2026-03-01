@@ -20,6 +20,7 @@ RUN dotnet restore DireControl.Api/DireControl.Api.csproj
 
 COPY DireControl/ DireControl/
 COPY DireControl.Api/ DireControl.Api/
+COPY .git/ .git/
 RUN shortsha=$(printf '%.8s' "$gitsha") \
     && echo "Building version $version+$shortsha from $gitsha" \
     && dotnet publish DireControl.Api/DireControl.Api.csproj \
