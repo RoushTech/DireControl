@@ -39,6 +39,7 @@ public sealed class PacketDto
     public string Path { get; init; } = string.Empty;
     public List<ResolvedPathEntry> ResolvedPath { get; init; } = [];
     public int HopCount { get; init; }
+    public int UnknownHopCount { get; init; }
     public string Comment { get; init; } = string.Empty;
     public WeatherData? WeatherData { get; init; }
     public TelemetryData? TelemetryData { get; init; }

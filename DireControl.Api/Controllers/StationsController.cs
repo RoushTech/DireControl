@@ -385,6 +385,7 @@ public class StationsController(
         Path = p.Path,
         ResolvedPath = p.ResolvedPath,
         HopCount = p.HopCount,
+        UnknownHopCount = p.UnknownHopCount,
         Comment = p.Comment,
         WeatherData = p.WeatherData,
         TelemetryData = p.TelemetryData,

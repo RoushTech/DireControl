@@ -12,7 +12,7 @@ import { getStations, getStationTrack, getStationPackets, getSettings } from '@/
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
-import type { PacketBroadcastDto } from '@/types/packet'
+import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
@@ -55,7 +55,12 @@ const TILE_PROVIDERS: Record<string, { name: string; url: string; attribution: s
   },
 }
 
-const HOP_COLORS = ['#2196F3', '#FF9800', '#9C27B0', '#4CAF50', '#F44336', '#00BCD4']
+const HOP_SEGMENT_COLORS = ['#4A90D9', '#7B68EE', '#DA70D6'] // blue, purple, orchid
+const HOP_COLOR_FALLBACK = '#FF8C00'  // dark orange for hop 3+
+const UNKNOWN_SEGMENT_COLOR = '#999999'  // grey for dashed unknown segments
+const FINAL_HOP_COLOR = '#2ECC71'       // green for the last hop to our station
+const PATH_FADE_DURATION_S = 90
+const PATH_FADE_TARGET_OPACITY = 0.3
 
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
@@ -783,6 +788,106 @@ function clearPathLayer() {
   }
 }
 
+// Identifies generic APRS path aliases that do not represent a specific station.
+const GENERIC_ALIAS_RE = /^(WIDE|RELAY|TRACE|NCA|GATE|ECHO|IGATE)(\d(-\d)?)?$/i
+function isGenericAlias(callsign: string): boolean {
+  return GENERIC_ALIAS_RE.test(callsign)
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const la1 = lat1 * Math.PI / 180
+  const la2 = lat2 * Math.PI / 180
+  const y = Math.sin(dLon) * Math.cos(la2)
+  const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon)
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+}
+
+function addPathArrow(
+  group: L.LayerGroup,
+  fromLat: number, fromLon: number,
+  toLat: number, toLon: number,
+  color: string,
+) {
+  const midLat = (fromLat + toLat) / 2
+  const midLon = (fromLon + toLon) / 2
+  const bearing = bearingDeg(fromLat, fromLon, toLat, toLon)
+  const arrowIcon = L.divIcon({
+    html: `<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid ${color};transform:rotate(${bearing}deg);transform-origin:6px 6px;pointer-events:none;"></div>`,
+    className: '',
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  })
+  group.addLayer(L.marker([midLat, midLon], { icon: arrowIcon, interactive: false, zIndexOffset: -50 }))
+}
+
+type PathSegment = {
+  fromLat: number
+  fromLon: number
+  toLat: number
+  toLon: number
+  fromCallsign: string
+  toCallsign: string
+  hopIndexFrom: number
+  isLastHop: boolean
+  unknownsBetween: ResolvedPathEntry[]
+}
+
+function buildPathSegments(path: ResolvedPathEntry[]): PathSegment[] {
+  const segments: PathSegment[] = []
+  let lastKnownIdx = -1
+
+  for (let i = 0; i < path.length; i++) {
+    const entry = path[i]!
+    if (!(entry.known ?? false) || entry.latitude == null || entry.longitude == null) continue
+
+    if (lastKnownIdx >= 0) {
+      const from = path[lastKnownIdx]!
+      const unknownsBetween = path.slice(lastKnownIdx + 1, i).filter(e => !(e.known ?? false))
+      segments.push({
+        fromLat: from.latitude!,
+        fromLon: from.longitude!,
+        toLat: entry.latitude,
+        toLon: entry.longitude,
+        fromCallsign: from.callsign,
+        toCallsign: entry.callsign,
+        hopIndexFrom: from.hopIndex ?? 0,
+        isLastHop: i === path.length - 1,
+        unknownsBetween,
+      })
+    }
+    lastKnownIdx = i
+  }
+
+  return segments
+}
+
+function unknownHopLabel(unknowns: ResolvedPathEntry[]): string {
+  if (unknowns.length === 0) return ''
+  const allGeneric = unknowns.every(e => isGenericAlias(e.callsign))
+  if (allGeneric) {
+    const aliases = [...new Set(unknowns.map(e => e.callsign))].join(', ')
+    return `Via ${aliases} (path not traced)`
+  }
+  return unknowns.length === 1 ? '1 unknown hop' : `${unknowns.length} unknown hops`
+}
+
+function hopSegmentColor(hopIndexFrom: number, isLastHop: boolean, isUnknown: boolean): string {
+  if (isUnknown) return UNKNOWN_SEGMENT_COLOR
+  if (isLastHop) return FINAL_HOP_COLOR
+  return HOP_SEGMENT_COLORS[hopIndexFrom] ?? HOP_COLOR_FALLBACK
+}
+
 async function showPacketPath(callsign: string) {
   if (!map.value) return
   clearPathLayer()
@@ -790,42 +895,86 @@ async function showPacketPath(callsign: string) {
     const { items } = await getStationPackets(callsign, 1, 1)
     if (items.length === 0) return
     const packet = items[0]!
-    if (!packet.resolvedPath || packet.resolvedPath.length === 0) return
-    const station = stationCache.get(callsign) ?? staleStationCache.get(callsign)
-    if (!station?.lastLat || !station?.lastLon) return
-    if (!settingsCache) {
-      settingsCache = await getSettings()
-    }
+    if (!packet.resolvedPath || packet.resolvedPath.length < 2) return
+
     const group = L.layerGroup()
-    type PathNode = { callsign: string; lat: number; lon: number }
-    const pathNodes: PathNode[] = []
-    pathNodes.push({ callsign, lat: station.lastLat, lon: station.lastLon })
-    for (const entry of packet.resolvedPath) {
-      if (entry.latitude != null && entry.longitude != null) {
-        pathNodes.push({ callsign: entry.callsign, lat: entry.latitude, lon: entry.longitude })
-      }
-    }
-    if (settingsCache.homePosition != null) {
-      pathNodes.push({
-        callsign: settingsCache.ourCallsign,
-        lat: settingsCache.homePosition.lat,
-        lon: settingsCache.homePosition.lon,
-      })
-    }
-    if (pathNodes.length < 2) return
-    for (let i = 0; i < pathNodes.length - 1; i++) {
-      const from = pathNodes[i]!
-      const to = pathNodes[i + 1]!
-      const color = HOP_COLORS[i % HOP_COLORS.length]!
+    const segments = buildPathSegments(packet.resolvedPath)
+    if (segments.length === 0) return
+
+    const totalHops = packet.resolvedPath.length - 1  // excludes source entry (hopIndex 0)
+
+    for (const seg of segments) {
+      const isUnknown = seg.unknownsBetween.length > 0
+      const color = hopSegmentColor(seg.hopIndexFrom, seg.isLastHop, isUnknown)
+      const distKm = haversineKm(seg.fromLat, seg.fromLon, seg.toLat, seg.toLon)
+      const distStr = distKm >= 10 ? `${distKm.toFixed(0)} km` : `${distKm.toFixed(1)} km`
+
       const line = L.polyline(
-        [[from.lat, from.lon], [to.lat, to.lon]],
-        { color, weight: 3, opacity: 0.85, dashArray: '8 4' },
+        [[seg.fromLat, seg.fromLon], [seg.toLat, seg.toLon]],
+        {
+          color,
+          weight: 3,
+          opacity: 1,
+          dashArray: isUnknown ? '8 6' : undefined,
+          lineCap: 'round',
+        },
       )
-      line.bindTooltip(`Hop ${i + 1}: ${to.callsign}`, { sticky: true, direction: 'top' })
+
+      // Per-segment hover tooltip
+      if (isUnknown) {
+        const label = unknownHopLabel(seg.unknownsBetween)
+        line.bindTooltip(
+          `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong> (${label})<br>${distStr}`,
+          { sticky: true, direction: 'top' },
+        )
+      } else {
+        const hopNum = seg.hopIndexFrom + 1
+        const toStation = stationCache.get(seg.toCallsign) ?? staleStationCache.get(seg.toCallsign)
+        const lastSeenStr = toStation ? ` · ${formatTime(toStation.lastSeen)}` : ''
+        line.bindTooltip(
+          `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong><br>Hop ${hopNum} of ${totalHops}${lastSeenStr}<br>${distStr}`,
+          { sticky: true, direction: 'top' },
+        )
+      }
+
       group.addLayer(line)
+
+      // Permanent midpoint label for unknown/dashed segments
+      if (isUnknown) {
+        const label = unknownHopLabel(seg.unknownsBetween)
+        const midLat = (seg.fromLat + seg.toLat) / 2
+        const midLon = (seg.fromLon + seg.toLon) / 2
+        const midMarker = L.marker([midLat, midLon], {
+          icon: L.divIcon({ html: '', className: '', iconSize: [0, 0], iconAnchor: [0, 0] }),
+          interactive: false,
+          zIndexOffset: -100,
+        })
+        midMarker.bindTooltip(label, { permanent: true, className: 'path-unknown-label', direction: 'top' })
+        group.addLayer(midMarker)
+      }
+
+      // Arrowhead at segment midpoint indicating direction of packet flow
+      addPathArrow(group, seg.fromLat, seg.fromLon, seg.toLat, seg.toLon, color)
     }
+
     pathLayerGroup.value = group
     group.addTo(map.value)
+
+    // Fade from opacity 1 to PATH_FADE_TARGET_OPACITY over PATH_FADE_DURATION_S seconds.
+    // Two rAF ticks ensure the browser has painted at full opacity before the transition starts.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        group.eachLayer(layer => {
+          if (layer instanceof L.Polyline) {
+            const el = (layer as unknown as { _path?: SVGPathElement })._path
+            if (el) {
+              el.style.transition = `opacity ${PATH_FADE_DURATION_S}s linear`
+              el.style.opacity = String(PATH_FADE_TARGET_OPACITY)
+            }
+          }
+        })
+      })
+    })
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
   }
@@ -993,9 +1142,10 @@ async function connectSignalR() {
     sessionPacketCounts.value[packet.callsign] =
       (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
 
-    // Trigger detail panel refresh
+    // Trigger detail panel refresh and redraw path for the selected station
     if (packet.callsign === selectionStore.selectedCallsign) {
       detailRefreshKey.value++
+      showPacketPath(packet.callsign)
     }
 
     // Beacon flash ring on the marker (fires for any packet type, with/without position)
@@ -1670,6 +1820,24 @@ defineExpose({ TILE_PROVIDERS })
 .aprs-icon-container.stale-heavy .aprs-icon {
   filter: grayscale(80%);
   opacity: 0.6;
+}
+
+/* ── Packet path unknown-hop label ──────────────────────────────────────────── */
+
+.path-unknown-label {
+  background: rgba(80, 80, 80, 0.85);
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+.path-unknown-label::before {
+  display: none;
 }
 
 /* ── Home position banner ────────────────────────────────────────────────────── */

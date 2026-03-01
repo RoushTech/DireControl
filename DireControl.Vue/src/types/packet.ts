@@ -71,6 +71,8 @@ export interface ResolvedPathEntry {
   callsign: string
   latitude: number | null
   longitude: number | null
+  known: boolean
+  hopIndex: number
 }
 
 export interface SignalData {
@@ -96,6 +98,7 @@ export interface PacketDto {
   path: string
   resolvedPath: ResolvedPathEntry[]
   hopCount: number
+  unknownHopCount: number
   comment: string
   gridSquare: string | null
   signalData: SignalData | null

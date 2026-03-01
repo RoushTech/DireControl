@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AprsSharp.AprsParser;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
@@ -81,6 +82,7 @@ public sealed class AprsPacketParsingService(
             try
             {
                 ParsePacket(packet, db, ourCallsign, effects);
+                await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct);
                 await db.SaveChangesAsync(ct);
 
                 await ApplyMessageEffectsAsync(effects, db, ourCallsign, ct);
@@ -180,11 +182,25 @@ public sealed class AprsPacketParsingService(
             ? string.Join(",", aprs.Path.OfType<string>())
             : string.Empty;
         packet.HopCount = aprs.Path?.OfType<string>().Count(p => p.Contains('*')) ?? 0;
-        packet.ResolvedPath = aprs.Path?
+
+        // Intermediate hops are only callsigns marked with '*' (already-repeated).
+        // Callsigns without '*' are unused future hops and are not part of the actual path.
+        // Full ResolvedPath (with source + home + coordinates) is built in ResolvePathCoordinatesAsync.
+        var usedHops = aprs.Path?
             .OfType<string>()
-            .Select(e => new ResolvedPathEntry { Callsign = e.TrimEnd('*').Trim() })
-            .Where(e => !string.IsNullOrWhiteSpace(e.Callsign))
+            .Where(e => e.TrimEnd().EndsWith('*'))
+            .Select(e => e.TrimEnd('*').Trim())
+            .Where(e => !string.IsNullOrWhiteSpace(e))
             .ToList() ?? [];
+
+        packet.ResolvedPath = usedHops
+            .Select((cs, i) => new ResolvedPathEntry
+            {
+                Callsign = cs,
+                HopIndex = i + 1,  // 0 is reserved for the originating station
+                Known = false,
+            })
+            .ToList();
 
         switch (aprs.InfoField)
         {
@@ -398,6 +414,92 @@ public sealed class AprsPacketParsingService(
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Pattern matching generic APRS path aliases that do not identify a specific
+    /// station (e.g. WIDE2-1, RELAY, TRACE3-3).  These are marked known=false.
+    /// </summary>
+    private static readonly Regex GenericAliasPattern =
+        new(@"^(WIDE|RELAY|TRACE|NCA|GATE|ECHO|IGATE)(\d(-\d)?)?$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static bool IsGenericAlias(string callsign) =>
+        GenericAliasPattern.IsMatch(callsign);
+
+    /// <summary>
+    /// Builds the complete <see cref="DbPacket.ResolvedPath"/> for a packet:
+    /// <list type="bullet">
+    ///   <item>HopIndex 0 — originating station (position from packet or Station table)</item>
+    ///   <item>HopIndex 1…n-1 — intermediate digipeater hops (already populated by ParsePacket)</item>
+    ///   <item>HopIndex n — our own station (home position from settings)</item>
+    /// </list>
+    /// Coordinates are resolved from <see cref="DireControlContext.Stations"/> and
+    /// <see cref="DireControlOptions.HomeLat"/> / <see cref="DireControlOptions.HomeLon"/>.
+    /// </summary>
+    private async Task ResolvePathCoordinatesAsync(
+        DbPacket packet,
+        DireControlContext db,
+        string ourCallsign,
+        CancellationToken ct)
+    {
+        var opts = options.Value;
+
+        // --- Hop 0: originating station ---
+        double? srcLat = packet.Latitude;
+        double? srcLon = packet.Longitude;
+        if (srcLat == null || srcLon == null)
+        {
+            var srcStation = db.Stations.Local.FirstOrDefault(s => s.Callsign == packet.StationCallsign)
+                ?? await db.Stations.FindAsync(new object?[] { packet.StationCallsign }, ct);
+            srcLat = srcStation?.LastLat;
+            srcLon = srcStation?.LastLon;
+        }
+
+        var sourceEntry = new ResolvedPathEntry
+        {
+            Callsign = packet.StationCallsign,
+            Latitude = srcLat,
+            Longitude = srcLon,
+            Known = srcLat != null && srcLon != null,
+            HopIndex = 0,
+        };
+
+        // --- Intermediate hops (already extracted by ParsePacket, HopIndex 1+) ---
+        foreach (var hop in packet.ResolvedPath)
+        {
+            if (IsGenericAlias(hop.Callsign))
+            {
+                hop.Known = false;
+                continue;
+            }
+
+            var station = db.Stations.Local.FirstOrDefault(s => s.Callsign == hop.Callsign)
+                ?? await db.Stations.FindAsync(new object?[] { hop.Callsign }, ct);
+
+            if (station?.LastLat != null && station.LastLon != null)
+            {
+                hop.Latitude = station.LastLat;
+                hop.Longitude = station.LastLon;
+                hop.Known = true;
+            }
+        }
+
+        packet.UnknownHopCount = packet.ResolvedPath.Count(e => !e.Known);
+
+        // --- Final hop: our own station ---
+        var homeEntry = new ResolvedPathEntry
+        {
+            Callsign = ourCallsign,
+            Latitude = opts.HomeLat,
+            Longitude = opts.HomeLon,
+            Known = opts.HomeLat != null && opts.HomeLon != null,
+            HopIndex = packet.ResolvedPath.Count + 1,
+        };
+
+        // Prepend source and append home so the list is fully ordered
+        packet.ResolvedPath.Insert(0, sourceEntry);
+        packet.ResolvedPath.Add(homeEntry);
+    }
 
     private static InboxMessageDto ToInboxDto(Message m) => new()
     {
