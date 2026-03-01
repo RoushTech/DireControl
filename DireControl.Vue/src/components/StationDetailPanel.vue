@@ -46,6 +46,34 @@ const emit = defineEmits<{
 }>()
 
 const tab = ref<'info' | 'packets' | 'weather' | 'stats' | 'signal'>('info')
+const packetsNewData = ref(false)
+
+type TabValue = 'info' | 'packets' | 'weather' | 'stats' | 'signal'
+interface TabDef { value: TabValue; label: string; icon: string; badge: boolean }
+
+const visibleTabs = computed<TabDef[]>(() => [
+  { value: 'info', label: 'Info', icon: 'mdi-information-outline', badge: false },
+  { value: 'packets', label: 'Packets', icon: 'mdi-format-list-bulleted', badge: packetsNewData.value },
+  ...(station.value?.isWeatherStation
+    ? [{ value: 'weather' as const, label: 'Weather', icon: 'mdi-weather-partly-cloudy', badge: false }]
+    : []),
+  { value: 'signal', label: 'Signal', icon: 'mdi-signal', badge: false },
+  { value: 'stats', label: 'Stats', icon: 'mdi-chart-bar', badge: false },
+])
+
+function onTabKeydown(e: KeyboardEvent) {
+  const tabs = visibleTabs.value
+  const idx = tabs.findIndex(t => t.value === tab.value)
+  if (e.key === 'ArrowDown') {
+    const next = tabs[(idx + 1) % tabs.length]
+    if (next) tab.value = next.value
+    e.preventDefault()
+  } else if (e.key === 'ArrowUp') {
+    const prev = tabs[(idx - 1 + tabs.length) % tabs.length]
+    if (prev) tab.value = prev.value
+    e.preventDefault()
+  }
+}
 const station = ref<StationDto | null>(null)
 const loading = ref(false)
 const watchLoading = ref(false)
@@ -521,6 +549,7 @@ watch(() => props.callsign, async (val) => {
     lookupFailed.value = false
     stats.value = null
     signalPoints.value = []
+    packetsNewData.value = false
     tab.value = 'info'
     return
   }
@@ -530,6 +559,7 @@ watch(() => props.callsign, async (val) => {
   lookupFailed.value = false
   stats.value = null
   signalPoints.value = []
+  packetsNewData.value = false
   tab.value = 'info'
   await Promise.all([fetchStation(), fetchPackets()])
   if (station.value?.isWeatherStation) {
@@ -552,6 +582,9 @@ watch(() => props.refreshKey, async (newKey, oldKey) => {
   if (station.value?.isWeatherStation) {
     await fetchWeather()
   }
+  if (tab.value !== 'packets') {
+    packetsNewData.value = true
+  }
 })
 
 watch(packetPage, () => {
@@ -559,6 +592,9 @@ watch(packetPage, () => {
 })
 
 watch(tab, (newTab) => {
+  if (newTab === 'packets') {
+    packetsNewData.value = false
+  }
   if (newTab === 'stats' && props.callsign && !stats.value && !statsLoading.value) {
     fetchStats()
   }
@@ -600,30 +636,27 @@ watch(tab, (newTab) => {
     </div>
     <v-divider />
 
-    <!-- Tabs -->
-    <v-tabs v-model="tab" density="compact">
-      <v-tab value="info">Info</v-tab>
-      <v-tab value="packets">
-        Packets
-        <v-badge v-if="packetTotal" :content="packetTotal" color="primary" class="ml-1" inline />
-      </v-tab>
-      <v-tab value="stats">
-        <v-icon start size="14">mdi-chart-bar</v-icon>
-        Stats
-      </v-tab>
-      <v-tab value="signal">
-        <v-icon start size="14">mdi-signal</v-icon>
-        Signal
-      </v-tab>
-      <v-tab v-if="station?.isWeatherStation" value="weather">
-        <v-icon start size="14">mdi-weather-partly-cloudy</v-icon>
-        Weather
-      </v-tab>
-    </v-tabs>
+    <div class="panel-main">
+      <!-- Vertical tab sidebar -->
+      <nav class="tab-sidebar" role="tablist" @keydown="onTabKeydown">
+        <button
+          v-for="t in visibleTabs"
+          :key="t.value"
+          role="tab"
+          :aria-selected="tab === t.value"
+          :class="['tab-btn', { 'tab-btn--active': tab === t.value }]"
+          :title="t.label"
+          @click="tab = t.value"
+        >
+          <span class="tab-btn-inner">
+            <v-icon size="18">{{ t.icon }}</v-icon>
+            <span class="tab-label">{{ t.label }}</span>
+            <span v-if="t.badge" class="tab-new-dot" />
+          </span>
+        </button>
+      </nav>
 
-    <v-divider />
-
-    <div class="panel-body">
+      <div class="panel-body" role="tabpanel">
       <v-progress-linear v-if="loading" indeterminate color="primary" />
 
       <!-- Info tab -->
@@ -952,6 +985,7 @@ watch(tab, (newTab) => {
         </template>
       </template>
     </div>
+    </div>
   </div>
 </template>
 
@@ -974,6 +1008,82 @@ watch(tab, (newTab) => {
 .symbol-icon {
   image-rendering: pixelated;
   border-radius: 2px;
+}
+
+.panel-main {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Vertical tab sidebar */
+.tab-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 60px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  width: 100%;
+  border: none;
+  border-right: 3px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  padding: 8px 4px;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  transition: background 0.15s, color 0.15s;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.tab-btn:hover {
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: rgba(var(--v-theme-on-surface), 0.87);
+}
+
+.tab-btn:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -2px;
+}
+
+.tab-btn--active {
+  background: rgba(var(--v-theme-primary), 0.1);
+  color: rgb(var(--v-theme-primary));
+  border-right-color: rgb(var(--v-theme-primary));
+}
+
+.tab-btn-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  position: relative;
+}
+
+.tab-label {
+  font-size: 0.6rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.tab-new-dot {
+  position: absolute;
+  top: -4px;
+  right: -8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
 }
 
 .panel-body {

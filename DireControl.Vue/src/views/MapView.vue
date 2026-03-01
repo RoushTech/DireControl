@@ -59,6 +59,9 @@ const HOP_COLORS = ['#2196F3', '#FF9800', '#9C27B0', '#4CAF50', '#F44336', '#00B
 
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
+const PANEL_WIDTH_KEY = 'direcontrol-detail-panel-width'
+const PANEL_MIN_WIDTH = 280
+const PANEL_MAX_WIDTH_RATIO = 0.5
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795]
 const DEFAULT_ZOOM = 5
 
@@ -76,6 +79,10 @@ const selectedProvider = ref(localStorage.getItem(STORAGE_KEY) ?? 'osm')
 
 // Panel/sidebar state
 const showSidebar = ref(localStorage.getItem(SIDEBAR_KEY) !== 'false')
+const panelWidth = ref(Math.max(PANEL_MIN_WIDTH, parseInt(localStorage.getItem(PANEL_WIDTH_KEY) ?? '380', 10)))
+const isResizing = ref(false)
+let resizeStartX = 0
+let resizeStartWidth = 0
 const detailRefreshKey = ref(0)
 const stationsList = ref<StationDto[]>([])
 const sessionPacketCounts = ref<Record<string, number>>({})
@@ -1073,6 +1080,32 @@ function openPopOut() {
   window.open('/map-only', '_blank', 'width=1200,height=800,noopener')
 }
 
+function onResizeHandleDown(e: MouseEvent) {
+  isResizing.value = true
+  resizeStartX = e.clientX
+  resizeStartWidth = panelWidth.value
+  document.addEventListener('mousemove', onResizeMouseMove)
+  document.addEventListener('mouseup', onResizeMouseUp)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ew-resize'
+}
+
+function onResizeMouseMove(e: MouseEvent) {
+  if (!isResizing.value) return
+  const delta = resizeStartX - e.clientX
+  const maxWidth = Math.floor(window.innerWidth * PANEL_MAX_WIDTH_RATIO)
+  panelWidth.value = Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, resizeStartWidth + delta))
+}
+
+function onResizeMouseUp() {
+  isResizing.value = false
+  document.removeEventListener('mousemove', onResizeMouseMove)
+  document.removeEventListener('mouseup', onResizeMouseUp)
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value))
+}
+
 onMounted(async () => {
   if (!mapContainer.value) return
   map.value = L.map(mapContainer.value, {
@@ -1149,6 +1182,8 @@ onUnmounted(async () => {
   markers.clear()
   window.removeEventListener('shortcut:esc', onShortcutEsc)
   window.removeEventListener('shortcut:focus-search', onShortcutFocusSearch)
+  document.removeEventListener('mousemove', onResizeMouseMove)
+  document.removeEventListener('mouseup', onResizeMouseUp)
 })
 
 defineExpose({ TILE_PROVIDERS })
@@ -1285,7 +1320,12 @@ defineExpose({ TILE_PROVIDERS })
     </div>
 
     <!-- Right detail panel -->
-    <div class="panel-right" :class="{ 'panel-open': selectionStore.selectedCallsign }">
+    <div
+      class="panel-right"
+      :class="{ 'panel-open': selectionStore.selectedCallsign, 'panel-resizing': isResizing }"
+      :style="selectionStore.selectedCallsign ? { width: panelWidth + 'px' } : undefined"
+    >
+      <div class="panel-resize-handle" @mousedown.prevent="onResizeHandleDown" />
       <StationDetailPanel
         :callsign="selectionStore.selectedCallsign"
         :refresh-key="detailRefreshKey"
@@ -1335,10 +1375,29 @@ defineExpose({ TILE_PROVIDERS })
   overflow: hidden;
   transition: width 0.3s ease;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  position: relative;
 }
 
 .panel-right.panel-open {
-  width: 380px;
+  min-width: 280px;
+}
+
+.panel-right.panel-resizing {
+  transition: none;
+}
+
+.panel-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 10;
+}
+
+.panel-resize-handle:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
 }
 
 /* Map control button positions */
