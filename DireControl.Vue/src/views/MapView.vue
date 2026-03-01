@@ -13,6 +13,7 @@ import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
 import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
+import type { TileProviderConfig } from '@/types/map'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
@@ -22,36 +23,92 @@ import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 
-const TILE_PROVIDERS: Record<string, { name: string; url: string; attribution: string }> = {
+const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
+  // ── Light ──────────────────────────────────────────────────────────────────
   osm: {
     name: 'OpenStreetMap',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    theme: 'light',
+    group: 'light',
   },
-  topo: {
-    name: 'OpenTopoMap',
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+  stadiaAlidadeSmooth: {
+    name: 'Stadia Alidade Smooth',
+    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png',
     attribution:
-      '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
-  },
-  satellite: {
-    name: 'Esri Satellite',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution:
-      '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
+      '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    theme: 'light',
+    group: 'light',
   },
   cartoLight: {
     name: 'Carto Light',
     url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+    theme: 'light',
+    group: 'light',
   },
+  topo: {
+    name: 'OpenTopoMap',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution:
+      '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
+    theme: 'light',
+    group: 'light',
+  },
+  esriTopo: {
+    name: 'Esri World Topo',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution:
+      'Esri, HERE, Garmin, Intermap, &copy; OpenStreetMap contributors',
+    theme: 'light',
+    group: 'light',
+  },
+  // ── Dark ───────────────────────────────────────────────────────────────────
   cartoDark: {
-    name: 'Carto Dark',
+    name: 'Carto Dark Matter',
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+    theme: 'dark',
+    group: 'dark',
+  },
+  stadiaAlidadeDark: {
+    name: 'Stadia Alidade Dark',
+    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
+    attribution:
+      '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    theme: 'dark',
+    group: 'dark',
+  },
+  jawgDark: {
+    name: 'Jawg Dark',
+    url: 'https://tile.jawg.io/jawg-dark/{z}/{x}/{y}{r}.png?access-token={apiKey}',
+    attribution:
+      '&copy; <a href="https://www.jawg.io">Jawg Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    theme: 'dark',
+    group: 'dark',
+    requiresApiKey: true,
+    apiKeyParam: 'jawg',
+  },
+  // ── Satellite ──────────────────────────────────────────────────────────────
+  satellite: {
+    name: 'Esri World Imagery',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution:
+      '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
+    theme: 'dark',
+    group: 'satellite',
+  },
+  // ── Specialist ─────────────────────────────────────────────────────────────
+  openRailwayMap: {
+    name: 'OpenRailwayMap',
+    url: 'https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Style: &copy; <a href="https://www.openrailwaymap.org/">OpenRailwayMap</a>',
+    theme: 'light',
+    group: 'specialist',
   },
 }
 
@@ -65,6 +122,7 @@ const PATH_FADE_TARGET_OPACITY = 0.3
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
 const PANEL_WIDTH_KEY = 'direcontrol-detail-panel-width'
+const API_KEYS_STORAGE_KEY = 'direcontrol-api-keys'
 const PANEL_MIN_WIDTH = 280
 const PANEL_MAX_WIDTH_RATIO = 0.5
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795]
@@ -80,7 +138,29 @@ const map = shallowRef<L.Map>()
 const tileLayer = shallowRef<L.TileLayer>()
 const markers = new Map<string, L.Marker>()
 const stationCache = new Map<string, StationDto>()
-const selectedProvider = ref(localStorage.getItem(STORAGE_KEY) ?? 'osm')
+
+function loadApiKeys(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(API_KEYS_STORAGE_KEY)
+    if (raw) return JSON.parse(raw) as Record<string, string>
+  } catch { /* ignore */ }
+  return {}
+}
+const apiKeys = ref<Record<string, string>>(loadApiKeys())
+
+function providerIsAvailable(key: string): boolean {
+  const p = TILE_PROVIDERS[key]
+  if (!p) return false
+  if (p.requiresApiKey && p.apiKeyParam) return !!apiKeys.value[p.apiKeyParam]
+  return true
+}
+
+// Fall back to 'osm' if the persisted provider requires an API key that isn't present
+const _storedProvider = localStorage.getItem(STORAGE_KEY) ?? 'osm'
+const selectedProvider = ref(providerIsAvailable(_storedProvider) ? _storedProvider : 'osm')
+
+const providerFallbackSnackbar = ref(false)
+const providerFallbackMessage = ref('')
 
 // Panel/sidebar state
 const showSidebar = ref(localStorage.getItem(SIDEBAR_KEY) !== 'false')
@@ -404,6 +484,13 @@ function clearRings() {
   }
 }
 
+function getRingStyle(providerKey: string): { color: string; weight: number; labelColor: string; labelBg: string } {
+  const dark = TILE_PROVIDERS[providerKey]?.theme === 'dark'
+  return dark
+    ? { color: '#FFFFFF', weight: 2.5, labelColor: '#ffffff', labelBg: 'rgba(20,20,30,0.75)' }
+    : { color: '#1a1a1a', weight: 2, labelColor: '#1a1a1a', labelBg: 'rgba(255,255,255,0.80)' }
+}
+
 async function drawRings() {
   if (!map.value) return
   clearRings()
@@ -411,22 +498,23 @@ async function drawRings() {
   if (!settings?.homePosition) return
   const lat = settings.homePosition.lat
   const lon = settings.homePosition.lon
+  const style = getRingStyle(selectedProvider.value)
   const group = L.layerGroup()
   for (const dist of ringDistances.value) {
     const radiusMeters = dist * 1609.344
     L.circle([lat, lon], {
       radius: radiusMeters,
-      color: '#ffffff',
-      weight: 1.5,
-      fillOpacity: 0.02,
-      opacity: 0.55,
-      dashArray: '6 4',
+      color: style.color,
+      weight: style.weight,
+      fill: false,
+      opacity: 0.85,
+      dashArray: '8, 6',
     }).addTo(group)
     // Label marker placed at the north edge of the ring
     const labelLat = lat + radiusMeters / 111_320
     L.marker([labelLat, lon], {
       icon: L.divIcon({
-        html: `<div class="ring-label">${dist} mi</div>`,
+        html: `<div class="ring-label" style="color: ${style.labelColor}; background: ${style.labelBg}; border-color: ${style.color}40">${dist} mi</div>`,
         className: '',
         iconSize: undefined,
         iconAnchor: [20, 10],
@@ -1054,15 +1142,35 @@ function addOrUpdateMarker(callsign: string, lat: number, lon: number, lastSeen:
 function setTileProvider(key: string) {
   const provider = TILE_PROVIDERS[key]
   if (!provider || !map.value) return
+
+  // If the provider requires an API key that isn't present, fall back to OSM
+  if (provider.requiresApiKey && provider.apiKeyParam && !apiKeys.value[provider.apiKeyParam]) {
+    providerFallbackMessage.value = `${provider.name} requires an API key — add it in Settings. Fallen back to OpenStreetMap.`
+    providerFallbackSnackbar.value = true
+    key = 'osm'
+  }
+
+  const resolvedProvider = TILE_PROVIDERS[key]!
+  let url = resolvedProvider.url
+  // Substitute API key placeholder if present
+  if (resolvedProvider.requiresApiKey && resolvedProvider.apiKeyParam) {
+    const apiKey = apiKeys.value[resolvedProvider.apiKeyParam] ?? ''
+    url = url.replace('{apiKey}', apiKey)
+  }
+
   if (tileLayer.value) {
     tileLayer.value.remove()
   }
-  tileLayer.value = L.tileLayer(provider.url, {
-    attribution: provider.attribution,
+  tileLayer.value = L.tileLayer(url, {
+    attribution: resolvedProvider.attribution,
     maxZoom: 19,
   }).addTo(map.value)
   selectedProvider.value = key
   localStorage.setItem(STORAGE_KEY, key)
+
+  if (showRings.value) {
+    drawRings()
+  }
 }
 
 async function loadStations() {
@@ -1429,6 +1537,7 @@ defineExpose({ TILE_PROVIDERS })
       <TileProviderSwitcher
         :providers="TILE_PROVIDERS"
         :selected="selectedProvider"
+        :api-keys="apiKeys"
         @update:selected="setTileProvider"
       />
 
@@ -1551,6 +1660,16 @@ defineExpose({ TILE_PROVIDERS })
       />
     </div>
   </div>
+
+  <!-- Tile provider fallback notification -->
+  <v-snackbar
+    v-model="providerFallbackSnackbar"
+    :timeout="5000"
+    color="warning"
+    location="bottom"
+  >
+    {{ providerFallbackMessage }}
+  </v-snackbar>
 </template>
 
 <style scoped>
@@ -1700,14 +1819,14 @@ defineExpose({ TILE_PROVIDERS })
 }
 
 .ring-label {
-  background: rgba(20, 20, 30, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(128, 128, 128, 0.4);
   border-radius: 3px;
-  color: #dde;
   font-size: 10px;
+  font-weight: 600;
   padding: 1px 6px;
   white-space: nowrap;
   pointer-events: none;
+  line-height: 1.4;
 }
 
 /* ── Heading wrapper & chevron ─────────────────────────────────────────────── */

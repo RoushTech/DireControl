@@ -4,6 +4,33 @@ import L from 'leaflet'
 import { getGeofences, createGeofence, deleteGeofence, getProximityRules, createProximityRule, deleteProximityRule } from '@/api/alertsApi'
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 
+// ─── API Keys ────────────────────────────────────────────────────────────────
+const API_KEYS_STORAGE_KEY = 'direcontrol-api-keys'
+
+function readApiKeys(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(API_KEYS_STORAGE_KEY)
+    if (raw) return JSON.parse(raw) as Record<string, string>
+  } catch { /* ignore */ }
+  return {}
+}
+
+const jawgApiKey = ref(readApiKeys()['jawg'] ?? '')
+const showJawgKey = ref(false)
+const apiKeySaved = ref(false)
+
+function saveApiKeys() {
+  const keys = readApiKeys()
+  if (jawgApiKey.value.trim()) {
+    keys['jawg'] = jawgApiKey.value.trim()
+  } else {
+    delete keys['jawg']
+  }
+  localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys))
+  apiKeySaved.value = true
+  setTimeout(() => { apiKeySaved.value = false }, 2500)
+}
+
 // ---- Geofences ----
 const geofences = ref<GeofenceDto[]>([])
 const showAddGeofence = ref(false)
@@ -174,6 +201,45 @@ async function confirmDelete() {
 <template>
   <div class="settings-view pa-4">
     <div class="text-h5 font-weight-bold mb-4">Settings</div>
+
+    <!-- ================================================================ -->
+    <!-- API Keys -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2">
+      <span class="text-h6">Map API Keys</span>
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <div class="text-body-2 text-medium-emphasis mb-4">
+        API keys are stored only in your browser's local storage and are never sent to the server.
+      </div>
+      <v-text-field
+        v-model="jawgApiKey"
+        label="Jawg Maps API key"
+        density="compact"
+        :type="showJawgKey ? 'text' : 'password'"
+        :append-inner-icon="showJawgKey ? 'mdi-eye-off' : 'mdi-eye'"
+        hint="Required for the Jawg Dark tile provider. Get a free key at jawg.io."
+        persistent-hint
+        class="mb-3"
+        @click:append-inner="showJawgKey = !showJawgKey"
+      />
+      <div class="d-flex align-center ga-3 mt-2">
+        <v-btn
+          size="small"
+          color="primary"
+          prepend-icon="mdi-content-save"
+          @click="saveApiKeys"
+        >
+          Save Keys
+        </v-btn>
+        <v-fade-transition>
+          <span v-if="apiKeySaved" class="text-caption text-success">
+            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+          </span>
+        </v-fade-transition>
+      </div>
+    </v-card>
 
     <!-- ================================================================ -->
     <!-- Geofences -->
