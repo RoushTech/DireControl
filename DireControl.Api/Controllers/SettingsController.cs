@@ -23,7 +23,6 @@ public class SettingsController(
             DirewolfHost = direwolfOptions.Value.Host,
             DirewolfPort = direwolfOptions.Value.Port,
             DirewolfReconnectDelaySeconds = direwolfOptions.Value.ReconnectDelaySeconds,
-            CorsOrigins = options.Value.CorsOrigins,
         });
     }
 }

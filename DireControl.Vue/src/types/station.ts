@@ -57,7 +57,6 @@ export interface SettingsDto {
   direwolfHost: string;
   direwolfPort: number;
   direwolfReconnectDelaySeconds: number;
-  corsOrigins: string[];
 }
 
 export interface CallsignCountDto {
