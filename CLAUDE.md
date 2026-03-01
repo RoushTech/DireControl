@@ -45,7 +45,8 @@ dotnet ef migrations remove \
 - JSON columns (e.g. `QrzLookupData`, `WeatherData`, `ResolvedPath`) are stored as `string` / `string?` in the database; the entity exposes a typed, deserialized property and handles serialisation/deserialisation itself — callers always work with the typed value, never the raw JSON string
 - All `DateTime` properties are UTC
 - Use controllers for all API endpoints — do not use minimal API (`app.MapGet` / `app.MapPost` etc.)
-- `appsettings.local.json` is git-ignored — use it for local connection string or secret overrides
+- `appsettings.local.json` is git-ignored and always loaded as an optional override file (added via `builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)`) — use it for local connection strings or secret overrides
+- In `Program.cs`, extract `var services = builder.Services` and `var config = builder.Configuration` after `WebApplicationBuilder` is created, then call `services.X` and `config.X` throughout — do not repeat `builder.Services.` or `builder.Configuration.` on every line
 
 ## Vue / Frontend
 

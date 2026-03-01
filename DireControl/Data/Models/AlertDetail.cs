@@ -8,4 +8,8 @@ public class AlertDetail
     public double? StationLon { get; set; }
     public string? GeofenceName { get; set; }
     public string? MessageText { get; set; }
+    /// <summary>"entered" or "exited" for Geofence alerts.</summary>
+    public string? Direction { get; set; }
+    /// <summary>Name of the matched proximity rule.</summary>
+    public string? RuleName { get; set; }
 }

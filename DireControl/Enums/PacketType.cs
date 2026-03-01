@@ -9,5 +9,6 @@ public enum PacketType
     Object,
     Item,
     Status,
-    Unknown
+    Unknown,
+    Unparseable,
 }

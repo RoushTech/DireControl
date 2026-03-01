@@ -10,6 +10,7 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<Geofence> Geofences => Set<Geofence>();
+    public DbSet<ProximityRule> ProximityRules => Set<ProximityRule>();
     public DbSet<StationStatistic> StationStatistics => Set<StationStatistic>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

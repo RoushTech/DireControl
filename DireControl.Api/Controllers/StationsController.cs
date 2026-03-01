@@ -1,0 +1,314 @@
+using DireControl.Api.Contracts;
+using DireControl.Api.Services;
+using DireControl.Data;
+using DireControl.Enums;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+
+namespace DireControl.Api.Controllers;
+
+[ApiController]
+[Route("api/stations")]
+public class StationsController(
+    DireControlContext db,
+    IOptions<DireControlOptions> options,
+    CallsignLookupService lookupService) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<StationDto>>> GetActiveStations(
+        [FromQuery] bool includeStale = false,
+        CancellationToken ct = default)
+    {
+        var opts = options.Value;
+        var now = DateTime.UtcNow;
+
+        IQueryable<DireControl.Data.Models.Station> query = db.Stations.AsNoTracking();
+
+        if (!includeStale)
+        {
+            var mobileCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Mobile));
+            var fixedCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Fixed));
+            var weatherCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Weather));
+            var digiCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Digipeater));
+            var igateCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.IGate));
+            var unknownCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Unknown));
+
+            query = query.Where(s =>
+                (s.StationType == StationType.Mobile && s.LastSeen >= mobileCutoff) ||
+                (s.StationType == StationType.Fixed && s.LastSeen >= fixedCutoff) ||
+                (s.StationType == StationType.Weather && s.LastSeen >= weatherCutoff) ||
+                (s.StationType == StationType.Digipeater && s.LastSeen >= digiCutoff) ||
+                (s.StationType == StationType.IGate && s.LastSeen >= igateCutoff) ||
+                (s.StationType == StationType.Unknown && s.LastSeen >= unknownCutoff));
+        }
+
+        var stations = await query
+            .OrderByDescending(s => s.LastSeen)
+            .Select(ToStationDto())
+            .ToListAsync(ct);
+
+        return Ok(stations);
+    }
+
+    [HttpGet("{callsign}")]
+    public async Task<ActionResult<StationDto>> GetStation(string callsign, CancellationToken ct)
+    {
+        var station = await db.Stations
+            .AsNoTracking()
+            .Where(s => s.Callsign == callsign)
+            .Select(ToStationDto())
+            .FirstOrDefaultAsync(ct);
+
+        return station is null ? NotFound() : Ok(station);
+    }
+
+    [HttpGet("{callsign}/packets")]
+    public async Task<ActionResult<PaginatedResponse<PacketDto>>> GetStationPackets(
+        string callsign,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default)
+    {
+        if (page < 1)
+            page = 1;
+
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
+        var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
+        if (!stationExists)
+            return NotFound();
+
+        var query = db.Packets
+            .AsNoTracking()
+            .Where(p => p.StationCallsign == callsign)
+            .OrderByDescending(p => p.ReceivedAt);
+
+        var totalCount = await query.CountAsync(ct);
+        var items = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(ToPacketDto())
+            .ToListAsync(ct);
+
+        return Ok(new PaginatedResponse<PacketDto>
+        {
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = totalCount,
+            Items = items
+        });
+    }
+
+    [HttpGet("{callsign}/track")]
+    public async Task<ActionResult<IReadOnlyList<TrackPointDto>>> GetStationTrack(
+        string callsign,
+        CancellationToken ct)
+    {
+        var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
+        if (!stationExists)
+            return NotFound();
+
+        var points = await db.Packets
+            .AsNoTracking()
+            .Where(p => p.StationCallsign == callsign && p.Latitude != null && p.Longitude != null)
+            .OrderBy(p => p.ReceivedAt)
+            .Select(p => new TrackPointDto
+            {
+                Latitude = p.Latitude!.Value,
+                Longitude = p.Longitude!.Value,
+                ReceivedAt = p.ReceivedAt,
+                Speed = null,
+                Heading = null,
+            })
+            .ToListAsync(ct);
+
+        return Ok(points);
+    }
+
+    [HttpGet("{callsign}/weather")]
+    public async Task<ActionResult<IReadOnlyList<WeatherReadingDto>>> GetStationWeather(
+        string callsign,
+        CancellationToken ct)
+    {
+        var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
+        if (!stationExists)
+            return NotFound();
+
+        // WeatherData is a JSON value-converted column; project in-memory after fetching.
+        var packets = await db.Packets
+            .AsNoTracking()
+            .Where(p => p.StationCallsign == callsign && p.WeatherData != null)
+            .OrderByDescending(p => p.ReceivedAt)
+            .Take(50)
+            .ToListAsync(ct);
+
+        var readings = packets.Select(p => new WeatherReadingDto
+        {
+            ReceivedAt = p.ReceivedAt,
+            Temperature = p.WeatherData!.TemperatureF,
+            Humidity = p.WeatherData.HumidityPercent,
+            WindSpeed = p.WeatherData.WindSpeedMph,
+            WindDirection = p.WeatherData.WindDirectionDeg,
+            WindGust = p.WeatherData.WindGustMph,
+            Pressure = p.WeatherData.PressureMbar,
+            RainLastHour = p.WeatherData.RainfallLastHourIn,
+            RainLast24h = p.WeatherData.RainfallLast24hIn,
+            RainSinceMidnight = p.WeatherData.RainfallSinceMidnightIn,
+        }).ToList();
+
+        return Ok(readings);
+    }
+
+    [HttpGet("watchlist")]
+    public async Task<ActionResult<IReadOnlyList<StationDto>>> GetWatchList(CancellationToken ct)
+    {
+        var stations = await db.Stations
+            .AsNoTracking()
+            .Where(s => s.IsOnWatchList)
+            .OrderBy(s => s.Callsign)
+            .Select(ToStationDto())
+            .ToListAsync(ct);
+
+        return Ok(stations);
+    }
+
+    [HttpPut("{callsign}/watch")]
+    public async Task<IActionResult> ToggleWatch(string callsign, CancellationToken ct)
+    {
+        var station = await db.Stations.FirstOrDefaultAsync(s => s.Callsign == callsign, ct);
+        if (station is null) return NotFound();
+
+        station.IsOnWatchList = !station.IsOnWatchList;
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpGet("{callsign}/lookup")]
+    public async Task<ActionResult<CallsignLookupDto>> LookupCallsign(string callsign, CancellationToken ct)
+    {
+        if (!CallsignLookupService.IsValidCallsign(callsign))
+            return BadRequest("Not a recognised amateur radio callsign format.");
+
+        var result = await lookupService.LookupAsync(callsign, ct);
+        if (result is null)
+            return NotFound();
+
+        return Ok(new CallsignLookupDto
+        {
+            Name = result.Name,
+            City = result.City,
+            State = result.State,
+            LicenseClass = result.LicenseClass,
+            GridSquare = result.GridSquare,
+        });
+    }
+
+    [HttpGet("{callsign}/signal")]
+    public async Task<ActionResult<IReadOnlyList<SignalPointDto>>> GetStationSignal(
+        string callsign,
+        CancellationToken ct)
+    {
+        var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
+        if (!stationExists)
+            return NotFound();
+
+        // SignalData is null for all packets received via KISS TCP (Direwolf does not
+        // expose signal metadata over the KISS interface).  This endpoint returns an
+        // empty array in that case, which the frontend treats as "not available".
+        var packets = await db.Packets
+            .AsNoTracking()
+            .Where(p => p.StationCallsign == callsign && p.SignalData != null)
+            .OrderBy(p => p.ReceivedAt)
+            .ToListAsync(ct);
+
+        var points = packets.Select(p => new SignalPointDto
+        {
+            ReceivedAt = p.ReceivedAt,
+            DecodeQuality = p.SignalData!.DecodeQuality,
+            FrequencyOffsetHz = p.SignalData.FrequencyOffsetHz,
+        }).ToList();
+
+        return Ok(points);
+    }
+
+    [HttpGet("{callsign}/stats")]
+    public async Task<ActionResult<StationStatisticDto>> GetStationStats(string callsign, CancellationToken ct)
+    {
+        var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
+        if (!stationExists)
+            return NotFound();
+
+        var stat = await db.StationStatistics
+            .AsNoTracking()
+            .FirstOrDefaultAsync(ss => ss.Callsign == callsign, ct);
+
+        var totalPackets = await db.Packets
+            .CountAsync(p => p.StationCallsign == callsign, ct);
+
+        // Build hourly histogram for last 24h
+        var now = DateTime.UtcNow;
+        var h24Start = now.AddHours(-24);
+
+        var recentTimes = await db.Packets
+            .Where(p => p.StationCallsign == callsign && p.ReceivedAt >= h24Start)
+            .Select(p => p.ReceivedAt)
+            .ToListAsync(ct);
+
+        var packetsPerHour = new int[24];
+        foreach (var ts in recentTimes)
+        {
+            var hoursAgo = (int)(now - ts).TotalHours;
+            if (hoursAgo >= 0 && hoursAgo < 24)
+                packetsPerHour[23 - hoursAgo]++;
+        }
+
+        return Ok(new StationStatisticDto
+        {
+            PacketsToday = stat?.PacketsToday ?? 0,
+            PacketsAllTime = totalPackets,
+            AveragePacketsPerHour = stat?.AveragePacketsPerHour ?? 0.0,
+            LongestGapMinutes = stat?.LongestGapMinutes ?? 0,
+            PacketsPerHour = packetsPerHour,
+        });
+    }
+
+    private static System.Linq.Expressions.Expression<Func<DireControl.Data.Models.Station, StationDto>> ToStationDto() => s => new StationDto
+    {
+        Callsign = s.Callsign,
+        FirstSeen = s.FirstSeen,
+        LastSeen = s.LastSeen,
+        LastLat = s.LastLat,
+        LastLon = s.LastLon,
+        LastHeading = s.LastHeading,
+        LastSpeed = s.LastSpeed,
+        LastAltitude = s.LastAltitude,
+        Symbol = s.Symbol,
+        Status = s.Status,
+        IsWeatherStation = s.IsWeatherStation,
+        StationType = s.StationType,
+        QrzLookupData = s.QrzLookupData,
+        IsOnWatchList = s.IsOnWatchList,
+        GridSquare = s.GridSquare,
+    };
+
+    private static System.Linq.Expressions.Expression<Func<DireControl.Data.Models.Packet, PacketDto>> ToPacketDto() => p => new PacketDto
+    {
+        Id = p.Id,
+        StationCallsign = p.StationCallsign,
+        ReceivedAt = p.ReceivedAt,
+        RawPacket = p.RawPacket,
+        ParsedType = p.ParsedType,
+        Latitude = p.Latitude,
+        Longitude = p.Longitude,
+        Path = p.Path,
+        ResolvedPath = p.ResolvedPath,
+        HopCount = p.HopCount,
+        Comment = p.Comment,
+        WeatherData = p.WeatherData,
+        TelemetryData = p.TelemetryData,
+        MessageData = p.MessageData,
+        SignalData = p.SignalData,
+        GridSquare = p.GridSquare,
+    };
+}

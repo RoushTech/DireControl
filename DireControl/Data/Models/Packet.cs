@@ -38,7 +38,7 @@ public class Packet : IEntityTypeConfiguration<Packet>
         builder.Property(p => p.ResolvedPath)
                .HasConversion(
                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-                   v => JsonSerializer.Deserialize<List<ResolvedPathEntry>>(v, (JsonSerializerOptions?)null) ?? []);
+                   v => JsonSerializer.Deserialize<List<ResolvedPathEntry>>(v, (JsonSerializerOptions?)null) ?? new List<ResolvedPathEntry>());
         builder.Property(p => p.WeatherData)
                .HasConversion(
                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),

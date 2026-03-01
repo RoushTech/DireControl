@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DireControl.Api/DireControl.Api.csproj" />
+  <Project Path="DireControl/DireControl.csproj" />
+</Solution>

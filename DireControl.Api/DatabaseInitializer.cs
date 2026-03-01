@@ -11,8 +11,18 @@ public static class DatabaseInitializer
         var context = scope.ServiceProvider.GetRequiredService<DireControlContext>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<DireControlContext>>();
 
-        logger.LogInformation("Applying database migrations...");
-        await context.Database.MigrateAsync();
+        var migrations = context.Database.GetMigrations();
+        if (migrations.Any())
+        {
+            logger.LogInformation("Applying database migrations...");
+            await context.Database.MigrateAsync();
+        }
+        else
+        {
+            logger.LogInformation("No migrations found. Ensuring database schema is created...");
+            await context.Database.EnsureCreatedAsync();
+        }
+
         logger.LogInformation("Database ready.");
     }
 }

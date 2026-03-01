@@ -1,0 +1,93 @@
+export enum StationType {
+  Fixed = 0,
+  Mobile = 1,
+  Weather = 2,
+  Digipeater = 3,
+  IGate = 4,
+  Unknown = 5,
+}
+
+export interface QrzLookupData {
+  name: string | null;
+  city: string | null;
+  state: string | null;
+  licenseClass: string | null;
+  gridSquare: string | null;
+}
+
+export interface CallsignLookupDto {
+  name: string | null;
+  city: string | null;
+  state: string | null;
+  licenseClass: string | null;
+  gridSquare: string | null;
+}
+
+export interface StationStatisticDto {
+  packetsToday: number;
+  packetsAllTime: number;
+  averagePacketsPerHour: number;
+  longestGapMinutes: number;
+  packetsPerHour: number[];
+}
+
+export interface StationDto {
+  callsign: string;
+  firstSeen: string;
+  lastSeen: string;
+  lastLat: number | null;
+  lastLon: number | null;
+  lastHeading: number | null;
+  lastSpeed: number | null;
+  lastAltitude: number | null;
+  symbol: string;
+  status: string;
+  isWeatherStation: boolean;
+  stationType: StationType;
+  qrzLookupData: QrzLookupData | null;
+  isOnWatchList: boolean;
+  gridSquare: string | null;
+}
+
+export interface SettingsDto {
+  ourCallsign: string;
+  stationLatitude: number | null;
+  stationLongitude: number | null;
+  stationExpiryTimeoutMinutes: number;
+  direwolfHost: string;
+  direwolfPort: number;
+  direwolfReconnectDelaySeconds: number;
+  corsOrigins: string[];
+}
+
+export interface CallsignCountDto {
+  callsign: string;
+  count: number;
+  averagePerHour: number;
+}
+
+export interface RecentlyHeardDto {
+  callsign: string;
+  firstSeen: string;
+  stationType: StationType;
+}
+
+export interface StatisticsDto {
+  packetsToday: number;
+  uniqueStationsToday: number;
+  uniqueStationsThisWeek: number;
+  uniqueStationsAllTime: number;
+  packetsPerHour: number[];
+  busiestDigipeaters: CallsignCountDto[];
+  busiestStations: CallsignCountDto[];
+  recentlyFirstHeard: RecentlyHeardDto[];
+  gridSquares: string[];
+}
+
+export interface DigipeaterAnalysisEntry {
+  callsign: string;
+  totalPacketsForwarded: number;
+  last24h: number;
+  averageHopsFromUs: number;
+}
+
