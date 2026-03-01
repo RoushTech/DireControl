@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using DireControl.Data;
 using DireControl.Enums;
@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/messages")]
+[Route("api/v0/messages")]
 public class MessagesController(
     DireControlContext db,
     IOptions<DireControlOptions> options,

@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Data;
 using DireControl.Enums;
 using Microsoft.EntityFrameworkCore;

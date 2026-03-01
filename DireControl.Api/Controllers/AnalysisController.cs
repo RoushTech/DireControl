@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/analysis")]
+[Route("api/v0/analysis")]
 public class AnalysisController(DireControlContext db) : ControllerBase
 {
     // Generic APRS path aliases that are not real station callsigns.

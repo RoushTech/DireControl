@@ -8,42 +8,42 @@ import type {
 } from '@/types/alert'
 
 export async function getAlerts(unacknowledged?: boolean): Promise<AlertDto[]> {
-  const { data } = await http.get<AlertDto[]>('/api/alerts', {
+  const { data } = await http.get<AlertDto[]>('/api/v0/alerts', {
     params: unacknowledged ? { unacknowledged: true } : undefined,
   })
   return data
 }
 
 export async function acknowledgeAlert(id: number): Promise<void> {
-  await http.put(`/api/alerts/${id}/acknowledge`)
+  await http.put(`/api/v0/alerts/${id}/acknowledge`)
 }
 
 export async function getGeofences(): Promise<GeofenceDto[]> {
-  const { data } = await http.get<GeofenceDto[]>('/api/geofences')
+  const { data } = await http.get<GeofenceDto[]>('/api/v0/geofences')
   return data
 }
 
 export async function createGeofence(request: CreateGeofenceRequest): Promise<GeofenceDto> {
-  const { data } = await http.post<GeofenceDto>('/api/geofences', request)
+  const { data } = await http.post<GeofenceDto>('/api/v0/geofences', request)
   return data
 }
 
 export async function deleteGeofence(id: number): Promise<void> {
-  await http.delete(`/api/geofences/${id}`)
+  await http.delete(`/api/v0/geofences/${id}`)
 }
 
 export async function getProximityRules(): Promise<ProximityRuleDto[]> {
-  const { data } = await http.get<ProximityRuleDto[]>('/api/proximityrules')
+  const { data } = await http.get<ProximityRuleDto[]>('/api/v0/proximityrules')
   return data
 }
 
 export async function createProximityRule(
   request: CreateProximityRuleRequest,
 ): Promise<ProximityRuleDto> {
-  const { data } = await http.post<ProximityRuleDto>('/api/proximityrules', request)
+  const { data } = await http.post<ProximityRuleDto>('/api/v0/proximityrules', request)
   return data
 }
 
 export async function deleteProximityRule(id: number): Promise<void> {
-  await http.delete(`/api/proximityrules/${id}`)
+  await http.delete(`/api/v0/proximityrules/${id}`)
 }

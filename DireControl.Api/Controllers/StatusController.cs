@@ -1,11 +1,11 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/status")]
+[Route("api/v0/status")]
 public class StatusController(KissConnectionHolder connectionHolder) : ControllerBase
 {
     [HttpGet]

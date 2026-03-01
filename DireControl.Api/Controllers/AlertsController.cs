@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/alerts")]
+[Route("api/v0/alerts")]
 public class AlertsController(DireControlContext db) : ControllerBase
 {
     [HttpGet]

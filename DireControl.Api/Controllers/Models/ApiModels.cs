@@ -1,7 +1,12 @@
 using DireControl.Data.Models;
 using DireControl.Enums;
 
-namespace DireControl.Api.Contracts;
+namespace DireControl.Api.Controllers.Models;
+
+public sealed class AboutDto
+{
+    public required string Version { get; init; }
+}
 
 public sealed class StationDto
 {
@@ -83,7 +88,6 @@ public sealed class SettingsDto
     public required string DirewolfHost { get; init; }
     public int DirewolfPort { get; init; }
     public int DirewolfReconnectDelaySeconds { get; init; }
-    public IReadOnlyList<string> CorsOrigins { get; init; } = [];
 }
 
 public sealed class TrackPointDto
@@ -242,7 +246,7 @@ public sealed class RecentlyHeardDto
 {
     public required string Callsign { get; init; }
     public DateTime FirstSeen { get; init; }
-    public DireControl.Enums.StationType StationType { get; init; }
+    public StationType StationType { get; init; }
 }
 
 public sealed class StatusDto

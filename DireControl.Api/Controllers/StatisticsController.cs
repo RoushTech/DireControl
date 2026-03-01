@@ -1,11 +1,11 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/statistics")]
+[Route("api/v0/statistics")]
 public class StatisticsController(StatisticsService statisticsService) : ControllerBase
 {
     [HttpGet]

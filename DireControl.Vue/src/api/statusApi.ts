@@ -6,6 +6,6 @@ export interface StatusDto {
 }
 
 export async function getStatus(): Promise<StatusDto> {
-  const { data } = await http.get<StatusDto>('/api/status')
+  const { data } = await http.get<StatusDto>('/api/v0/status')
   return data
 }

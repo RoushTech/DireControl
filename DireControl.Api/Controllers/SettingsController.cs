@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -6,7 +6,7 @@ using Microsoft.Extensions.Options;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/settings")]
+[Route("api/v0/settings")]
 public class SettingsController(
     IOptions<DireControlOptions> options,
     IOptions<DirewolfOptions> direwolfOptions) : ControllerBase

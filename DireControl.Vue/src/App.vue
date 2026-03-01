@@ -6,6 +6,7 @@ import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useUiStore } from '@/stores/uiStore'
 import { getStatus } from '@/api/statusApi'
+import { getAbout } from '@/api/aboutApi'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
 
@@ -20,6 +21,7 @@ const isDark = ref(theme.global.current.value.dark)
 const apiOffline = ref(false)
 const direwolfDisconnected = ref(false)
 const showShortcutsDialog = ref(false)
+const version = ref<string | null>(null)
 
 const shortcuts = [
   { key: 'M', description: 'Open compose message' },
@@ -113,6 +115,13 @@ onMounted(async () => {
     // ignore — count shows 0 until fetched
   }
 
+  try {
+    const about = await getAbout()
+    version.value = about.version
+  } catch {
+    // ignore — version display is non-critical
+  }
+
   await pollStatus()
   statusInterval = setInterval(pollStatus, 10_000)
 
@@ -129,7 +138,10 @@ onUnmounted(() => {
   <v-app>
     <!-- App bar — hidden in pop-out windows -->
     <v-app-bar v-if="!route.meta.isPopOut" density="compact" color="surface">
-      <v-app-bar-title class="font-weight-bold">DireControl</v-app-bar-title>
+      <v-app-bar-title class="font-weight-bold">
+        DireControl
+        <span v-if="version" class="text-caption text-medium-emphasis ml-2">{{ version }}</span>
+      </v-app-bar-title>
       <template #append>
         <v-btn to="/" variant="text" size="small">Map</v-btn>
         <v-btn to="/beacons" variant="text" size="small">Beacon Stream</v-btn>

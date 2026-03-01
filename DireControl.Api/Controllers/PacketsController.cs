@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/packets")]
+[Route("api/v0/packets")]
 public class PacketsController(DireControlContext db) : ControllerBase
 {
     [HttpGet("positions")]

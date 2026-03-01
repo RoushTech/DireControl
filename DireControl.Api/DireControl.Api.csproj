@@ -7,6 +7,13 @@
     <VersionPrefix>0.1.0</VersionPrefix>
   </PropertyGroup>
 
+  <Target Name="SetSourceRevisionId" BeforeTargets="InitializeSourceControlInformation">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true"
+          WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="SourceRevisionId" />
+    </Exec>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="AprsSharp.AprsParser" Version="0.4.1" />
     <PackageReference Include="AprsSharp.KissTnc" Version="0.4.1" />

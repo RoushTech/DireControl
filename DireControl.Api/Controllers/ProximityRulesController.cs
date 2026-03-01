@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Data;
 using DireControl.Data.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/proximityrules")]
+[Route("api/v0/proximityrules")]
 public class ProximityRulesController(DireControlContext db) : ControllerBase
 {
     [HttpGet]

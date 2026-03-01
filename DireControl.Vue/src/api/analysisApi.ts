@@ -13,11 +13,11 @@ export interface PacketPositionDto {
 }
 
 export async function getCoverageGridSquares(): Promise<CoverageGridSquareDto[]> {
-  const { data } = await http.get<CoverageGridSquareDto[]>('/api/analysis/coverage')
+  const { data } = await http.get<CoverageGridSquareDto[]>('/api/v0/analysis/coverage')
   return data
 }
 
 export async function getPacketPositions(): Promise<PacketPositionDto[]> {
-  const { data } = await http.get<PacketPositionDto[]>('/api/packets/positions')
+  const { data } = await http.get<PacketPositionDto[]>('/api/v0/packets/positions')
   return data
 }

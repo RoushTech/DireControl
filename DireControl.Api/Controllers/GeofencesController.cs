@@ -1,4 +1,4 @@
-using DireControl.Api.Contracts;
+using DireControl.Api.Controllers.Models;
 using DireControl.Data;
 using DireControl.Data.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/geofences")]
+[Route("api/v0/geofences")]
 public class GeofencesController(DireControlContext db) : ControllerBase
 {
     [HttpGet]
