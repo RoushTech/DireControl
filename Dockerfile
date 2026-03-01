@@ -28,6 +28,7 @@ RUN shortsha=$(printf '%.8s' "$gitsha") \
         --no-restore \
         /p:Version=$version \
         /p:SourceRevisionId=$shortsha
+        /p:InformationalVersion=$version+$shortsha
 
 # Stage 3: Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
