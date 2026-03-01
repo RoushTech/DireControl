@@ -1,8 +1,4 @@
-import axios from 'axios'
-
-const http = axios.create({
-  baseURL: '/',
-})
+import http from './axios'
 
 export interface CoverageGridSquareDto {
   gridSquare: string

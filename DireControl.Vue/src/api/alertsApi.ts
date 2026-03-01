@@ -1,4 +1,4 @@
-import axios from 'axios'
+import http from './axios'
 import type {
   AlertDto,
   GeofenceDto,
@@ -6,10 +6,6 @@ import type {
   ProximityRuleDto,
   CreateProximityRuleRequest,
 } from '@/types/alert'
-
-const http = axios.create({
-  baseURL: '/',
-})
 
 export async function getAlerts(unacknowledged?: boolean): Promise<AlertDto[]> {
   const { data } = await http.get<AlertDto[]>('/api/alerts', {

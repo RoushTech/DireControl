@@ -1,13 +1,9 @@
-import axios from 'axios'
+import http from './axios'
 import type {
   AllMessagePacketDto,
   InboxMessageDto,
   SendMessageRequest,
 } from '@/types/message'
-
-const http = axios.create({
-  baseURL: '/',
-})
 
 export async function getInboxMessages(): Promise<InboxMessageDto[]> {
   const { data } = await http.get<InboxMessageDto[]>('/api/messages/inbox')

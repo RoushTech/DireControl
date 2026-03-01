@@ -10,7 +10,6 @@ public class DireControlOptions
     public double? StationLatitude { get; set; }
     public double? StationLongitude { get; set; }
     public int StationExpiryTimeoutMinutes { get; set; } = 120;
-    public List<string> CorsOrigins { get; set; } = [];
 
     /// <summary>
     /// Per-type expiry thresholds (minutes). Falls back to StationExpiryTimeoutMinutes if a type is not listed.

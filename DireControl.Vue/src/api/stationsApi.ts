@@ -1,10 +1,6 @@
-import axios from "axios";
+import http from "./axios";
 import type { StationDto, SettingsDto, CallsignLookupDto, StationStatisticDto } from "@/types/station";
 import type { TrackPointDto, PacketDto, WeatherReadingDto, SignalPointDto } from "@/types/packet";
-
-const http = axios.create({
-  baseURL: "http://localhost:5010",
-});
 
 export async function getStations(includeStale = false): Promise<StationDto[]> {
   const { data } = await http.get<StationDto[]>("/api/stations", {

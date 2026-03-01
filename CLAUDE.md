@@ -45,12 +45,15 @@ dotnet ef migrations remove \
 - JSON columns (e.g. `QrzLookupData`, `WeatherData`, `ResolvedPath`) are stored as `string` / `string?` in the database; the entity exposes a typed, deserialized property and handles serialisation/deserialisation itself — callers always work with the typed value, never the raw JSON string
 - All `DateTime` properties are UTC
 - Use controllers for all API endpoints — do not use minimal API (`app.MapGet` / `app.MapPost` etc.)
-- `appsettings.local.json` is git-ignored and always loaded as an optional override file (added via `builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)`) — use it for local connection strings or secret overrides
-- In `Program.cs`, extract `var services = builder.Services` and `var config = builder.Configuration` after `WebApplicationBuilder` is created, then call `services.X` and `config.X` throughout — do not repeat `builder.Services.` or `builder.Configuration.` on every line
+- `appsettings.local.json` is git-ignored and always loaded as an optional override file — use it for local connection strings or secret overrides
+- In `Program.cs`, extract `var services = builder.Services` and `var config = builder.Configuration` as the first two lines after `WebApplication.CreateBuilder`, then use `services.` and `config.` exclusively for all subsequent registrations and configuration access — `builder.Services` and `builder.Configuration` must never appear again after the extraction
+- Chain service registrations in `Program.cs` into a single `services` chain. When a method enters a sub-builder (`AddControllers`, `AddSignalR`, `AddHttpClient`, etc.), chain that sub-builder's own methods then fold back to `IServiceCollection` via `.Services` to continue the main chain — indent sub-builder methods one extra level so the fold-back is visually obvious. Only break into a separate `services.` call if the sub-builder genuinely has no `.Services` escape hatch. Chain all `app.Use*` middleware together since they all return `IApplicationBuilder`; `app.Map*` calls each stand on their own line because they return different endpoint-builder types with no path back to `IApplicationBuilder`
 
 ## Vue / Frontend
 
 - All Axios HTTP calls are made through TypeScript classes located in `src/api` — no Axios requests outside of this directory
+- All API files import the shared Axios instance from `src/api/axios.ts` — do not call `axios.create` in individual API files; add interceptors or shared config in `axios.ts`
+- CORS is never needed and must never be added — in development the Vite dev server proxies `/api`, `/swagger`, and `/packetHub` to `http://localhost:5010`; in production the API serves the built frontend as static files, so all requests are same-origin
 - State that is only used within a single component or class stays local; only reach for Pinia when sharing state across components or classes
 - Use Vuetify for all UI components
 - Path alias `@` resolves to `src/`

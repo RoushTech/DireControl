@@ -1,9 +1,5 @@
-import axios from "axios";
+import http from "./axios";
 import type { StatisticsDto, DigipeaterAnalysisEntry } from "@/types/station";
-
-const http = axios.create({
-  baseURL: "http://localhost:5010",
-});
 
 export async function getStatistics(): Promise<StatisticsDto> {
   const { data } = await http.get<StatisticsDto>("/api/statistics");
