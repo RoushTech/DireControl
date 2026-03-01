@@ -137,7 +137,6 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
         <v-btn
           :color="showWeatherOnly ? 'teal' : 'default'"
           :variant="showWeatherOnly ? 'tonal' : 'outlined'"
-          size="x-small"
           density="comfortable"
           prepend-icon="mdi-weather-partly-cloudy"
           @click="showWeatherOnly = !showWeatherOnly"
