@@ -371,6 +371,7 @@ public class StationsController(
         QrzLookupData = s.QrzLookupData,
         IsOnWatchList = s.IsOnWatchList,
         GridSquare = s.GridSquare,
+        HeardVia = s.HeardVia,
     };
 
     private static System.Linq.Expressions.Expression<Func<DireControl.Data.Models.Packet, PacketDto>> ToPacketDto() => p => new PacketDto
@@ -386,6 +387,7 @@ public class StationsController(
         ResolvedPath = p.ResolvedPath,
         HopCount = p.HopCount,
         UnknownHopCount = p.UnknownHopCount,
+        IsDirectHeard = p.HopCount == 0,
         Comment = p.Comment,
         WeatherData = p.WeatherData,
         TelemetryData = p.TelemetryData,

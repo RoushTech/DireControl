@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { StationType, type StationDto } from '@/types/station'
+import { StationType, HeardVia, type StationDto } from '@/types/station'
 import { timeAgo } from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
 
@@ -57,6 +57,18 @@ const stationTypeColor: Record<StationType, string> = {
   [StationType.Digipeater]: 'orange',
   [StationType.IGate]: 'purple',
   [StationType.Unknown]: 'grey',
+}
+
+const heardViaLabel: Partial<Record<HeardVia, string>> = {
+  [HeardVia.Direct]: 'Direct',
+  [HeardVia.Digi]: 'Digi',
+  [HeardVia.DirectAndDigi]: 'D+D',
+}
+
+const heardViaColor: Partial<Record<HeardVia, string>> = {
+  [HeardVia.Direct]: 'green',
+  [HeardVia.Digi]: 'amber-darken-2',
+  [HeardVia.DirectAndDigi]: 'teal',
 }
 
 function symbolStyle(s: StationDto) {
@@ -190,6 +202,14 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
             <span class="text-body-2 font-weight-medium">{{ s.callsign }}</span>
             <v-chip :color="stationTypeColor[s.stationType]" size="x-small" label>
               {{ stationTypeLabel[s.stationType] }}
+            </v-chip>
+            <v-chip
+              v-if="heardViaLabel[s.heardVia]"
+              :color="heardViaColor[s.heardVia]"
+              size="x-small"
+              label
+            >
+              {{ heardViaLabel[s.heardVia] }}
             </v-chip>
           </div>
           <div class="d-flex align-center ga-2 text-caption text-medium-emphasis">

@@ -116,8 +116,6 @@ const HOP_SEGMENT_COLORS = ['#4A90D9', '#7B68EE', '#DA70D6'] // blue, purple, or
 const HOP_COLOR_FALLBACK = '#FF8C00'  // dark orange for hop 3+
 const UNKNOWN_SEGMENT_COLOR = '#999999'  // grey for dashed unknown segments
 const FINAL_HOP_COLOR = '#2ECC71'       // green for the last hop to our station
-const PATH_FADE_DURATION_S = 90
-const PATH_FADE_TARGET_OPACITY = 0.3
 
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
@@ -181,7 +179,10 @@ const showTracks = ref(false)
 const trackLayers = new Map<string, L.LayerGroup>()
 
 // Packet path visualisation state
-const pathLayerGroup = shallowRef<L.LayerGroup | null>(null)
+// Each entry holds the map layer group, an optional fade timer, and whether
+// the path is "persistent" (user-selected) or "auto" (fades after 8 s).
+type PathEntry = { group: L.LayerGroup; fadeTimer: ReturnType<typeof setTimeout> | null; persistent: boolean }
+const activePaths = new Map<string, PathEntry>()
 
 // Estimated position (ghost marker) state
 const showGhostMarkers = ref(true)
@@ -658,6 +659,8 @@ function toggleSidebar() {
 }
 
 function onSidebarSelectStation(callsign: string) {
+  const prev = selectionStore.selectedCallsign
+  if (prev && prev !== callsign) removePath(prev)
   selectionStore.selectStation(callsign)
   const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
   if (s?.lastLat != null && s?.lastLon != null) {
@@ -667,8 +670,9 @@ function onSidebarSelectStation(callsign: string) {
 }
 
 function onDetailClose() {
+  const cs = selectionStore.selectedCallsign
   selectionStore.deselect()
-  clearPathLayer()
+  if (cs) removePath(cs)
   invalidateSizeAfterTransition()
 }
 
@@ -869,11 +873,41 @@ function toggleGhostMarkers() {
 
 // --- Packet Path Visualisation ---
 
-function clearPathLayer() {
-  if (pathLayerGroup.value) {
-    pathLayerGroup.value.remove()
-    pathLayerGroup.value = null
+function removePath(callsign: string) {
+  const entry = activePaths.get(callsign)
+  if (!entry) return
+  if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
+  entry.group.remove()
+  activePaths.delete(callsign)
+}
+
+function clearAllPaths() {
+  for (const [, entry] of activePaths) {
+    if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
+    entry.group.remove()
   }
+  activePaths.clear()
+}
+
+function schedulePathFade(callsign: string) {
+  const entry = activePaths.get(callsign)
+  if (!entry || entry.persistent) return
+
+  // Begin CSS opacity fade at 5 s; fully remove layers at 8 s (3 s transition).
+  entry.fadeTimer = setTimeout(() => {
+    const e = activePaths.get(callsign)
+    if (!e) return
+    e.group.eachLayer(layer => {
+      if (layer instanceof L.Polyline) {
+        const el = (layer as unknown as { _path?: SVGPathElement })._path
+        if (el) {
+          el.style.transition = 'opacity 3s ease-out'
+          el.style.opacity = '0'
+        }
+      }
+    })
+    e.fadeTimer = setTimeout(() => removePath(callsign), 3000)
+  }, 5000)
 }
 
 // Identifies generic APRS path aliases that do not represent a specific station.
@@ -976,9 +1010,97 @@ function hopSegmentColor(hopIndexFrom: number, isLastHop: boolean, isUnknown: bo
   return HOP_SEGMENT_COLORS[hopIndexFrom] ?? HOP_COLOR_FALLBACK
 }
 
+/** Populate a Leaflet LayerGroup with polylines and arrowheads for a resolved path. */
+function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) {
+  const segments = buildPathSegments(resolvedPath)
+  if (segments.length === 0) return false
+
+  const totalHops = resolvedPath.length - 1  // excludes source entry (hopIndex 0)
+
+  for (const seg of segments) {
+    const isUnknown = seg.unknownsBetween.length > 0
+    const color = hopSegmentColor(seg.hopIndexFrom, seg.isLastHop, isUnknown)
+    const distKm = haversineKm(seg.fromLat, seg.fromLon, seg.toLat, seg.toLon)
+    const distStr = distKm >= 10 ? `${distKm.toFixed(0)} km` : `${distKm.toFixed(1)} km`
+
+    const line = L.polyline(
+      [[seg.fromLat, seg.fromLon], [seg.toLat, seg.toLon]],
+      {
+        color,
+        weight: 3,
+        opacity: 1,
+        dashArray: isUnknown ? '8 6' : undefined,
+        lineCap: 'round',
+      },
+    )
+
+    if (isUnknown) {
+      const label = unknownHopLabel(seg.unknownsBetween)
+      line.bindTooltip(
+        `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong> (${label})<br>${distStr}`,
+        { sticky: true, direction: 'top' },
+      )
+    } else {
+      const hopNum = seg.hopIndexFrom + 1
+      const toStation = stationCache.get(seg.toCallsign) ?? staleStationCache.get(seg.toCallsign)
+      const lastSeenStr = toStation ? ` · ${formatTime(toStation.lastSeen)}` : ''
+      line.bindTooltip(
+        `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong><br>Hop ${hopNum} of ${totalHops}${lastSeenStr}<br>${distStr}`,
+        { sticky: true, direction: 'top' },
+      )
+    }
+
+    group.addLayer(line)
+
+    if (isUnknown) {
+      const label = unknownHopLabel(seg.unknownsBetween)
+      const midLat = (seg.fromLat + seg.toLat) / 2
+      const midLon = (seg.fromLon + seg.toLon) / 2
+      const midMarker = L.marker([midLat, midLon], {
+        icon: L.divIcon({ html: '', className: '', iconSize: [0, 0], iconAnchor: [0, 0] }),
+        interactive: false,
+        zIndexOffset: -100,
+      })
+      midMarker.bindTooltip(label, { permanent: true, className: 'path-unknown-label', direction: 'top' })
+      group.addLayer(midMarker)
+    }
+
+    addPathArrow(group, seg.fromLat, seg.fromLon, seg.toLat, seg.toLon, color)
+  }
+
+  return true
+}
+
+/**
+ * Auto-draw a path from a SignalR broadcast packet.  Fades out after 8 s.
+ * If the station is currently selected (persistent path), the auto-draw is
+ * skipped — the persistent path already shows from the API fetch.
+ */
+function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
+  if (!map.value || resolvedPath.length < 2) return
+  if (callsign === selectionStore.selectedCallsign) return
+
+  // Clear any existing auto-path for this callsign (reset timer on re-beacon)
+  removePath(callsign)
+
+  const group = L.layerGroup()
+  if (!drawPathLayers(group, resolvedPath)) return
+
+  group.addTo(map.value)
+  const entry: PathEntry = { group, fadeTimer: null, persistent: false }
+  activePaths.set(callsign, entry)
+  schedulePathFade(callsign)
+}
+
+/**
+ * Fetch the most recent packet for a station and draw its path persistently.
+ * Used when the user explicitly selects a station (click or sidebar).
+ * The path stays until the station is deselected.
+ */
 async function showPacketPath(callsign: string) {
   if (!map.value) return
-  clearPathLayer()
+  // Clear any existing path (auto or persistent) for this callsign
+  removePath(callsign)
   try {
     const { items } = await getStationPackets(callsign, 1, 1)
     if (items.length === 0) return
@@ -986,83 +1108,10 @@ async function showPacketPath(callsign: string) {
     if (!packet.resolvedPath || packet.resolvedPath.length < 2) return
 
     const group = L.layerGroup()
-    const segments = buildPathSegments(packet.resolvedPath)
-    if (segments.length === 0) return
+    if (!drawPathLayers(group, packet.resolvedPath)) return
 
-    const totalHops = packet.resolvedPath.length - 1  // excludes source entry (hopIndex 0)
-
-    for (const seg of segments) {
-      const isUnknown = seg.unknownsBetween.length > 0
-      const color = hopSegmentColor(seg.hopIndexFrom, seg.isLastHop, isUnknown)
-      const distKm = haversineKm(seg.fromLat, seg.fromLon, seg.toLat, seg.toLon)
-      const distStr = distKm >= 10 ? `${distKm.toFixed(0)} km` : `${distKm.toFixed(1)} km`
-
-      const line = L.polyline(
-        [[seg.fromLat, seg.fromLon], [seg.toLat, seg.toLon]],
-        {
-          color,
-          weight: 3,
-          opacity: 1,
-          dashArray: isUnknown ? '8 6' : undefined,
-          lineCap: 'round',
-        },
-      )
-
-      // Per-segment hover tooltip
-      if (isUnknown) {
-        const label = unknownHopLabel(seg.unknownsBetween)
-        line.bindTooltip(
-          `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong> (${label})<br>${distStr}`,
-          { sticky: true, direction: 'top' },
-        )
-      } else {
-        const hopNum = seg.hopIndexFrom + 1
-        const toStation = stationCache.get(seg.toCallsign) ?? staleStationCache.get(seg.toCallsign)
-        const lastSeenStr = toStation ? ` · ${formatTime(toStation.lastSeen)}` : ''
-        line.bindTooltip(
-          `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong><br>Hop ${hopNum} of ${totalHops}${lastSeenStr}<br>${distStr}`,
-          { sticky: true, direction: 'top' },
-        )
-      }
-
-      group.addLayer(line)
-
-      // Permanent midpoint label for unknown/dashed segments
-      if (isUnknown) {
-        const label = unknownHopLabel(seg.unknownsBetween)
-        const midLat = (seg.fromLat + seg.toLat) / 2
-        const midLon = (seg.fromLon + seg.toLon) / 2
-        const midMarker = L.marker([midLat, midLon], {
-          icon: L.divIcon({ html: '', className: '', iconSize: [0, 0], iconAnchor: [0, 0] }),
-          interactive: false,
-          zIndexOffset: -100,
-        })
-        midMarker.bindTooltip(label, { permanent: true, className: 'path-unknown-label', direction: 'top' })
-        group.addLayer(midMarker)
-      }
-
-      // Arrowhead at segment midpoint indicating direction of packet flow
-      addPathArrow(group, seg.fromLat, seg.fromLon, seg.toLat, seg.toLon, color)
-    }
-
-    pathLayerGroup.value = group
     group.addTo(map.value)
-
-    // Fade from opacity 1 to PATH_FADE_TARGET_OPACITY over PATH_FADE_DURATION_S seconds.
-    // Two rAF ticks ensure the browser has painted at full opacity before the transition starts.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        group.eachLayer(layer => {
-          if (layer instanceof L.Polyline) {
-            const el = (layer as unknown as { _path?: SVGPathElement })._path
-            if (el) {
-              el.style.transition = `opacity ${PATH_FADE_DURATION_S}s linear`
-              el.style.opacity = String(PATH_FADE_TARGET_OPACITY)
-            }
-          }
-        })
-      })
-    })
+    activePaths.set(callsign, { group, fadeTimer: null, persistent: true })
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
   }
@@ -1071,9 +1120,11 @@ async function showPacketPath(callsign: string) {
 function onMarkerClick(callsign: string) {
   if (selectionStore.selectedCallsign === callsign) {
     selectionStore.deselect()
-    clearPathLayer()
+    removePath(callsign)
     invalidateSizeAfterTransition()
   } else {
+    const prev = selectionStore.selectedCallsign
+    if (prev) removePath(prev)
     selectionStore.selectStation(callsign)
     showPacketPath(callsign)
     invalidateSizeAfterTransition()
@@ -1223,7 +1274,7 @@ async function loadStations() {
         removeGhostLayer(callsign)
         if (selectionStore.selectedCallsign === callsign) {
           selectionStore.deselect()
-          clearPathLayer()
+          removePath(callsign)
         }
       }
     }
@@ -1250,10 +1301,14 @@ async function connectSignalR() {
     sessionPacketCounts.value[packet.callsign] =
       (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
 
-    // Trigger detail panel refresh and redraw path for the selected station
+    // Trigger detail panel refresh for the selected station.
+    // Re-fetch the persistent path from the API so it reflects the latest packet.
     if (packet.callsign === selectionStore.selectedCallsign) {
       detailRefreshKey.value++
       showPacketPath(packet.callsign)
+    } else if (packet.resolvedPath && packet.resolvedPath.length >= 2) {
+      // Auto-draw a fading path for non-selected stations.
+      drawAutoPath(packet.callsign, packet.resolvedPath)
     }
 
     // Beacon flash ring on the marker (fires for any packet type, with/without position)
@@ -1308,8 +1363,9 @@ async function connectSignalR() {
       stationCache.delete(callsign)
       removeTrack(callsign)
       removeGhostLayer(callsign)
+      removePath(callsign)
       if (selectionStore.selectedCallsign === callsign) {
-        clearPathLayer()
+        selectionStore.deselect()
       }
     }
     updateStationsList()
@@ -1354,6 +1410,7 @@ watch(() => theme.global.current.value.dark, (dark) => {
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
   if (callsign && callsign !== prev) {
+    if (prev) removePath(prev)
     showPacketPath(callsign)
     const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
     if (s?.lastLat != null && s?.lastLon != null) {
@@ -1361,7 +1418,7 @@ watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
     }
     invalidateSizeAfterTransition()
   } else if (!callsign) {
-    clearPathLayer()
+    if (prev) removePath(prev)
     invalidateSizeAfterTransition()
   }
 })
@@ -1475,7 +1532,7 @@ onUnmounted(async () => {
   staleMarkers.clear()
   staleStationCache.clear()
   clearOverlays()
-  clearPathLayer()
+  clearAllPaths()
   clearRings()
   clearHomeMarker()
   if (homePositionPollInterval) {

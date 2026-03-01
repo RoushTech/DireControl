@@ -47,6 +47,8 @@ function packetDtoToStreamEntry(p: PacketDto): PacketBroadcastDto {
     latitude: p.latitude,
     longitude: p.longitude,
     summary: p.comment || (PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown'),
+    hopCount: p.hopCount,
+    resolvedPath: p.resolvedPath,
   }
 }
 

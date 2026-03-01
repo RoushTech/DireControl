@@ -22,6 +22,7 @@ public class Station : IEntityTypeConfiguration<Station>
     public QrzLookupData? QrzLookupData { get; set; }
     public bool IsOnWatchList { get; set; }
     public string? GridSquare { get; set; }
+    public HeardVia HeardVia { get; set; } = HeardVia.Unknown;
 
     public ICollection<Packet> Packets { get; set; } = [];
     public StationStatistic? Statistics { get; set; }

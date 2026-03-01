@@ -7,6 +7,13 @@ export enum StationType {
   Unknown = 5,
 }
 
+export enum HeardVia {
+  Unknown = 0,
+  Direct = 1,
+  Digi = 2,
+  DirectAndDigi = 3,
+}
+
 export interface QrzLookupData {
   name: string | null;
   city: string | null;
@@ -47,6 +54,7 @@ export interface StationDto {
   qrzLookupData: QrzLookupData | null;
   isOnWatchList: boolean;
   gridSquare: string | null;
+  heardVia: HeardVia;
 }
 
 export interface HomePositionDto {

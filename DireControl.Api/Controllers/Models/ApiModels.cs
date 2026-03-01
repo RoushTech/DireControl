@@ -25,6 +25,7 @@ public sealed class StationDto
     public QrzLookupData? QrzLookupData { get; init; }
     public bool IsOnWatchList { get; init; }
     public string? GridSquare { get; init; }
+    public HeardVia HeardVia { get; init; }
 }
 
 public sealed class PacketDto
@@ -40,6 +41,7 @@ public sealed class PacketDto
     public List<ResolvedPathEntry> ResolvedPath { get; init; } = [];
     public int HopCount { get; init; }
     public int UnknownHopCount { get; init; }
+    public bool IsDirectHeard { get; init; }
     public string Comment { get; init; } = string.Empty;
     public WeatherData? WeatherData { get; init; }
     public TelemetryData? TelemetryData { get; init; }
@@ -127,6 +129,8 @@ public sealed class PacketBroadcastDto
     public double? Latitude { get; init; }
     public double? Longitude { get; init; }
     public required string Summary { get; init; }
+    public int HopCount { get; init; }
+    public List<ResolvedPathEntry> ResolvedPath { get; init; } = [];
 }
 
 public sealed class SendMessageRequest

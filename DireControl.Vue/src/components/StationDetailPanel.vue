@@ -21,7 +21,7 @@ import {
   getStationStats,
   getStationSignal,
 } from '@/api/stationsApi'
-import { StationType, type StationDto, type CallsignLookupDto, type StationStatisticDto } from '@/types/station'
+import { StationType, HeardVia, type StationDto, type CallsignLookupDto, type StationStatisticDto } from '@/types/station'
 import {
   PacketType,
   PACKET_TYPE_LABELS,
@@ -398,6 +398,26 @@ const stationTypeColor = computed(() => {
   return colors[station.value.stationType] ?? 'grey'
 })
 
+const heardViaLabel = computed((): string | null => {
+  if (!station.value) return null
+  const labels: Partial<Record<HeardVia, string>> = {
+    [HeardVia.Direct]: 'Direct',
+    [HeardVia.Digi]: 'Via Digipeater',
+    [HeardVia.DirectAndDigi]: 'Direct & Digi',
+  }
+  return labels[station.value.heardVia] ?? null
+})
+
+const heardViaColor = computed((): string => {
+  if (!station.value) return 'grey'
+  const colors: Partial<Record<HeardVia, string>> = {
+    [HeardVia.Direct]: 'green',
+    [HeardVia.Digi]: 'amber-darken-2',
+    [HeardVia.DirectAndDigi]: 'teal',
+  }
+  return colors[station.value.heardVia] ?? 'grey'
+})
+
 const symbolStyle = computed(() => {
   if (!station.value?.symbol) return {}
   const { table, code } = parseAprsSymbol(station.value.symbol)
@@ -677,6 +697,13 @@ watch(tab, (newTab) => {
             {{ timeAgo(station.lastSeen) }}
           </div>
 
+          <template v-if="heardViaLabel">
+            <div class="info-label">Heard Via</div>
+            <div class="info-value">
+              <v-chip :color="heardViaColor" size="x-small" label>{{ heardViaLabel }}</v-chip>
+            </div>
+          </template>
+
           <template v-if="station.lastLat != null && station.lastLon != null">
             <div class="info-label">Coordinates</div>
             <div class="info-value">
@@ -777,6 +804,11 @@ watch(tab, (newTab) => {
             <v-chip :color="packetTypeColor(p.parsedType)" size="x-small" label>
               {{ packetTypeName(p.parsedType) }}
             </v-chip>
+            <span
+              class="heard-via-dot"
+              :class="p.isDirectHeard ? 'heard-via-dot--direct' : 'heard-via-dot--digi'"
+              :title="p.isDirectHeard ? 'Direct' : 'Via Digi'"
+            />
             <span class="text-caption text-medium-emphasis flex-shrink-0" :title="formatUtc(p.receivedAt)">
               {{ timeAgo(p.receivedAt) }}
             </span>
@@ -1145,5 +1177,21 @@ watch(tab, (newTab) => {
 
 .signal-chart-wrap {
   height: 120px;
+}
+
+.heard-via-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.heard-via-dot--direct {
+  background: #4caf50;
+}
+
+.heard-via-dot--digi {
+  background: #f9a825;
 }
 </style>

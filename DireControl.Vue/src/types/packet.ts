@@ -57,6 +57,8 @@ export interface PacketBroadcastDto {
   latitude: number | null
   longitude: number | null
   summary: string
+  hopCount: number
+  resolvedPath: ResolvedPathEntry[]
 }
 
 export interface TrackPointDto {
@@ -99,6 +101,7 @@ export interface PacketDto {
   resolvedPath: ResolvedPathEntry[]
   hopCount: number
   unknownHopCount: number
+  isDirectHeard: boolean
   comment: string
   gridSquare: string | null
   signalData: SignalData | null

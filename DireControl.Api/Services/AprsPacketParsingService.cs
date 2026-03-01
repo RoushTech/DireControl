@@ -95,6 +95,8 @@ public sealed class AprsPacketParsingService(
                     Latitude = packet.Latitude,
                     Longitude = packet.Longitude,
                     Summary = BuildSummary(packet),
+                    HopCount = packet.HopCount,
+                    ResolvedPath = packet.ResolvedPath,
                 };
 
                 await hubContext.Clients.All.SendAsync(PacketHub.PacketReceivedMethod, update, ct);
@@ -287,6 +289,21 @@ public sealed class AprsPacketParsingService(
                     existing.AveragePacketsPerHour = averagePerHour;
                     existing.LongestGapMinutes = longestGapMinutes;
                     existing.LastComputedAt = now;
+                }
+
+                // Recompute HeardVia from last 10 packets for this station
+                var recentHopCounts = await db.Packets
+                    .Where(p => p.StationCallsign == callsign)
+                    .OrderByDescending(p => p.ReceivedAt)
+                    .Take(10)
+                    .Select(p => p.HopCount)
+                    .ToListAsync(ct);
+
+                if (recentHopCounts.Count > 0)
+                {
+                    station.HeardVia = recentHopCounts.All(h => h == 0) ? HeardVia.Direct
+                        : recentHopCounts.All(h => h > 0) ? HeardVia.Digi
+                        : HeardVia.DirectAndDigi;
                 }
 
                 await db.SaveChangesAsync(ct);
