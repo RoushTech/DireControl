@@ -45,9 +45,14 @@ export async function getSettings(): Promise<SettingsDto> {
   return data;
 }
 
-export async function getStationWeather(callsign: string): Promise<WeatherReadingDto[]> {
+export async function getStationWeather(
+  callsign: string,
+  from?: string,
+  to?: string,
+): Promise<WeatherReadingDto[]> {
   const { data } = await http.get<WeatherReadingDto[]>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/weather`,
+    { params: from != null || to != null ? { from, to } : undefined },
   );
   return data;
 }

@@ -10,6 +10,7 @@ import {
   BarElement,
   Tooltip as ChartTooltip,
   Filler,
+  Legend,
 } from 'chart.js'
 import {
   getStation,
@@ -32,7 +33,7 @@ import {
 import { timeAgo, formatUtc, compassDir } from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, Filler)
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, Filler, Legend)
 
 const props = defineProps<{
   callsign: string | null
@@ -57,6 +58,29 @@ const packetsLoading = ref(false)
 
 const weatherReadings = ref<WeatherReadingDto[]>([])
 const weatherLoading = ref(false)
+const weatherRange = ref<'24h' | '7d'>('24h')
+
+// Inline crosshair plugin — draws a vertical rule at the hovered index
+const crosshairPlugin = {
+  id: 'weatherCrosshair',
+  afterDraw(chart: ChartJS) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const active = (chart.tooltip as any)?._active as { element: { x: number } }[] | undefined
+    const firstActive = active?.[0]
+    if (!firstActive) return
+    const x = firstActive.element.x
+    const { top, bottom } = chart.chartArea
+    const ctx = chart.ctx
+    ctx.save()
+    ctx.beginPath()
+    ctx.moveTo(x, top)
+    ctx.lineTo(x, bottom)
+    ctx.lineWidth = 1
+    ctx.strokeStyle = 'rgba(160, 160, 160, 0.55)'
+    ctx.stroke()
+    ctx.restore()
+  },
+}
 
 // Lookup state
 const lookupLoading = ref(false)
@@ -79,59 +103,158 @@ const currentWeather = computed(() => weatherReadings.value[0] ?? null)
 const tempF = computed(() => currentWeather.value?.temperature ?? null)
 const tempC = computed(() => tempF.value != null ? Math.round((tempF.value - 32) * 5 / 9 * 10) / 10 : null)
 
-// ---- Sparkline chart data ----
+// ---- Combined weather chart ----
 
-const sparklineOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: false as const,
-  plugins: {
-    legend: { display: false },
-    tooltip: { enabled: false },
-  },
-  scales: {
-    x: { display: false },
-    y: { display: false },
-  },
-  elements: {
-    point: { radius: 0 },
-  },
+const bucketMs = computed(() => (weatherRange.value === '24h' ? 5 * 60 * 1000 : 60 * 60 * 1000))
+const totalBuckets = computed(() => (weatherRange.value === '24h' ? 288 : 168))
+
+function formatBucketLabel(date: Date): string {
+  if (weatherRange.value === '24h') {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+  // 7d: show weekday name at midnight, blank otherwise
+  return date.getHours() === 0 ? date.toLocaleDateString([], { weekday: 'short' }) : ''
 }
 
-// Readings in chronological order (oldest first) for left-to-right charts
-const chronological = computed(() => [...weatherReadings.value].reverse())
+const weatherChartData = computed(() => {
+  const now = Date.now()
+  const bMs = bucketMs.value
+  const total = totalBuckets.value
+  const fromMs = now - total * bMs
 
-const tempChartData = computed(() => ({
-  labels: chronological.value.map(r => r.receivedAt),
-  datasets: [
-    {
-      data: chronological.value.map(r => r.temperature),
-      borderColor: '#FF7043',
-      borderWidth: 2,
-      tension: 0.3,
-      fill: false,
+  const readingMap = new Map<number, WeatherReadingDto>()
+  for (const r of weatherReadings.value) {
+    const idx = Math.round((new Date(r.receivedAt).getTime() - fromMs) / bMs)
+    if (idx >= 0 && idx < total) readingMap.set(idx, r)
+  }
+
+  const labels: string[] = []
+  const tempData: (number | null)[] = []
+  const windData: (number | null)[] = []
+
+  for (let i = 0; i < total; i++) {
+    const d = new Date(fromMs + i * bMs)
+    labels.push(formatBucketLabel(d))
+    const r = readingMap.get(i)
+    tempData.push(r?.temperature ?? null)
+    windData.push(r?.windSpeed ?? null)
+  }
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Temp (°F)',
+        data: tempData,
+        borderColor: '#FF7043',
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        tension: 0.2,
+        fill: false as const,
+        spanGaps: false,
+        yAxisID: 'yTemp',
+        pointRadius: 0,
+        pointHoverRadius: 4,
+      },
+      {
+        label: 'Wind (mph)',
+        data: windData,
+        borderColor: '#42A5F5',
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        tension: 0.2,
+        fill: false as const,
+        spanGaps: false,
+        yAxisID: 'yWind',
+        pointRadius: 0,
+        pointHoverRadius: 4,
+      },
+    ],
+  }
+})
+
+const weatherChartOptions = computed(() => {
+  const is24h = weatherRange.value === '24h'
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false as const,
+    interaction: { mode: 'index' as const, intersect: false },
+    plugins: {
+      legend: {
+        display: true,
+        position: 'top' as const,
+        labels: { font: { size: 10 }, boxWidth: 12 },
+      },
+      tooltip: {
+        enabled: true,
+        callbacks: {
+          title(items: { dataIndex: number }[]) {
+            const idx = items[0]?.dataIndex
+            if (idx == null) return ''
+            const bMs = is24h ? 5 * 60 * 1000 : 60 * 60 * 1000
+            const total = is24h ? 288 : 168
+            const d = new Date(Date.now() - total * bMs + idx * bMs)
+            return is24h
+              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+              : d.toLocaleDateString([], {
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          label(item: any) {
+            if (item.raw == null) return ''
+            const unit = item.datasetIndex === 0 ? '°F' : ' mph'
+            return `${item.dataset.label}: ${(item.raw as number).toFixed(1)}${unit}`
+          },
+        },
+      },
     },
-  ],
-}))
-
-const windChartData = computed(() => ({
-  labels: chronological.value.map(r => r.receivedAt),
-  datasets: [
-    {
-      data: chronological.value.map(r => r.windSpeed),
-      borderColor: '#42A5F5',
-      borderWidth: 2,
-      tension: 0.3,
-      fill: false,
+    scales: {
+      x: {
+        display: true,
+        ticks: {
+          font: { size: 9 },
+          maxRotation: 0,
+          ...(is24h
+            ? { autoSkip: true, maxTicksLimit: 12 }
+            : {
+                autoSkip: false,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                callback(_v: unknown, index: number, ticks: any[]) {
+                  // Only render the label when it has content (weekday names)
+                  const label = ticks[index]?.label as string | undefined
+                  return label || null
+                },
+              }),
+        },
+        grid: { display: true, color: 'rgba(128,128,128,0.15)' },
+      },
+      yTemp: {
+        display: true,
+        position: 'left' as const,
+        ticks: { font: { size: 9 } },
+        grid: { display: true, color: 'rgba(128,128,128,0.15)' },
+        title: { display: true, text: '°F', font: { size: 9 } },
+      },
+      yWind: {
+        display: true,
+        position: 'right' as const,
+        beginAtZero: true,
+        ticks: { font: { size: 9 } },
+        grid: { display: false },
+        title: { display: true, text: 'mph', font: { size: 9 } },
+      },
     },
-  ],
-}))
+  }
+})
 
-const hasTempData = computed(() =>
-  chronological.value.filter(r => r.temperature != null).length >= 2,
-)
-const hasWindData = computed(() =>
-  chronological.value.filter(r => r.windSpeed != null).length >= 2,
+const hasWeatherChartData = computed(() =>
+  weatherReadings.value.some(r => r.temperature != null || r.windSpeed != null),
 )
 
 // ---- Packets-per-hour bar chart ----
@@ -289,7 +412,16 @@ async function fetchWeather() {
   if (!props.callsign) return
   weatherLoading.value = true
   try {
-    weatherReadings.value = await getStationWeather(props.callsign)
+    const now = new Date()
+    const fromDate =
+      weatherRange.value === '24h'
+        ? new Date(now.getTime() - 24 * 60 * 60 * 1000)
+        : new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    weatherReadings.value = await getStationWeather(
+      props.callsign,
+      fromDate.toISOString(),
+      now.toISOString(),
+    )
   } catch {
     weatherReadings.value = []
   } finally {
@@ -384,6 +516,7 @@ watch(() => props.callsign, async (val) => {
     packetTotal.value = 0
     packetPage.value = 1
     weatherReadings.value = []
+    weatherRange.value = '24h'
     lookupData.value = null
     lookupFailed.value = false
     stats.value = null
@@ -392,6 +525,7 @@ watch(() => props.callsign, async (val) => {
     return
   }
   packetPage.value = 1
+  weatherRange.value = '24h'
   lookupData.value = null
   lookupFailed.value = false
   stats.value = null
@@ -402,6 +536,12 @@ watch(() => props.callsign, async (val) => {
     await fetchWeather()
   }
 }, { immediate: true })
+
+watch(weatherRange, () => {
+  if (props.callsign && station.value?.isWeatherStation) {
+    fetchWeather()
+  }
+})
 
 watch(() => props.refreshKey, async (newKey, oldKey) => {
   if (!props.callsign || newKey === oldKey) return
@@ -787,24 +927,28 @@ watch(tab, (newTab) => {
             </template>
           </div>
 
-          <!-- Sparklines -->
-          <template v-if="hasTempData">
-            <div class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium">
-              TEMPERATURE (last {{ weatherReadings.length }} readings)
-            </div>
-            <div class="sparkline-wrap px-3 pb-2">
-              <Line :data="tempChartData" :options="sparklineOptions" />
-            </div>
-          </template>
-
-          <template v-if="hasWindData">
-            <div class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium">
-              WIND SPEED (last {{ weatherReadings.length }} readings)
-            </div>
-            <div class="sparkline-wrap px-3 pb-3">
-              <Line :data="windChartData" :options="sparklineOptions" />
-            </div>
-          </template>
+          <!-- History chart -->
+          <div class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium">
+            HISTORY
+          </div>
+          <div class="d-flex justify-center px-3 pb-2">
+            <v-btn-toggle
+              v-model="weatherRange"
+              density="compact"
+              variant="outlined"
+              mandatory
+              color="primary"
+            >
+              <v-btn value="24h" size="small">24 h</v-btn>
+              <v-btn value="7d" size="small">7 d</v-btn>
+            </v-btn-toggle>
+          </div>
+          <div v-if="hasWeatherChartData" class="wx-chart-wrap px-3 pb-3">
+            <Line :data="weatherChartData" :options="weatherChartOptions" :plugins="[crosshairPlugin]" />
+          </div>
+          <div v-else-if="!weatherLoading" class="text-caption text-medium-emphasis px-3 pb-3">
+            No chart data for this range
+          </div>
         </template>
       </template>
     </div>
@@ -881,8 +1025,8 @@ watch(tab, (newTab) => {
   letter-spacing: 0.05em;
 }
 
-.sparkline-wrap {
-  height: 64px;
+.wx-chart-wrap {
+  height: 200px;
 }
 
 .bar-wrap {

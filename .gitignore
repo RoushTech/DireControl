@@ -484,3 +484,8 @@ $RECYCLE.BIN/
 
 appsettings.local.json
 *.db*
+
+
+#Temp?
+docker-compose.yml
+.env.example
