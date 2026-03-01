@@ -6,7 +6,7 @@ import type {
 } from '@/types/message'
 
 const http = axios.create({
-  baseURL: 'http://localhost:5010',
+  baseURL: '/',
 })
 
 export async function getInboxMessages(): Promise<InboxMessageDto[]> {

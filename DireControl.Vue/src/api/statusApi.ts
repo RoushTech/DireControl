@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const http = axios.create({
-  baseURL: 'http://localhost:5010',
+  baseURL: '/',
 })
 
 export interface StatusDto {

@@ -8,7 +8,7 @@ import type {
 } from '@/types/alert'
 
 const http = axios.create({
-  baseURL: 'http://localhost:5010',
+  baseURL: '/',
 })
 
 export async function getAlerts(unacknowledged?: boolean): Promise<AlertDto[]> {
