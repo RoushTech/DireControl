@@ -957,24 +957,29 @@ async function connectSignalR() {
       markerEl.classList.remove('stale-light', 'stale-medium', 'stale-heavy')
     }
 
-    if (packet.latitude != null && packet.longitude != null) {
-      // Keep stationCache in sync so ghost calculations use fresh timestamps
-      const cachedStation = stationCache.get(packet.callsign)
-      if (cachedStation) {
-        stationCache.set(packet.callsign, {
-          ...cachedStation,
-          lastSeen: packet.receivedAt,
-          lastLat: packet.latitude,
-          lastLon: packet.longitude,
-        })
-      }
+    // Keep stationCache in sync for all packet types — ensures lastSeen and
+    // position are always current so the station list stays reactive.
+    const cachedStation = stationCache.get(packet.callsign)
+    if (cachedStation) {
+      stationCache.set(packet.callsign, {
+        ...cachedStation,
+        lastSeen: packet.receivedAt,
+        ...(packet.latitude != null && packet.longitude != null
+          ? { lastLat: packet.latitude, lastLon: packet.longitude }
+          : {}),
+      })
+      updateStationsList()
+    }
 
+    if (packet.latitude != null && packet.longitude != null) {
       // A fresh real position supersedes the ghost
       removeGhostLayer(packet.callsign)
 
       const isNew = !markers.has(packet.callsign)
       addOrUpdateMarker(packet.callsign, packet.latitude, packet.longitude, packet.receivedAt)
       if (isNew) {
+        // loadStations() will call updateStationsList() once the REST response
+        // arrives and populates full station data for the new callsign.
         loadStations()
       } else {
         const station = stationCache.get(packet.callsign)
