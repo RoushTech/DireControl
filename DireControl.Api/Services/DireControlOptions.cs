@@ -7,8 +7,8 @@ public class DireControlOptions
     public const string Section = "DireControl";
 
     public string OurCallsign { get; set; } = "N0CALL-10";
-    public double? StationLatitude { get; set; }
-    public double? StationLongitude { get; set; }
+    public double? HomeLat { get; set; }
+    public double? HomeLon { get; set; }
     public int StationExpiryTimeoutMinutes { get; set; } = 120;
 
     /// <summary>

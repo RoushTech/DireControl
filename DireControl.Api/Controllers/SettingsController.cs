@@ -1,6 +1,8 @@
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
+using DireControl.Data;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Controllers;
@@ -9,17 +11,35 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/settings")]
 public class SettingsController(
     IOptions<DireControlOptions> options,
-    IOptions<DirewolfOptions> direwolfOptions) : ControllerBase
+    IOptions<DirewolfOptions> direwolfOptions,
+    DireControlContext db) : ControllerBase
 {
     [HttpGet]
-    public ActionResult<SettingsDto> Get()
+    public async Task<ActionResult<SettingsDto>> Get()
     {
+        HomePositionDto? homePosition = null;
+
+        var opt = options.Value;
+        if (opt.HomeLat.HasValue && opt.HomeLon.HasValue)
+        {
+            homePosition = new HomePositionDto { Lat = opt.HomeLat.Value, Lon = opt.HomeLon.Value };
+        }
+        else
+        {
+            var station = await db.Stations
+                .Where(s => s.Callsign == opt.OurCallsign && s.LastLat != null && s.LastLon != null)
+                .Select(s => new { s.LastLat, s.LastLon })
+                .FirstOrDefaultAsync();
+
+            if (station != null)
+                homePosition = new HomePositionDto { Lat = station.LastLat!.Value, Lon = station.LastLon!.Value };
+        }
+
         return Ok(new SettingsDto
         {
-            OurCallsign = options.Value.OurCallsign,
-            StationLatitude = options.Value.StationLatitude,
-            StationLongitude = options.Value.StationLongitude,
-            StationExpiryTimeoutMinutes = options.Value.StationExpiryTimeoutMinutes,
+            OurCallsign = opt.OurCallsign,
+            HomePosition = homePosition,
+            StationExpiryTimeoutMinutes = opt.StationExpiryTimeoutMinutes,
             DirewolfHost = direwolfOptions.Value.Host,
             DirewolfPort = direwolfOptions.Value.Port,
             DirewolfReconnectDelaySeconds = direwolfOptions.Value.ReconnectDelaySeconds,

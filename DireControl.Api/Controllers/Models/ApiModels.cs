@@ -79,11 +79,16 @@ public sealed class PaginatedResponse<T>
     public IReadOnlyList<T> Items { get; init; } = [];
 }
 
+public sealed class HomePositionDto
+{
+    public double Lat { get; init; }
+    public double Lon { get; init; }
+}
+
 public sealed class SettingsDto
 {
     public required string OurCallsign { get; init; }
-    public double? StationLatitude { get; init; }
-    public double? StationLongitude { get; init; }
+    public HomePositionDto? HomePosition { get; init; }
     public int StationExpiryTimeoutMinutes { get; init; }
     public required string DirewolfHost { get; init; }
     public int DirewolfPort { get; init; }

@@ -117,6 +117,11 @@ let overlayLayerGroup: L.LayerGroup | null = null
 // Settings cache
 let settingsCache: SettingsDto | null = null
 
+// Home station state
+let homeMarker: L.Marker | null = null
+const showNoHomePositionBanner = ref(false)
+let homePositionPollInterval: ReturnType<typeof setInterval> | null = null
+
 // Range rings state
 const RINGS_STORAGE_KEY = 'direcontrol-range-rings'
 function loadRingDistancesFromStorage(): number[] {
@@ -349,6 +354,44 @@ async function ensureSettings(): Promise<SettingsDto | null> {
   return settingsCache
 }
 
+function clearHomeMarker() {
+  if (homeMarker) {
+    homeMarker.remove()
+    homeMarker = null
+  }
+}
+
+async function drawHomeMarker() {
+  clearHomeMarker()
+  if (!map.value) return
+  const settings = await ensureSettings()
+  if (!settings?.homePosition) return
+  const { lat, lon } = settings.homePosition
+  const icon = L.divIcon({
+    html: `<div style="background:#1976D2;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.5);"><span class='mdi mdi-home' style='color:white;font-size:18px;line-height:1;'></span></div>`,
+    className: '',
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -20],
+  })
+  homeMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 })
+    .addTo(map.value)
+    .bindPopup(`<strong>${settings.ourCallsign}</strong><br>Home Station`)
+}
+
+async function checkHomePosition() {
+  settingsCache = null
+  const settings = await ensureSettings()
+  if (settings?.homePosition) {
+    showNoHomePositionBanner.value = false
+    await drawHomeMarker()
+    if (homePositionPollInterval) {
+      clearInterval(homePositionPollInterval)
+      homePositionPollInterval = null
+    }
+  }
+}
+
 function clearRings() {
   if (ringLayerGroup) {
     ringLayerGroup.remove()
@@ -360,9 +403,9 @@ async function drawRings() {
   if (!map.value) return
   clearRings()
   const settings = await ensureSettings()
-  if (!settings?.stationLatitude || !settings?.stationLongitude) return
-  const lat = settings.stationLatitude
-  const lon = settings.stationLongitude
+  if (!settings?.homePosition) return
+  const lat = settings.homePosition.lat
+  const lon = settings.homePosition.lon
   const group = L.layerGroup()
   for (const dist of ringDistances.value) {
     const radiusMeters = dist * 1609.344
@@ -762,11 +805,11 @@ async function showPacketPath(callsign: string) {
         pathNodes.push({ callsign: entry.callsign, lat: entry.latitude, lon: entry.longitude })
       }
     }
-    if (settingsCache.stationLatitude != null && settingsCache.stationLongitude != null) {
+    if (settingsCache.homePosition != null) {
       pathNodes.push({
         callsign: settingsCache.ourCallsign,
-        lat: settingsCache.stationLatitude,
-        lon: settingsCache.stationLongitude,
+        lat: settingsCache.homePosition.lat,
+        lon: settingsCache.homePosition.lon,
       })
     }
     if (pathNodes.length < 2) return
@@ -1118,6 +1161,13 @@ onMounted(async () => {
   await loadStaleStations()
   await connectSignalR()
 
+  // Draw home station marker; show banner + start poll if position not known yet
+  await drawHomeMarker()
+  if (!settingsCache?.homePosition) {
+    showNoHomePositionBanner.value = true
+    homePositionPollInterval = setInterval(checkHomePosition, 60_000)
+  }
+
   // Initial ghost render + periodic update every 30 s
   updateGhostLayers()
   ghostUpdateInterval = setInterval(updateGhostLayers, 30_000)
@@ -1169,6 +1219,11 @@ onUnmounted(async () => {
   clearOverlays()
   clearPathLayer()
   clearRings()
+  clearHomeMarker()
+  if (homePositionPollInterval) {
+    clearInterval(homePositionPollInterval)
+    homePositionPollInterval = null
+  }
   clearHeatmap()
   clearCoverage()
   heatmapPositions = null
@@ -1208,6 +1263,18 @@ defineExpose({ TILE_PROVIDERS })
     <!-- Map area -->
     <div class="map-wrapper">
       <div ref="mapContainer" class="map-container" />
+
+      <!-- No home position banner -->
+      <v-alert
+        v-if="showNoHomePositionBanner"
+        class="home-position-banner"
+        type="info"
+        density="compact"
+        closable
+        @click:close="showNoHomePositionBanner = false"
+      >
+        Home position not yet known — range rings will appear once your station is heard
+      </v-alert>
 
       <TileProviderSwitcher
         :providers="TILE_PROVIDERS"
@@ -1603,5 +1670,18 @@ defineExpose({ TILE_PROVIDERS })
 .aprs-icon-container.stale-heavy .aprs-icon {
   filter: grayscale(80%);
   opacity: 0.6;
+}
+
+/* ── Home position banner ────────────────────────────────────────────────────── */
+
+.home-position-banner {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 480px;
+  z-index: 1000;
+  pointer-events: auto;
 }
 </style>

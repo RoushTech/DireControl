@@ -49,10 +49,14 @@ export interface StationDto {
   gridSquare: string | null;
 }
 
+export interface HomePositionDto {
+  lat: number;
+  lon: number;
+}
+
 export interface SettingsDto {
   ourCallsign: string;
-  stationLatitude: number | null;
-  stationLongitude: number | null;
+  homePosition: HomePositionDto | null;
   stationExpiryTimeoutMinutes: number;
   direwolfHost: string;
   direwolfPort: number;
