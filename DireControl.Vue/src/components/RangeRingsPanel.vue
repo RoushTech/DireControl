@@ -1,34 +1,50 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useUnits } from '@/composables/useUnits'
 
 const expanded = ref(true)
+const { distanceUnit } = useUnits()
 const showRings = defineModel<boolean>('showRings', { required: true })
+// distances are always stored internally in km
 const distances = defineModel<number[]>('distances', { required: true })
 
-// Editable string versions of distances so text fields don't fight number parsing
-const editValues = ref<string[]>(distances.value.map(String))
+// Convert internal km value to the current display unit for editing
+function toDisplay(km: number): string {
+  return distanceUnit.value === 'mi'
+    ? (km * 0.621371).toFixed(1)
+    : km.toFixed(1)
+}
+
+// Editable string versions of distances in the current display unit
+const editValues = ref<string[]>(distances.value.map(toDisplay))
 
 watch(
   () => distances.value,
   (vals) => {
-    editValues.value = vals.map(String)
+    editValues.value = vals.map(toDisplay)
   },
 )
+
+// When the user switches units, refresh the displayed values without changing stored km values
+watch(distanceUnit, () => {
+  editValues.value = distances.value.map(toDisplay)
+})
 
 function commitEdit(index: number) {
   const v = parseFloat(editValues.value[index] ?? '')
   if (!isNaN(v) && v > 0) {
+    const km = distanceUnit.value === 'mi' ? v / 0.621371 : v
     const next = [...distances.value]
-    next[index] = v
+    next[index] = km
     distances.value = next.sort((a, b) => a - b)
   } else {
-    editValues.value[index] = String(distances.value[index])
+    editValues.value[index] = toDisplay(distances.value[index]!)
   }
 }
 
 function addRing() {
-  const last = distances.value[distances.value.length - 1] ?? 25
-  distances.value = [...distances.value, last + 25].sort((a, b) => a - b)
+  const last = distances.value[distances.value.length - 1] ?? 40
+  distances.value = [...distances.value, last + 40].sort((a, b) => a - b)
 }
 
 function removeRing(index: number) {
@@ -64,7 +80,7 @@ function removeRing(index: number) {
           density="compact"
           variant="outlined"
           hide-details
-          suffix="mi"
+          :suffix="distanceUnit"
           class="rr-input"
           @blur="commitEdit(i)"
           @keydown.enter="commitEdit(i)"

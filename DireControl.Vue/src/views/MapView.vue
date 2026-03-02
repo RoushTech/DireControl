@@ -16,6 +16,7 @@ import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
 import type { TileProviderConfig } from '@/types/map'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
+import { useUnits } from '@/composables/useUnits'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
 import StationDetailPanel from '@/components/StationDetailPanel.vue'
 import StationListSidebar from '@/components/StationListSidebar.vue'
@@ -133,6 +134,7 @@ const selectionStore = useStationSelectionStore()
 const beaconStore = useBeaconStreamStore()
 const radiosStore = useRadiosStore()
 const theme = useTheme()
+const { distanceUnit, formatDistance } = useUnits()
 
 const mapContainer = ref<HTMLDivElement>()
 const sidebarRef = ref<InstanceType<typeof StationListSidebar> | null>(null)
@@ -185,7 +187,7 @@ const trackLayers = new Map<string, L.LayerGroup>()
 // Packet path visualisation state
 // Each entry holds the map layer group, an optional fade timer, and whether
 // the path is "persistent" (user-selected) or "auto" (fades after 8 s).
-type PathEntry = { group: L.LayerGroup; fadeTimer: ReturnType<typeof setTimeout> | null; persistent: boolean }
+type PathEntry = { group: L.LayerGroup; fadeTimer: ReturnType<typeof setTimeout> | null; persistent: boolean; resolvedPath: ResolvedPathEntry[] }
 const activePaths = new Map<string, PathEntry>()
 
 // Estimated position (ghost marker) state
@@ -230,6 +232,17 @@ function loadRingDistancesFromStorage(): number[] {
 }
 const showRings = ref(false)
 const ringDistances = ref<number[]>(loadRingDistancesFromStorage())
+
+// Migrate ring distances stored as miles (values ≤ 100 and no previously saved km values
+// would have been in the range 5–100 miles). A pragmatic heuristic: if all values are
+// integers ≤ 100 the storage was written before the km-based format. Convert once.
+;(function migrateLegacyMilesRings() {
+  const vals = ringDistances.value
+  if (vals.every((v) => Number.isInteger(v) && v <= 100)) {
+    ringDistances.value = vals.map((v) => Math.round(v * 1.609344))
+    localStorage.setItem(RINGS_STORAGE_KEY, JSON.stringify(ringDistances.value))
+  }
+})()
 let ringLayerGroup: L.LayerGroup | null = null
 
 // Heatmap state
@@ -395,7 +408,7 @@ async function loadAndDrawOverlays() {
         fillOpacity: 0.08,
         dashArray: '6 4',
       })
-        .bindTooltip(`Geofence: ${f.name}<br>${f.radiusMeters >= 1000 ? (f.radiusMeters / 1000).toFixed(1) + ' km' : Math.round(f.radiusMeters) + ' m'}`, { sticky: true })
+        .bindTooltip(`Geofence: ${f.name}<br>${formatDistance(f.radiusMeters / 1000)}`, { sticky: true })
         .addTo(group)
     }
     for (const r of rules) {
@@ -407,7 +420,7 @@ async function loadAndDrawOverlays() {
         fillOpacity: 0.08,
         dashArray: '6 4',
       })
-        .bindTooltip(`Proximity: ${r.name}${r.targetCallsign ? ` (${r.targetCallsign})` : ''}<br>${r.radiusMetres >= 1000 ? (r.radiusMetres / 1000).toFixed(1) + ' km' : Math.round(r.radiusMetres) + ' m'}`, { sticky: true })
+        .bindTooltip(`Proximity: ${r.name}${r.targetCallsign ? ` (${r.targetCallsign})` : ''}<br>${formatDistance(r.radiusMetres / 1000)}`, { sticky: true })
         .addTo(group)
     }
   } catch (err) {
@@ -509,7 +522,7 @@ async function drawRings() {
   const style = getRingStyle(selectedProvider.value)
   const group = L.layerGroup()
   for (const dist of ringDistances.value) {
-    const radiusMeters = dist * 1609.344
+    const radiusMeters = dist * 1000
     L.circle([lat, lon], {
       radius: radiusMeters,
       color: style.color,
@@ -522,7 +535,7 @@ async function drawRings() {
     const labelLat = lat + radiusMeters / 111_320
     L.marker([labelLat, lon], {
       icon: L.divIcon({
-        html: `<div class="ring-label" style="color: ${style.labelColor}; background: ${style.labelBg}; border-color: ${style.color}40">${dist} mi</div>`,
+        html: `<div class="ring-label" style="color: ${style.labelColor}; background: ${style.labelBg}; border-color: ${style.color}40">${formatDistance(dist)}</div>`,
         className: '',
         iconSize: undefined,
         iconAnchor: [20, 10],
@@ -902,6 +915,14 @@ function clearAllPaths() {
   activePaths.clear()
 }
 
+function redrawAllPaths() {
+  if (!map.value) return
+  for (const [, entry] of activePaths) {
+    entry.group.clearLayers()
+    drawPathLayers(entry.group, entry.resolvedPath)
+  }
+}
+
 function schedulePathFade(callsign: string) {
   const entry = activePaths.get(callsign)
   if (!entry || entry.persistent) return
@@ -1040,7 +1061,7 @@ function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) 
     const isUnknown = seg.unknownsBetween.length > 0
     const color = hopSegmentColor(seg.hopIndexFrom, seg.isLastHop, isUnknown)
     const distKm = haversineKm(seg.fromLat, seg.fromLon, seg.toLat, seg.toLon)
-    const distStr = distKm >= 10 ? `${distKm.toFixed(0)} km` : `${distKm.toFixed(1)} km`
+    const distStr = formatDistance(distKm)
 
     const line = L.polyline(
       [[seg.fromLat, seg.fromLon], [seg.toLat, seg.toLon]],
@@ -1106,7 +1127,7 @@ function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
   if (!drawPathLayers(group, resolvedPath)) return
 
   group.addTo(map.value)
-  const entry: PathEntry = { group, fadeTimer: null, persistent: false }
+  const entry: PathEntry = { group, fadeTimer: null, persistent: false, resolvedPath }
   activePaths.set(callsign, entry)
   schedulePathFade(callsign)
 }
@@ -1137,7 +1158,7 @@ async function showPacketPath(callsign: string) {
 
     group.addTo(map.value)
     console.log('[Path] Drew path for', callsign, '— map container:', map.value.getContainer().id, '— activePaths size before set:', activePaths.size)
-    activePaths.set(callsign, { group, fadeTimer: null, persistent: true })
+    activePaths.set(callsign, { group, fadeTimer: null, persistent: true, resolvedPath: packet.resolvedPath })
     console.log('[Path] activePaths size after set:', activePaths.size)
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
@@ -1472,6 +1493,13 @@ watch(showRings, (enabled) => {
   } else {
     clearRings()
   }
+})
+
+// Watch: distance unit — update ring labels, path tooltips, and overlay tooltips
+watch(distanceUnit, () => {
+  if (showRings.value) drawRings()
+  redrawAllPaths()
+  if (showOverlays.value) loadAndDrawOverlays()
 })
 
 // Watch: auto-switch tile to match light/dark theme when on cartoLight or cartoDark

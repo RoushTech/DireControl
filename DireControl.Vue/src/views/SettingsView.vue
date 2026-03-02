@@ -7,6 +7,10 @@ import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } f
 import type { RadioDto } from '@/types/radio'
 import { getSettings } from '@/api/stationsApi'
 import type { SettingsDto } from '@/types/station'
+import { useUnits } from '@/composables/useUnits'
+
+// ─── Units ────────────────────────────────────────────────────────────────────
+const { distanceUnit, formatDistance, setDistanceUnit } = useUnits()
 
 // ─── Retry settings (read-only display) ──────────────────────────────────────
 const retrySettings = ref<Pick<SettingsDto, 'maxRetryAttempts' | 'initialRetryDelaySeconds'> | null>(null)
@@ -505,6 +509,29 @@ async function confirmDelete() {
     </v-card>
 
     <!-- ================================================================ -->
+    <!-- Units -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2">
+      <span class="text-h6">Units</span>
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <div class="d-flex align-center ga-6">
+        <span class="text-body-2">Distance units</span>
+        <v-radio-group
+          :model-value="distanceUnit"
+          inline
+          hide-details
+          density="compact"
+          @update:model-value="(v) => setDistanceUnit(v as 'km' | 'mi')"
+        >
+          <v-radio label="Kilometres" value="km" />
+          <v-radio label="Miles" value="mi" />
+        </v-radio-group>
+      </div>
+    </v-card>
+
+    <!-- ================================================================ -->
     <!-- Geofences -->
     <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
@@ -530,7 +557,7 @@ async function confirmDelete() {
           <v-list-item-title>{{ gf.name }}</v-list-item-title>
           <v-list-item-subtitle>
             {{ gf.centerLat.toFixed(5) }}, {{ gf.centerLon.toFixed(5) }} —
-            {{ gf.radiusMeters >= 1000 ? `${(gf.radiusMeters / 1000).toFixed(1)} km` : `${Math.round(gf.radiusMeters)} m` }}
+            {{ formatDistance(gf.radiusMeters / 1000) }}
             <span v-if="gf.alertOnEnter" class="ml-1 text-caption">↓Enter</span>
             <span v-if="gf.alertOnExit" class="ml-1 text-caption">↑Exit</span>
           </v-list-item-subtitle>
@@ -607,7 +634,7 @@ async function confirmDelete() {
           <v-list-item-subtitle>
             <span v-if="rule.targetCallsign">{{ rule.targetCallsign }} — </span>
             {{ rule.centerLat.toFixed(5) }}, {{ rule.centerLon.toFixed(5) }} —
-            {{ rule.radiusMetres >= 1000 ? `${(rule.radiusMetres / 1000).toFixed(1)} km` : `${Math.round(rule.radiusMetres)} m` }}
+            {{ formatDistance(rule.radiusMetres / 1000) }}
           </v-list-item-subtitle>
           <template #append>
             <v-btn icon="mdi-delete" size="x-small" variant="text" color="error" @click="promptDeleteRule(rule.id, rule.name)" />
