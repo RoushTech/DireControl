@@ -163,6 +163,32 @@ public class PathParserTests
         Assert.Equal(0, hopCount);
     }
 
+    /// <summary>
+    /// Issue #12 test packet.
+    /// Raw: W4PFT-1>KN6RO-13,WE4MB-3,WIDE2:@020037z3422.75N/08313.65W#...
+    /// The path list produced by raw-string extraction is ["KN6RO-13", "WE4MB-3", "WIDE2"].
+    /// TOCALL KN6RO-13 must be excluded; WE4MB-3 is the only real hop; bare WIDE2 is a generic alias.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue12Packet_BareWide2IsAlias()
+    {
+        // Simulate the raw path list extracted from "W4PFT-1>KN6RO-13,WE4MB-3,WIDE2:@..."
+        var rawPath = new List<string> { "KN6RO-13", "WE4MB-3", "WIDE2" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        // Two via entries: WE4MB-3 and WIDE2 (KN6RO-13 is TOCALL at index 0, skipped)
+        Assert.Equal(2, hops.Count);
+
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
+        Assert.Equal("WIDE2",   hops[1].Callsign);
+
+        Assert.Equal(1, hops[0].HopIndex);
+        Assert.Equal(2, hops[1].HopIndex);
+
+        // Only WE4MB-3 is a real digipeater; bare WIDE2 is a generic alias
+        Assert.Equal(1, hopCount);
+    }
+
     // -------------------------------------------------------------------------
     // Alias entries start as Known=false; real entries also start as Known=false.
     // Coordinate resolution (setting Known=true) is performed later by

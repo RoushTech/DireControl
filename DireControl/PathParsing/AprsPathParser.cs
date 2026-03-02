@@ -14,7 +14,7 @@ public static class AprsPathParser
     /// Pattern matching generic APRS path aliases of the form WIDE2-1, TRACE3-3, RELAY, etc.
     /// </summary>
     private static readonly Regex GenericAliasPattern =
-        new(@"^(WIDE|RELAY|TRACE|NCA|GATE|ECHO|IGATE)(\d(-\d)?)?$",
+        new(@"^(WIDE|RELAY|TRACE|NCA|GATE|ECHO|IGATE)(\d(-\d+)?)?$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>

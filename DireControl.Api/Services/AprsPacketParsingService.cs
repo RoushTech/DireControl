@@ -181,12 +181,23 @@ public sealed class AprsPacketParsingService(
         var aprs = new AprsSharp.AprsParser.Packet(packet.RawPacket);
 
         packet.ParsedType = MapPacketType(aprs.InfoField?.Type ?? AprsPacketType.Unknown);
-        packet.Path = aprs.Path is { Count: > 0 }
-            ? string.Join(",", aprs.Path.OfType<string>())
-            : string.Empty;
+
+        // Extract path from the raw TNC2 string to preserve asterisk markers and avoid
+        // any APRSSharp path-list inconsistencies (e.g. source callsign leaking into Path).
+        // TNC2 format: SOURCE>TOCALL,HOP1,HOP2*:INFO — everything between '>' and ':'.
+        var colonIdx = packet.RawPacket.IndexOf(':');
+        var headerPart = colonIdx >= 0 ? packet.RawPacket[..colonIdx] : packet.RawPacket;
+        var gtIdx = headerPart.IndexOf('>');
+        var rawPathString = gtIdx >= 0 ? headerPart[(gtIdx + 1)..] : string.Empty;
+
+        packet.Path = rawPathString;
+
+        List<string> rawPathList = rawPathString.Length > 0
+            ? rawPathString.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList()
+            : [];
 
         // Full ResolvedPath (with source + home + coordinates) is built in ResolvePathCoordinatesAsync.
-        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
+        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(rawPathList);
         packet.HopCount = hopCount;
         packet.ResolvedPath = viaHops;
 
