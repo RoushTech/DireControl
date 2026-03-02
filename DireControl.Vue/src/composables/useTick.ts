@@ -1,7 +1,7 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, type Ref } from 'vue'
 
 interface TickState {
-  now: ReturnType<typeof ref<number>>
+  now: Ref<number>
   timer: ReturnType<typeof setInterval> | null
   subscribers: number
 }

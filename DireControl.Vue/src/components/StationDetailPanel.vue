@@ -704,12 +704,12 @@ watch(tab, (newTab) => {
 
           <div class="info-label">First Seen</div>
           <div class="info-value" :title="formatUtc(station.firstSeen)">
-            {{ timeAgo(station.firstSeen, now.value) }}
+            {{ timeAgo(station.firstSeen, now) }}
           </div>
 
           <div class="info-label">Last Seen</div>
           <div class="info-value" :title="formatUtc(station.lastSeen)">
-            {{ timeAgo(station.lastSeen, now.value) }}
+            {{ timeAgo(station.lastSeen, now) }}
           </div>
 
           <template v-if="heardViaLabel">
@@ -825,7 +825,7 @@ watch(tab, (newTab) => {
               :title="p.isDirectHeard ? 'Direct' : 'Via Digi'"
             />
             <span class="text-caption text-medium-emphasis flex-shrink-0" :title="formatUtc(p.receivedAt)">
-              {{ timeAgo(p.receivedAt, now.value) }}
+              {{ timeAgo(p.receivedAt, now) }}
             </span>
           </div>
           <div v-if="p.comment" class="text-body-2 text-truncate mt-1">{{ p.comment }}</div>

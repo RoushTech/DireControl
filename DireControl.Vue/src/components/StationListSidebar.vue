@@ -216,7 +216,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
             </v-chip>
           </div>
           <div class="d-flex align-center ga-2 text-caption text-medium-emphasis">
-            <span>{{ timeAgo(s.lastSeen, now.value) }}</span>
+            <span>{{ timeAgo(s.lastSeen, now) }}</span>
             <span v-if="packetCounts[s.callsign]">
               <v-icon size="10">mdi-radio-tower</v-icon> {{ packetCounts[s.callsign] }}
             </span>
@@ -245,7 +245,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
               </v-chip>
             </div>
             <div class="d-flex align-center ga-2 text-caption text-disabled">
-              <span>{{ timeAgo(s.lastSeen, now.value) }}</span>
+              <span>{{ timeAgo(s.lastSeen, now) }}</span>
             </div>
           </div>
         </div>

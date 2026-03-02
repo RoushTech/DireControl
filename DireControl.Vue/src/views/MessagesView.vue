@@ -446,7 +446,7 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
             <template #item="{ item, props: itemProps }">
               <v-list-item
                 v-bind="itemProps"
-                :subtitle="`${stationTypeName(item.raw.stationType)} · ${timeAgo(item.raw.lastSeen)}`"
+                :subtitle="`${stationTypeName(item.stationType)} · ${timeAgo(item.lastSeen)}`"
               />
             </template>
           </v-combobox>
