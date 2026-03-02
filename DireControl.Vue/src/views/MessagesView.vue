@@ -211,10 +211,6 @@ async function onRowClick(message: InboxMessageDto) {
   }
 }
 
-function replyTo(message: InboxMessageDto) {
-  openCompose(message.fromCallsign === ourCallsign.value ? message.toCallsign : message.fromCallsign)
-}
-
 // ─── SignalR ─────────────────────────────────────────────────────────────────
 let connection: HubConnection | null = null
 const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
