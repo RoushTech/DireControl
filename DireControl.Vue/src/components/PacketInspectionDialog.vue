@@ -118,7 +118,7 @@ function heardViaLabel(p: PacketDto): string {
     :model-value="isOpen"
     max-width="680"
     scrollable
-    @update:model-value="if (!$event) onClose()"
+    @update:model-value="v => !v && onClose()"
     @keydown.esc="onClose()"
   >
     <v-card style="max-height: 80vh; display: flex; flex-direction: column;">
