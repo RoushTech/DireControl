@@ -1,10 +1,10 @@
-using System.Text.RegularExpressions;
 using AprsSharp.AprsParser;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
 using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
+using DireControl.PathParsing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -184,26 +184,11 @@ public sealed class AprsPacketParsingService(
         packet.Path = aprs.Path is { Count: > 0 }
             ? string.Join(",", aprs.Path.OfType<string>())
             : string.Empty;
-        packet.HopCount = aprs.Path?.OfType<string>().Count(p => p.Contains('*')) ?? 0;
 
-        // Intermediate hops are only callsigns marked with '*' (already-repeated).
-        // Callsigns without '*' are unused future hops and are not part of the actual path.
         // Full ResolvedPath (with source + home + coordinates) is built in ResolvePathCoordinatesAsync.
-        var usedHops = aprs.Path?
-            .OfType<string>()
-            .Where(e => e.TrimEnd().EndsWith('*'))
-            .Select(e => e.TrimEnd('*').Trim())
-            .Where(e => !string.IsNullOrWhiteSpace(e))
-            .ToList() ?? [];
-
-        packet.ResolvedPath = usedHops
-            .Select((cs, i) => new ResolvedPathEntry
-            {
-                Callsign = cs,
-                HopIndex = i + 1,  // 0 is reserved for the originating station
-                Known = false,
-            })
-            .ToList();
+        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
+        packet.HopCount = hopCount;
+        packet.ResolvedPath = viaHops;
 
         switch (aprs.InfoField)
         {
@@ -434,17 +419,6 @@ public sealed class AprsPacketParsingService(
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Pattern matching generic APRS path aliases that do not identify a specific
-    /// station (e.g. WIDE2-1, RELAY, TRACE3-3).  These are marked known=false.
-    /// </summary>
-    private static readonly Regex GenericAliasPattern =
-        new(@"^(WIDE|RELAY|TRACE|NCA|GATE|ECHO|IGATE)(\d(-\d)?)?$",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static bool IsGenericAlias(string callsign) =>
-        GenericAliasPattern.IsMatch(callsign);
-
-    /// <summary>
     /// Builds the complete <see cref="DbPacket.ResolvedPath"/> for a packet:
     /// <list type="bullet">
     ///   <item>HopIndex 0 — originating station (position from packet or Station table)</item>
@@ -485,7 +459,7 @@ public sealed class AprsPacketParsingService(
         // --- Intermediate hops (already extracted by ParsePacket, HopIndex 1+) ---
         foreach (var hop in packet.ResolvedPath)
         {
-            if (IsGenericAlias(hop.Callsign))
+            if (AprsPathParser.IsGenericAlias(hop.Callsign))
             {
                 hop.Known = false;
                 continue;
