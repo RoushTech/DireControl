@@ -304,7 +304,7 @@ public sealed class RadioDto
     public required string Callsign { get; init; }
     public string? Ssid { get; init; }
     public required string FullCallsign { get; init; }
-    public int DirewolfPort { get; init; }
+    public int ChannelNumber { get; init; }
     public string? Notes { get; init; }
     public bool IsActive { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
@@ -319,7 +319,7 @@ public sealed class CreateRadioRequest
     public required string Name { get; init; }
     public required string Callsign { get; init; }
     public string? Ssid { get; init; }
-    public int DirewolfPort { get; init; } = 0;
+    public int ChannelNumber { get; init; } = 0;
     public string? Notes { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 600;
 }
@@ -329,7 +329,7 @@ public sealed class UpdateRadioRequest
     public required string Name { get; init; }
     public required string Callsign { get; init; }
     public string? Ssid { get; init; }
-    public int DirewolfPort { get; init; }
+    public int ChannelNumber { get; init; }
     public string? Notes { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
 }

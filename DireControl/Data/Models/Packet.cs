@@ -18,6 +18,7 @@ public class Packet : IEntityTypeConfiguration<Packet>
     public List<ResolvedPathEntry> ResolvedPath { get; set; } = [];
     public int HopCount { get; set; }
     public int UnknownHopCount { get; set; }
+    public int KissChannel { get; set; }
     public string Comment { get; set; } = string.Empty;
     public WeatherData? WeatherData { get; set; }
     public TelemetryData? TelemetryData { get; set; }

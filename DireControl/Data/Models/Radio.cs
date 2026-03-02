@@ -10,7 +10,7 @@ public class Radio : IEntityTypeConfiguration<Radio>
     public required string Callsign { get; set; }
     public string? Ssid { get; set; }
     public string FullCallsign { get; set; } = string.Empty;
-    public int DirewolfPort { get; set; } = 0;
+    public int ChannelNumber { get; set; } = 0;
     public string? Notes { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; }

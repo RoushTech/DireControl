@@ -598,11 +598,21 @@ public sealed class AprsPacketParsingService(
         DireControlContext db,
         CancellationToken ct)
     {
-        var matched = activeRadios.FirstOrDefault(r =>
-            string.Equals(r.FullCallsign, packet.StationCallsign, StringComparison.OrdinalIgnoreCase));
+        // Primary: match by KISS channel number
+        var matched = activeRadios.FirstOrDefault(r => r.ChannelNumber == packet.KissChannel);
 
         if (matched is null)
             return;
+
+        // Secondary: confirm the source callsign matches
+        if (!string.Equals(matched.FullCallsign, packet.StationCallsign, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning(
+                "Packet on channel {Channel} from {Source} does not match configured " +
+                "radio callsign {Expected} — processing as normal station packet",
+                packet.KissChannel, packet.StationCallsign, matched.FullCallsign);
+            return;
+        }
 
         try
         {

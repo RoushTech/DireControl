@@ -15,14 +15,9 @@ const radioSaving = ref(false)
 const rName = ref('')
 const rCallsign = ref('')
 const rSsid = ref('')
-const rPort = ref(0)
+const rChannel = ref(0)
 const rExpectedInterval = ref(600)
 const rNotes = ref('')
-
-const portOptions = [
-  { title: 'Port A', value: 0 },
-  { title: 'Port B', value: 1 },
-]
 
 const radioFormValid = computed(() =>
   rName.value.trim().length > 0 &&
@@ -59,7 +54,7 @@ function openAddRadio() {
   rName.value = ''
   rCallsign.value = ''
   rSsid.value = ''
-  rPort.value = 0
+  rChannel.value = 0
   rExpectedInterval.value = 600
   rNotes.value = ''
   radioDialogOpen.value = true
@@ -70,7 +65,7 @@ function openEditRadio(radio: RadioDto) {
   rName.value = radio.name
   rCallsign.value = radio.callsign
   rSsid.value = radio.ssid ?? ''
-  rPort.value = radio.direwolfPort
+  rChannel.value = radio.channelNumber
   rExpectedInterval.value = radio.expectedIntervalSeconds
   rNotes.value = radio.notes ?? ''
   radioDialogOpen.value = true
@@ -83,7 +78,7 @@ async function saveRadio() {
     name: rName.value.trim(),
     callsign: rCallsign.value.trim().toUpperCase(),
     ssid: rSsid.value.trim() || null,
-    direwolfPort: rPort.value,
+    channelNumber: rChannel.value,
     notes: rNotes.value.trim() || null,
     expectedIntervalSeconds: rExpectedInterval.value,
   }
@@ -364,7 +359,7 @@ async function confirmDelete() {
           <div class="d-flex align-center ga-2 mt-1">
             <span class="text-caption font-weight-bold">{{ radio.fullCallsign }}</span>
             <span class="text-caption text-medium-emphasis">·</span>
-            <span class="text-caption text-medium-emphasis">{{ radio.direwolfPort === 0 ? 'Port A' : 'Port B' }}</span>
+            <span class="text-caption text-medium-emphasis">Channel {{ radio.channelNumber }}</span>
             <span class="text-caption text-medium-emphasis">·</span>
             <v-chip
               :color="radio.isActive ? 'green' : 'grey'"
@@ -423,14 +418,15 @@ async function confirmDelete() {
               style="flex: 1"
             />
           </div>
-          <v-select
-            v-model="rPort"
-            :items="portOptions"
-            item-title="title"
-            item-value="value"
-            label="Direwolf Port"
+          <v-text-field
+            v-model.number="rChannel"
+            label="Channel"
             density="compact"
-            class="mb-2"
+            type="number"
+            :rules="[(v: number) => (v >= 0 && v <= 15) || '0–15']"
+            hint="Matches the CHANNEL number in your direwolf.conf (0-based). Most single-radio setups use channel 0."
+            persistent-hint
+            class="mb-3"
           />
           <v-text-field
             v-model.number="rExpectedInterval"

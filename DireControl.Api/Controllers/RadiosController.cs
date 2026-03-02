@@ -74,7 +74,7 @@ public class RadiosController(DireControlContext db) : ControllerBase
             Name = request.Name.Trim(),
             Callsign = request.Callsign.Trim().ToUpperInvariant(),
             Ssid = string.IsNullOrWhiteSpace(request.Ssid) ? null : request.Ssid.Trim(),
-            DirewolfPort = request.DirewolfPort,
+            ChannelNumber = request.ChannelNumber,
             Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
@@ -140,7 +140,7 @@ public class RadiosController(DireControlContext db) : ControllerBase
         radio.Name = request.Name.Trim();
         radio.Callsign = request.Callsign.Trim().ToUpperInvariant();
         radio.Ssid = string.IsNullOrWhiteSpace(request.Ssid) ? null : request.Ssid.Trim();
-        radio.DirewolfPort = request.DirewolfPort;
+        radio.ChannelNumber = request.ChannelNumber;
         radio.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
         radio.ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600;
         radio.FullCallsign = Radio.ComputeFullCallsign(radio.Callsign, radio.Ssid);
@@ -293,7 +293,7 @@ public class RadiosController(DireControlContext db) : ControllerBase
             Callsign = radio.Callsign,
             Ssid = radio.Ssid,
             FullCallsign = radio.FullCallsign,
-            DirewolfPort = radio.DirewolfPort,
+            ChannelNumber = radio.ChannelNumber,
             Notes = radio.Notes,
             IsActive = radio.IsActive,
             ExpectedIntervalSeconds = radio.ExpectedIntervalSeconds,

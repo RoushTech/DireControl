@@ -57,7 +57,8 @@ public sealed class KissTcpService(
         tcpConnection.Connect(options.Value.Host, options.Value.Port);
         logger.LogInformation("Connected to Direwolf.");
 
-        using var tnc = new TcpTnc(tcpConnection, 0);
+        const byte tncPort = 0;
+        using var tnc = new TcpTnc(tcpConnection, tncPort);
         connectionHolder.SetTnc(tnc);
 
         try
@@ -65,7 +66,7 @@ public sealed class KissTcpService(
             tnc.FrameReceivedEvent += (_, e) =>
             {
                 var data = e.Data;
-                _ = ProcessFrameAsync(data, ct).ContinueWith(
+                _ = ProcessFrameAsync(data, tncPort, ct).ContinueWith(
                     t => logger.LogError(t.Exception, "Unhandled error processing APRS frame."),
                     TaskContinuationOptions.OnlyOnFaulted);
             };
@@ -83,7 +84,7 @@ public sealed class KissTcpService(
         }
     }
 
-    private async Task ProcessFrameAsync(IReadOnlyList<byte> data, CancellationToken ct)
+    private async Task ProcessFrameAsync(IReadOnlyList<byte> data, int kissChannel, CancellationToken ct)
     {
         // Decode the raw AX.25 frame to TNC2 format first, preserving the
         // has-been-repeated (H) bit on each repeater address as a '*' suffix.
@@ -139,6 +140,7 @@ public sealed class KissTcpService(
             StationCallsign = callsign,
             ReceivedAt = DateTime.UtcNow,
             RawPacket = rawPacket,
+            KissChannel = kissChannel,
             // Direwolf's standard KISS TCP interface carries only the raw AX.25 frame
             // bytes — there is no signal-quality metadata (decode quality, frequency
             // offset, audio level) in the KISS frame header.  The AGW/AGWPE interface

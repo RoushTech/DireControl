@@ -4,7 +4,7 @@ export interface RadioDto {
   callsign: string
   ssid: string | null
   fullCallsign: string
-  direwolfPort: number
+  channelNumber: number
   notes: string | null
   isActive: boolean
   expectedIntervalSeconds: number
@@ -18,7 +18,7 @@ export interface CreateRadioRequest {
   name: string
   callsign: string
   ssid: string | null
-  direwolfPort: number
+  channelNumber: number
   notes: string | null
   expectedIntervalSeconds: number
 }
@@ -27,7 +27,7 @@ export interface UpdateRadioRequest {
   name: string
   callsign: string
   ssid: string | null
-  direwolfPort: number
+  channelNumber: number
   notes: string | null
   expectedIntervalSeconds: number
 }
