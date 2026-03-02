@@ -9,6 +9,7 @@ import { useMessagesStore } from '@/stores/messagesStore'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
 import type { MessageAckDto, InboxMessageDto } from '@/types/message'
+import { type StationDto, StationType } from '@/types/station'
 import { useUiStore } from '@/stores/uiStore'
 
 const store = useMessagesStore()
@@ -16,7 +17,14 @@ const uiStore = useUiStore()
 
 // ─── Settings & stations ────────────────────────────────────────────────────
 const ourCallsign = ref('')
-const stationCallsigns = ref<string[]>([])
+const allStations = ref<StationDto[]>([])
+
+// ─── Common gateways ─────────────────────────────────────────────────────────
+const COMMON_GATEWAYS = ['SMSGTE', 'EMAIL', 'WLNK-1', 'ANSRVR']
+
+function stationTypeName(t: StationType): string {
+  return StationType[t] ?? 'Unknown'
+}
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 const activeTab = ref<'inbox' | 'all'>('inbox')
@@ -46,6 +54,14 @@ const sending = ref(false)
 const sendError = ref('')
 const MAX_BODY = 67
 
+const addresseeSuggestions = computed(() => {
+  const q = composeTo.value?.trim().toUpperCase()
+  if (!q || q.length < 2) return []
+  return allStations.value
+    .filter(s => s.callsign.toUpperCase().startsWith(q))
+    .slice(0, 8)
+})
+
 function openCompose(prefillTo = '') {
   composeTo.value = prefillTo
   composeBody.value = ''
@@ -54,12 +70,14 @@ function openCompose(prefillTo = '') {
 }
 
 async function doSend() {
-  if (!composeTo.value.trim() || !composeBody.value.trim()) return
+  const to = composeTo.value?.trim().toUpperCase() ?? ''
+  if (!to || !composeBody.value.trim()) return
+  if (to.length > 9 || !/^[A-Z0-9-]+$/.test(to)) return
   sending.value = true
   sendError.value = ''
   try {
     await store.send({
-      toCallsign: composeTo.value.trim().toUpperCase(),
+      toCallsign: to,
       body: composeBody.value.trim().slice(0, MAX_BODY),
     })
     composeOpen.value = false
@@ -167,7 +185,7 @@ onMounted(async () => {
 
   try {
     const stations = await getStations(true)
-    stationCallsigns.value = stations.map((s) => s.callsign)
+    allStations.value = stations
   } catch { /* ignore */ }
 
   await Promise.all([store.fetchInbox(), store.fetchAll()])
@@ -405,18 +423,46 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
         </v-card-title>
 
         <v-card-text>
-          <v-autocomplete
+          <v-combobox
             v-model="composeTo"
-            :items="stationCallsigns"
+            :items="addresseeSuggestions"
+            item-title="callsign"
+            item-value="callsign"
+            :return-object="false"
+            no-filter
             label="To callsign"
             density="compact"
             variant="outlined"
             clearable
-            auto-select-first
-            class="mb-3"
+            class="mb-1"
             hide-details="auto"
-            :rules="[(v: string) => !!v || 'Required']"
-          />
+            placeholder="Callsign or gateway (e.g. SMSGTE)"
+            :rules="[
+              (v: string) => !!v?.trim() || 'Required',
+              (v: string) => !v || v.trim().length <= 9 || 'Max 9 characters',
+              (v: string) => !v || /^[A-Za-z0-9-]+$/.test(v.trim()) || 'Letters, digits, and - only',
+            ]"
+          >
+            <template #item="{ item, props: itemProps }">
+              <v-list-item
+                v-bind="itemProps"
+                :subtitle="`${stationTypeName(item.raw.stationType)} · ${timeAgo(item.raw.lastSeen)}`"
+              />
+            </template>
+          </v-combobox>
+
+          <div class="mb-3 d-flex align-center flex-wrap gap-1">
+            <span class="text-caption text-medium-emphasis mr-1">Common gateways:</span>
+            <v-btn
+              v-for="gw in COMMON_GATEWAYS"
+              :key="gw"
+              size="x-small"
+              variant="tonal"
+              @click="composeTo = gw"
+            >
+              {{ gw }}
+            </v-btn>
+          </div>
 
           <v-textarea
             v-model="composeBody"
@@ -448,7 +494,7 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
           <v-btn
             color="primary"
             :loading="sending"
-            :disabled="!composeTo.trim() || !composeBody.trim()"
+            :disabled="!composeTo?.trim() || !composeBody.trim()"
             @click="doSend"
           >
             Send
