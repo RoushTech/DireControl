@@ -22,8 +22,11 @@ RUN shortsha=$(printf '%.8s' "$gitsha") \
         -c Release \
         -o /app/publish \
         /p:Version=$version \
+        /p:EnableSourceControlManagerQueries=false \
         /p:SourceRevisionId=$shortsha \
-        /p:EnableSourceControlManagerQueries=false
+        /p:IncludeSourceRevisionInInformationalVersion=false \
+        /p:InformationalVersion=$version+$shortsha
+        
 
 # Stage 3: Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
