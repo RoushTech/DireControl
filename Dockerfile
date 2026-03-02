@@ -27,7 +27,7 @@ RUN shortsha=$(printf '%.8s' "$gitsha") \
         -o /app/publish \
         --no-restore \
         /p:Version=$version \
-        /p:SourceRevisionId=$shortsha
+        /p:SourceRevisionId=$shortsha \
         /p:InformationalVersion=$version+$shortsha
 
 # Stage 3: Runtime image
