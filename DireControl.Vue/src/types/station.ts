@@ -69,6 +69,8 @@ export interface SettingsDto {
   direwolfHost: string;
   direwolfPort: number;
   direwolfReconnectDelaySeconds: number;
+  maxRetryAttempts: number;
+  initialRetryDelaySeconds: number;
 }
 
 export interface CallsignCountDto {

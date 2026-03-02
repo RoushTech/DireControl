@@ -23,6 +23,12 @@ public class DireControlOptions
         ["IGate"] = 240,
     };
 
+    /// <summary>Maximum number of retransmission attempts for unacknowledged outbound messages.</summary>
+    public int MaxRetryAttempts { get; set; } = 5;
+
+    /// <summary>Delay in seconds before the first retry. Doubles on each subsequent attempt.</summary>
+    public int InitialRetryDelaySeconds { get; set; } = 30;
+
     public int GetExpiryMinutes(StationType stationType)
     {
         var key = stationType.ToString();

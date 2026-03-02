@@ -61,6 +61,11 @@ public sealed class InboxMessageDto
     public bool IsRead { get; init; }
     public bool AckSent { get; init; }
     public bool ReplySent { get; init; }
+    public int RetryCount { get; init; }
+    public int MaxRetries { get; init; }
+    public DateTime? NextRetryAt { get; init; }
+    public RetryState RetryState { get; init; }
+    public DateTime? LastSentAt { get; init; }
 }
 
 public sealed class AllMessagePacketDto
@@ -96,6 +101,8 @@ public sealed class SettingsDto
     public required string DirewolfHost { get; init; }
     public int DirewolfPort { get; init; }
     public int DirewolfReconnectDelaySeconds { get; init; }
+    public int MaxRetryAttempts { get; init; }
+    public int InitialRetryDelaySeconds { get; init; }
 }
 
 public sealed class TrackPointDto
@@ -144,6 +151,28 @@ public sealed class MessageAckDto
 {
     public int Id { get; init; }
     public required string MessageId { get; init; }
+}
+
+public sealed class MessageRetriedDto
+{
+    public int Id { get; init; }
+    public int RetryCount { get; init; }
+    public int MaxRetries { get; init; }
+    public DateTime? NextRetryAt { get; init; }
+    public DateTime? LastSentAt { get; init; }
+}
+
+public sealed class MessageAcknowledgedDto
+{
+    public int Id { get; init; }
+    public required string MessageId { get; init; }
+}
+
+public sealed class MessageFailedDto
+{
+    public int Id { get; init; }
+    public required string ToCallsign { get; init; }
+    public int RetryCount { get; init; }
 }
 
 public sealed class AlertDto

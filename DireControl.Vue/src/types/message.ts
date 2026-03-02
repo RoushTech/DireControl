@@ -1,3 +1,11 @@
+export enum RetryState {
+  Pending = 0,
+  Retrying = 1,
+  Acknowledged = 2,
+  Failed = 3,
+  Cancelled = 4,
+}
+
 export interface InboxMessageDto {
   id: number
   fromCallsign: string
@@ -8,6 +16,11 @@ export interface InboxMessageDto {
   isRead: boolean
   ackSent: boolean
   replySent: boolean
+  retryCount: number
+  maxRetries: number
+  nextRetryAt: string | null
+  retryState: RetryState
+  lastSentAt: string | null
 }
 
 export interface AllMessagePacketDto {
@@ -28,4 +41,23 @@ export interface SendMessageRequest {
 export interface MessageAckDto {
   id: number
   messageId: string
+}
+
+export interface MessageRetriedDto {
+  id: number
+  retryCount: number
+  maxRetries: number
+  nextRetryAt: string | null
+  lastSentAt: string | null
+}
+
+export interface MessageAcknowledgedDto {
+  id: number
+  messageId: string
+}
+
+export interface MessageFailedDto {
+  id: number
+  toCallsign: string
+  retryCount: number
 }

@@ -169,7 +169,14 @@ public sealed class AprsPacketParsingService(
                 if (sentMsg is not null && !sentMsg.AckSent)
                 {
                     sentMsg.AckSent = true;
+                    sentMsg.RetryState = RetryState.Acknowledged;
+                    sentMsg.NextRetryAt = null;
                     await db.SaveChangesAsync(ct);
+
+                    await hubContext.Clients.All.SendAsync(
+                        PacketHub.MessageAcknowledgedMethod,
+                        new MessageAcknowledgedDto { Id = sentMsg.Id, MessageId = effect.OriginalMsgId },
+                        ct);
 
                     await hubContext.Clients.All.SendAsync(
                         PacketHub.MessageAckedMethod,
@@ -525,6 +532,11 @@ public sealed class AprsPacketParsingService(
         IsRead = m.IsRead,
         AckSent = m.AckSent,
         ReplySent = m.ReplySent,
+        RetryCount = m.RetryCount,
+        MaxRetries = m.MaxRetries,
+        NextRetryAt = m.NextRetryAt,
+        RetryState = m.RetryState,
+        LastSentAt = m.LastSentAt,
     };
 
     private static void UpdateStation(DireControlContext db, string callsign, Action<Station> update)

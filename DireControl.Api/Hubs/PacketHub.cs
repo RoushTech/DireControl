@@ -10,4 +10,7 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string AlertReceivedMethod = "alertReceived";
     public const string OwnBeaconReceivedMethod = "ownBeaconReceived";
     public const string DigiConfirmationMethod = "digiConfirmation";
+    public const string MessageRetriedMethod = "messageRetried";
+    public const string MessageAcknowledgedMethod = "messageAcknowledged";
+    public const string MessageFailedMethod = "messageFailed";
 }

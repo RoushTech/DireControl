@@ -5,6 +5,11 @@ import { getGeofences, createGeofence, deleteGeofence, getProximityRules, create
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
+import { getSettings } from '@/api/stationsApi'
+import type { SettingsDto } from '@/types/station'
+
+// ─── Retry settings (read-only display) ──────────────────────────────────────
+const retrySettings = ref<Pick<SettingsDto, 'maxRetryAttempts' | 'initialRetryDelaySeconds'> | null>(null)
 
 // ─── Radios ───────────────────────────────────────────────────────────────────
 const radios = ref<RadioDto[]>([])
@@ -171,6 +176,10 @@ let mapCircle: L.Circle | null = null
 let pickingFor: 'geofence' | 'rule' | null = null
 
 onMounted(async () => {
+  try {
+    const s = await getSettings()
+    retrySettings.value = s
+  } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
 
@@ -647,6 +656,31 @@ async function confirmDelete() {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- ================================================================ -->
+    <!-- Message Retry -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2 mt-6">
+      <span class="text-h6">Message Retry</span>
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <div class="text-body-2 text-medium-emphasis mb-3">
+        Configure via <code>appsettings.json</code> or <code>appsettings.local.json</code> under the <code>DireControl</code> section.
+      </div>
+      <v-table density="compact">
+        <tbody>
+          <tr>
+            <td class="text-body-2 font-weight-medium" style="width: 260px">Max retry attempts</td>
+            <td class="text-body-2">{{ retrySettings?.maxRetryAttempts ?? '—' }}</td>
+          </tr>
+          <tr>
+            <td class="text-body-2 font-weight-medium">Initial retry delay</td>
+            <td class="text-body-2">{{ retrySettings != null ? `${retrySettings.initialRetryDelaySeconds} seconds` : '—' }}</td>
+          </tr>
+        </tbody>
+      </v-table>
+    </v-card>
 
     <!-- Delete confirmation dialog -->
     <v-dialog v-model="deleteConfirmOpen" max-width="400">

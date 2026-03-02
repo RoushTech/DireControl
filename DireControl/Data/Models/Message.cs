@@ -1,3 +1,4 @@
+using DireControl.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -16,8 +17,20 @@ public class Message : IEntityTypeConfiguration<Message>
     public bool AckSent { get; set; }
     public bool ReplySent { get; set; }
 
+    // ── Retry fields ─────────────────────────────────────────────────────────
+    /// <summary>Number of retransmissions performed beyond the initial send.</summary>
+    public int RetryCount { get; set; }
+    /// <summary>Maximum retransmissions before giving up.</summary>
+    public int MaxRetries { get; set; } = 5;
+    /// <summary>UTC time when the next automatic retry should fire. Null when not retrying.</summary>
+    public DateTime? NextRetryAt { get; set; }
+    public RetryState RetryState { get; set; } = RetryState.Pending;
+    /// <summary>UTC time of the most recent transmission attempt.</summary>
+    public DateTime? LastSentAt { get; set; }
+
     public void Configure(EntityTypeBuilder<Message> builder)
     {
         builder.HasIndex(m => m.ReceivedAt);
+        builder.HasIndex(m => new { m.RetryState, m.NextRetryAt });
     }
 }

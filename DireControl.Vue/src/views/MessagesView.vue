@@ -8,12 +8,21 @@ import {
 import { useMessagesStore } from '@/stores/messagesStore'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
-import type { MessageAckDto, InboxMessageDto } from '@/types/message'
+import type {
+  InboxMessageDto,
+  MessageAcknowledgedDto,
+  MessageAckDto,
+  MessageFailedDto,
+  MessageRetriedDto,
+} from '@/types/message'
+import { RetryState } from '@/types/message'
 import { type StationDto, StationType } from '@/types/station'
 import { useUiStore } from '@/stores/uiStore'
+import { useTick } from '@/composables/useTick'
 
 const store = useMessagesStore()
 const uiStore = useUiStore()
+const { now } = useTick(1000)
 
 // ─── Settings & stations ────────────────────────────────────────────────────
 const ourCallsign = ref('')
@@ -27,7 +36,7 @@ function stationTypeName(t: StationType): string {
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
-const activeTab = ref<'inbox' | 'all'>('inbox')
+const activeTab = ref<'inbox' | 'all' | 'outbox'>('inbox')
 
 // ─── All-messages filters ────────────────────────────────────────────────────
 const filterSender = ref('')
@@ -45,6 +54,84 @@ const filteredAllMessages = computed(() => {
     return true
   })
 })
+
+// ─── Outbox ──────────────────────────────────────────────────────────────────
+const outboxMessages = computed(() =>
+  store.inboxMessages.filter(
+    (m) => m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
+  )
+)
+
+const actionLoading = ref<Record<number, 'retry' | 'reset' | 'cancel' | null>>({})
+
+function secondsUntilRetry(msg: InboxMessageDto): number {
+  if (!msg.nextRetryAt) return 0
+  return Math.max(0, Math.round((new Date(msg.nextRetryAt).getTime() - now.value) / 1000))
+}
+
+function retryBadge(msg: InboxMessageDto): { color: string; text: string } {
+  switch (msg.retryState) {
+    case RetryState.Retrying:
+      return { color: 'warning', text: `Attempt ${msg.retryCount + 1}/${msg.maxRetries}` }
+    case RetryState.Acknowledged:
+      return { color: 'success', text: 'Acknowledged' }
+    case RetryState.Failed:
+      return { color: 'error', text: `Failed after ${msg.retryCount} attempts` }
+    case RetryState.Cancelled:
+      return { color: 'default', text: 'Cancelled' }
+    default:
+      return { color: 'info', text: 'Pending' }
+  }
+}
+
+async function doRetryNow(msg: InboxMessageDto) {
+  actionLoading.value[msg.id] = 'retry'
+  try {
+    await store.retryNow(msg.id)
+  } catch { /* ignore */ } finally {
+    delete actionLoading.value[msg.id]
+  }
+}
+
+// Reset confirmation dialog
+const resetDialogOpen = ref(false)
+const resetDialogMsg = ref<InboxMessageDto | null>(null)
+
+function openResetDialog(msg: InboxMessageDto) {
+  resetDialogMsg.value = msg
+  resetDialogOpen.value = true
+}
+
+async function confirmReset() {
+  const msg = resetDialogMsg.value
+  if (!msg) return
+  resetDialogOpen.value = false
+  resetDialogMsg.value = null
+  actionLoading.value[msg.id] = 'reset'
+  try {
+    await store.resetRetry(msg.id)
+  } catch { /* ignore */ } finally {
+    delete actionLoading.value[msg.id]
+  }
+}
+
+async function doCancel(msg: InboxMessageDto) {
+  actionLoading.value[msg.id] = 'cancel'
+  try {
+    await store.cancelRetry(msg.id)
+  } catch { /* ignore */ } finally {
+    delete actionLoading.value[msg.id]
+  }
+}
+
+// Failed message toast
+const failedToast = ref(false)
+const failedToastText = ref('')
+
+function showFailedToast(data: MessageFailedDto) {
+  failedToastText.value = `Message to ${data.toCallsign} failed after ${data.retryCount} attempts — no ACK received.`
+  failedToast.value = true
+}
 
 // ─── Compose panel ──────────────────────────────────────────────────────────
 const composeOpen = ref(false)
@@ -81,7 +168,7 @@ async function doSend() {
       body: composeBody.value.trim().slice(0, MAX_BODY),
     })
     composeOpen.value = false
-    activeTab.value = 'inbox'
+    activeTab.value = 'outbox'
   } catch {
     sendError.value = 'Failed to send. Is Direwolf connected?'
   } finally {
@@ -145,6 +232,19 @@ async function connectSignalR() {
 
   connection.on('messageAcked', (ack: MessageAckDto) => {
     store.onMessageAcked(ack)
+  })
+
+  connection.on('messageRetried', (data: MessageRetriedDto) => {
+    store.onMessageRetried(data)
+  })
+
+  connection.on('messageAcknowledged', (data: MessageAcknowledgedDto) => {
+    store.onMessageAcknowledged(data)
+  })
+
+  connection.on('messageFailed', (data: MessageFailedDto) => {
+    store.onMessageFailed(data)
+    showFailedToast(data)
   })
 
   try {
@@ -260,6 +360,7 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
           class="ml-2"
         />
       </v-tab>
+      <v-tab value="outbox">Outbox</v-tab>
       <v-tab value="all">All Messages</v-tab>
     </v-tabs>
 
@@ -336,6 +437,90 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
             <tr v-if="store.inboxMessages.length === 0">
               <td colspan="5" class="text-center text-medium-emphasis py-6">
                 No messages yet.
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-window-item>
+
+      <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
+      <v-window-item value="outbox">
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th>To</th>
+              <th>Message</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="msg in outboxMessages" :key="msg.id">
+              <td class="text-no-wrap">{{ msg.toCallsign }}</td>
+              <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+                {{ msg.body }}
+              </td>
+              <td>
+                <v-chip
+                  :color="retryBadge(msg).color"
+                  size="x-small"
+                  class="mr-1"
+                >
+                  {{ retryBadge(msg).text }}
+                </v-chip>
+                <span
+                  v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
+                  class="text-caption text-medium-emphasis"
+                >
+                  · Next retry in {{ secondsUntilRetry(msg) }}s
+                </span>
+                <span
+                  v-if="msg.lastSentAt"
+                  class="text-caption text-medium-emphasis ml-1"
+                >
+                  · Sent {{ formatUtc(msg.lastSentAt) }}
+                </span>
+              </td>
+              <td class="text-no-wrap">
+                <v-btn
+                  v-if="msg.retryState !== RetryState.Acknowledged"
+                  size="x-small"
+                  variant="tonal"
+                  color="primary"
+                  class="mr-1"
+                  :loading="actionLoading[msg.id] === 'retry'"
+                  :disabled="!!actionLoading[msg.id]"
+                  @click="doRetryNow(msg)"
+                >
+                  {{ actionLoading[msg.id] === 'retry' ? 'Sending…' : 'Retry Now' }}
+                </v-btn>
+                <v-btn
+                  v-if="msg.retryState !== RetryState.Acknowledged"
+                  size="x-small"
+                  variant="tonal"
+                  class="mr-1"
+                  :loading="actionLoading[msg.id] === 'reset'"
+                  :disabled="!!actionLoading[msg.id]"
+                  @click="openResetDialog(msg)"
+                >
+                  Reset
+                </v-btn>
+                <v-btn
+                  v-if="msg.retryState === RetryState.Retrying"
+                  size="x-small"
+                  variant="tonal"
+                  color="error"
+                  :loading="actionLoading[msg.id] === 'cancel'"
+                  :disabled="!!actionLoading[msg.id]"
+                  @click="doCancel(msg)"
+                >
+                  Cancel
+                </v-btn>
+              </td>
+            </tr>
+            <tr v-if="outboxMessages.length === 0">
+              <td colspan="4" class="text-center text-medium-emphasis py-6">
+                No outbound messages.
               </td>
             </tr>
           </tbody>
@@ -502,5 +687,28 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- ── Reset Confirmation Dialog ─────────────────────────────────────── -->
+    <v-dialog v-model="resetDialogOpen" max-width="420">
+      <v-card v-if="resetDialogMsg">
+        <v-card-title>Reset retries?</v-card-title>
+        <v-card-text>
+          Reset retries for this message? This will retransmit from attempt 1.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="resetDialogOpen = false">Cancel</v-btn>
+          <v-btn color="primary" @click="confirmReset">Reset</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ── Failed Message Toast ───────────────────────────────────────────── -->
+    <v-snackbar v-model="failedToast" color="error" :timeout="6000" location="bottom right">
+      {{ failedToastText }}
+      <template #actions>
+        <v-btn variant="text" @click="failedToast = false">Dismiss</v-btn>
+      </template>
+    </v-snackbar>
   </v-container>
 </template>

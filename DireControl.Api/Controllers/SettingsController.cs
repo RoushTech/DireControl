@@ -43,6 +43,8 @@ public class SettingsController(
             DirewolfHost = direwolfOptions.Value.Host,
             DirewolfPort = direwolfOptions.Value.Port,
             DirewolfReconnectDelaySeconds = direwolfOptions.Value.ReconnectDelaySeconds,
+            MaxRetryAttempts = opt.MaxRetryAttempts,
+            InitialRetryDelaySeconds = opt.InitialRetryDelaySeconds,
         });
     }
 }

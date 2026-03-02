@@ -1,6 +1,7 @@
 using System.Text;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Enums;
 using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Services;
@@ -67,6 +68,11 @@ public sealed class MessageSendingService(
             IsRead = true,
             AckSent = false,
             ReplySent = false,
+            RetryCount = 0,
+            MaxRetries = options.Value.MaxRetryAttempts,
+            RetryState = RetryState.Retrying,
+            LastSentAt = DateTime.UtcNow,
+            NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds),
         };
 
         db.Messages.Add(message);
@@ -94,6 +100,32 @@ public sealed class MessageSendingService(
         }
 
         logger.LogDebug("Sent ACK to {ToCallsign} for message id={MessageId}.", toCallsign, originalMessageId);
+    }
+
+    /// <summary>
+    /// Retransmits an existing message from the database.
+    /// Rebuilds and sends the AX.25 frame without creating a new database record.
+    /// Returns <see langword="true"/> if sent successfully,
+    /// <see langword="false"/> if there is no active Direwolf connection.
+    /// </summary>
+    public Task<bool> RetransmitAsync(Message message, CancellationToken ct = default)
+    {
+        var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
+        var info = BuildMessageInfo(message.ToCallsign, message.Body, message.MessageId);
+        var frame = BuildAx25Frame(ourCallsign, info);
+
+        if (!connectionHolder.TrySend(frame))
+        {
+            logger.LogWarning(
+                "Cannot retransmit message {Id} to {ToCallsign}: no active Direwolf connection.",
+                message.Id, message.ToCallsign);
+            return Task.FromResult(false);
+        }
+
+        logger.LogInformation(
+            "Retransmitted message {Id} to {ToCallsign} (id={MessageId}, attempt {Attempt}).",
+            message.Id, message.ToCallsign, message.MessageId, message.RetryCount + 1);
+        return Task.FromResult(true);
     }
 
     // -------------------------------------------------------------------------

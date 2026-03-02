@@ -52,6 +52,7 @@ services
     .AddHostedService<AprsPacketParsingService>()
     .AddHostedService<StationExpiryService>()
     .AddHostedService<AlertingService>()
+    .AddHostedService<MessageRetryService>()
     .AddSingleton<KissConnectionHolder>()
     .AddSingleton<MessageSendingService>()
     .AddSingleton<PendingAlertChannel>()

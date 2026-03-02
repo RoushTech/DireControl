@@ -1,8 +1,11 @@
 using DireControl.Api.Controllers.Models;
+using DireControl.Api.Hubs;
 using DireControl.Api.Services;
 using DireControl.Data;
+using DireControl.Data.Models;
 using DireControl.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -13,7 +16,8 @@ namespace DireControl.Api.Controllers;
 public class MessagesController(
     DireControlContext db,
     IOptions<DireControlOptions> options,
-    MessageSendingService messageSendingService) : ControllerBase
+    MessageSendingService messageSendingService,
+    IHubContext<PacketHub> hubContext) : ControllerBase
 {
     [HttpGet("inbox")]
     public async Task<ActionResult<IReadOnlyList<InboxMessageDto>>> GetInbox(CancellationToken ct)
@@ -37,6 +41,11 @@ public class MessagesController(
                 IsRead = m.IsRead,
                 AckSent = m.AckSent,
                 ReplySent = m.ReplySent,
+                RetryCount = m.RetryCount,
+                MaxRetries = m.MaxRetries,
+                NextRetryAt = m.NextRetryAt,
+                RetryState = m.RetryState,
+                LastSentAt = m.LastSentAt,
             })
             .ToListAsync(ct);
 
@@ -78,18 +87,7 @@ public class MessagesController(
             await db.SaveChangesAsync(ct);
         }
 
-        return Ok(new InboxMessageDto
-        {
-            Id = message.Id,
-            FromCallsign = message.FromCallsign,
-            ToCallsign = message.ToCallsign,
-            Body = message.Body,
-            MessageId = message.MessageId,
-            ReceivedAt = message.ReceivedAt,
-            IsRead = message.IsRead,
-            AckSent = message.AckSent,
-            ReplySent = message.ReplySent,
-        });
+        return Ok(ToInboxDto(message));
     }
 
     [HttpPost("send")]
@@ -114,17 +112,114 @@ public class MessagesController(
         if (message is null)
             return StatusCode(503, "No active Direwolf connection.");
 
-        return Ok(new InboxMessageDto
-        {
-            Id = message.Id,
-            FromCallsign = message.FromCallsign,
-            ToCallsign = message.ToCallsign,
-            Body = message.Body,
-            MessageId = message.MessageId,
-            ReceivedAt = message.ReceivedAt,
-            IsRead = message.IsRead,
-            AckSent = message.AckSent,
-            ReplySent = message.ReplySent,
-        });
+        return Ok(ToInboxDto(message));
     }
+
+    /// <summary>
+    /// Immediately retransmits the message and resets the retry schedule from
+    /// the current attempt count. If the message is in Failed or Cancelled state,
+    /// RetryCount is first reset to 0 to restart the full schedule.
+    /// </summary>
+    [HttpPost("{id:int}/retry")]
+    public async Task<ActionResult<InboxMessageDto>> Retry(int id, CancellationToken ct)
+    {
+        var msg = await db.Messages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (msg is null)
+            return NotFound();
+
+        if (msg.RetryState is RetryState.Failed or RetryState.Cancelled)
+            msg.RetryCount = 0;
+
+        var sent = await messageSendingService.RetransmitAsync(msg, ct);
+        if (!sent)
+            return StatusCode(503, "No active Direwolf connection.");
+
+        msg.RetryCount++;
+        msg.LastSentAt = DateTime.UtcNow;
+
+        if (msg.RetryCount >= msg.MaxRetries)
+        {
+            msg.RetryState = RetryState.Failed;
+            msg.NextRetryAt = null;
+        }
+        else
+        {
+            msg.RetryState = RetryState.Retrying;
+            var delaySeconds = options.Value.InitialRetryDelaySeconds * Math.Pow(2, msg.RetryCount - 1);
+            msg.NextRetryAt = DateTime.UtcNow.AddSeconds(delaySeconds);
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        await hubContext.Clients.All.SendAsync(
+            PacketHub.MessageRetriedMethod,
+            new MessageRetriedDto
+            {
+                Id          = msg.Id,
+                RetryCount  = msg.RetryCount,
+                MaxRetries  = msg.MaxRetries,
+                NextRetryAt = msg.NextRetryAt,
+                LastSentAt  = msg.LastSentAt,
+            },
+            ct);
+
+        return Ok(ToInboxDto(msg));
+    }
+
+    /// <summary>
+    /// Resets RetryCount to 0, sets RetryState to Retrying, and schedules the
+    /// next retry <see cref="DireControlOptions.InitialRetryDelaySeconds"/> seconds from now.
+    /// </summary>
+    [HttpPost("{id:int}/reset")]
+    public async Task<ActionResult<InboxMessageDto>> Reset(int id, CancellationToken ct)
+    {
+        var msg = await db.Messages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (msg is null)
+            return NotFound();
+
+        msg.RetryCount  = 0;
+        msg.RetryState  = RetryState.Retrying;
+        msg.NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds);
+        await db.SaveChangesAsync(ct);
+
+        return Ok(ToInboxDto(msg));
+    }
+
+    /// <summary>
+    /// Sets RetryState to Cancelled and clears NextRetryAt.
+    /// No further automatic retries will fire for this message.
+    /// </summary>
+    [HttpPost("{id:int}/cancel")]
+    public async Task<ActionResult<InboxMessageDto>> Cancel(int id, CancellationToken ct)
+    {
+        var msg = await db.Messages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (msg is null)
+            return NotFound();
+
+        msg.RetryState  = RetryState.Cancelled;
+        msg.NextRetryAt = null;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(ToInboxDto(msg));
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private static InboxMessageDto ToInboxDto(Message m) => new()
+    {
+        Id          = m.Id,
+        FromCallsign = m.FromCallsign,
+        ToCallsign   = m.ToCallsign,
+        Body        = m.Body,
+        MessageId   = m.MessageId,
+        ReceivedAt  = m.ReceivedAt,
+        IsRead      = m.IsRead,
+        AckSent     = m.AckSent,
+        ReplySent   = m.ReplySent,
+        RetryCount  = m.RetryCount,
+        MaxRetries  = m.MaxRetries,
+        NextRetryAt = m.NextRetryAt,
+        RetryState  = m.RetryState,
+        LastSentAt  = m.LastSentAt,
+    };
 }

@@ -24,3 +24,18 @@ export async function sendMessage(request: SendMessageRequest): Promise<InboxMes
   const { data } = await http.post<InboxMessageDto>('/api/v0/messages/send', request)
   return data
 }
+
+export async function retryMessage(id: number): Promise<InboxMessageDto> {
+  const { data } = await http.post<InboxMessageDto>(`/api/v0/messages/${id}/retry`)
+  return data
+}
+
+export async function resetMessage(id: number): Promise<InboxMessageDto> {
+  const { data } = await http.post<InboxMessageDto>(`/api/v0/messages/${id}/reset`)
+  return data
+}
+
+export async function cancelMessage(id: number): Promise<InboxMessageDto> {
+  const { data } = await http.post<InboxMessageDto>(`/api/v0/messages/${id}/cancel`)
+  return data
+}
