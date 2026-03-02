@@ -907,6 +907,12 @@ function schedulePathFade(callsign: string) {
           el.style.transition = 'opacity 3s ease-out'
           el.style.opacity = '0'
         }
+      } else if (layer instanceof L.Marker) {
+        const el = layer.getElement()
+        if (el) {
+          el.style.transition = 'opacity 3s ease-out'
+          el.style.opacity = '0'
+        }
       }
     })
     e.fadeTimer = setTimeout(() => removePath(callsign), 3000)
