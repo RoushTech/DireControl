@@ -18,6 +18,7 @@ import {
   type PacketDto,
 } from '@/types/packet'
 import { timeAgo, formatUtc } from '@/utils/time'
+import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,6 +29,8 @@ const filterFieldRef = ref<{ focus: () => void } | null>(null)
 
 let connection: HubConnection | null = null
 const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+
+const inspectedPacketId = ref<number | null>(null)
 
 const packetTypeOptions = [
   { label: 'All Types', value: '' },
@@ -41,6 +44,7 @@ const packetTypeOptions = [
 
 function packetDtoToStreamEntry(p: PacketDto): PacketBroadcastDto {
   return {
+    id: p.id,
     callsign: p.stationCallsign,
     parsedType: PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown',
     receivedAt: typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
@@ -63,6 +67,15 @@ function typeColor(parsedType: string): string {
 }
 
 function onCallsignClick(callsign: string) {
+  selectionStore.selectStation(callsign)
+  router.push('/')
+}
+
+function openInspectDialog(id: number) {
+  inspectedPacketId.value = id
+}
+
+function onDialogSelectStation(callsign: string) {
   selectionStore.selectStation(callsign)
   router.push('/')
 }
@@ -231,12 +244,13 @@ function openPopOut() {
         v-for="p in store.filteredPackets"
         :key="`${p.callsign}-${p.receivedAt}`"
         class="beacon-row"
+        @click="openInspectDialog(p.id)"
       >
         <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatUtc(p.receivedAt)">
           {{ timeAgo(p.receivedAt) }}
         </span>
         <span class="beacon-cell beacon-callsign">
-          <a class="callsign-link" @click.prevent="onCallsignClick(p.callsign)">
+          <a class="callsign-link" @click.stop.prevent="onCallsignClick(p.callsign)">
             {{ p.callsign }}
           </a>
         </span>
@@ -253,6 +267,12 @@ function openPopOut() {
         No packets heard yet — waiting for Direwolf…
       </div>
     </div>
+
+    <PacketInspectionDialog
+      :packet-id="inspectedPacketId"
+      @close="inspectedPacketId = null"
+      @select-station="onDialogSelectStation"
+    />
   </div>
 </template>
 
@@ -295,6 +315,7 @@ function openPopOut() {
   padding: 4px 12px;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
   min-height: 36px;
+  cursor: pointer;
 }
 
 .beacon-row:hover {

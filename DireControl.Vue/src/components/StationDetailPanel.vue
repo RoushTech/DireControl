@@ -32,6 +32,8 @@ import {
 } from '@/types/packet'
 import { timeAgo, formatUtc, compassDir } from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
+import { useStationSelectionStore } from '@/stores/stationSelection'
+import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, Filler, Legend)
 
@@ -44,6 +46,10 @@ const emit = defineEmits<{
   close: []
   highlightPosition: [lat: number, lon: number]
 }>()
+
+const selectionStore = useStationSelectionStore()
+
+const inspectedPacketId = ref<number | null>(null)
 
 const tab = ref<'info' | 'packets' | 'weather' | 'stats' | 'signal'>('info')
 const packetsNewData = ref(false)
@@ -524,6 +530,12 @@ function onPacketRowClick(p: PacketDto) {
   if (p.latitude != null && p.longitude != null) {
     emit('highlightPosition', p.latitude, p.longitude)
   }
+  inspectedPacketId.value = p.id
+}
+
+function onDialogSelectStation(callsign: string) {
+  inspectedPacketId.value = null
+  selectionStore.selectStation(callsign)
 }
 
 async function toggleWatchStatus() {
@@ -1018,6 +1030,12 @@ watch(tab, (newTab) => {
       </template>
     </div>
     </div>
+
+    <PacketInspectionDialog
+      :packet-id="inspectedPacketId"
+      @close="inspectedPacketId = null"
+      @select-station="onDialogSelectStation"
+    />
   </div>
 </template>
 

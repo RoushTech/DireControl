@@ -89,6 +89,7 @@ public sealed class AprsPacketParsingService(
 
                 var update = new PacketBroadcastDto
                 {
+                    Id = packet.Id,
                     Callsign = packet.StationCallsign,
                     ParsedType = packet.ParsedType.ToString(),
                     ReceivedAt = packet.ReceivedAt,

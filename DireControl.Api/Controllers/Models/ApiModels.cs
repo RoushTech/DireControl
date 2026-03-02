@@ -123,6 +123,7 @@ public sealed class WeatherReadingDto
 
 public sealed class PacketBroadcastDto
 {
+    public int Id { get; init; }
     public required string Callsign { get; init; }
     public required string ParsedType { get; init; }
     public DateTime ReceivedAt { get; init; }

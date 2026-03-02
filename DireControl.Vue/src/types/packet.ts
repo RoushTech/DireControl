@@ -50,7 +50,33 @@ export function parsedTypeFromString(s: string): PacketType {
   return map[s] ?? PacketType.Unknown
 }
 
+export interface WeatherData {
+  temperatureF: number | null
+  humidityPercent: number | null
+  windSpeedMph: number | null
+  windDirectionDeg: number | null
+  windGustMph: number | null
+  pressureMbar: number | null
+  rainfallLastHourIn: number | null
+  rainfallLast24hIn: number | null
+  rainfallSinceMidnightIn: number | null
+}
+
+export interface TelemetryData {
+  sequenceNumber: string | null
+  analogs: number[] | null
+  digitals: boolean[] | null
+  comment: string | null
+}
+
+export interface MessageData {
+  addressee: string
+  text: string
+  messageId: string | null
+}
+
 export interface PacketBroadcastDto {
+  id: number
   callsign: string
   parsedType: string
   receivedAt: string
@@ -105,6 +131,9 @@ export interface PacketDto {
   comment: string
   gridSquare: string | null
   signalData: SignalData | null
+  weatherData: WeatherData | null
+  telemetryData: TelemetryData | null
+  messageData: MessageData | null
 }
 
 export interface WeatherReadingDto {

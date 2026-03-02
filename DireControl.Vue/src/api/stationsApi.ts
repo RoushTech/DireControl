@@ -40,6 +40,11 @@ export async function getRecentPackets(): Promise<PacketDto[]> {
   return data;
 }
 
+export async function getPacket(id: number): Promise<PacketDto> {
+  const { data } = await http.get<PacketDto>(`/api/v0/packets/${id}`);
+  return data;
+}
+
 export async function getSettings(): Promise<SettingsDto> {
   const { data } = await http.get<SettingsDto>("/api/v0/settings");
   return data;

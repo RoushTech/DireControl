@@ -27,6 +27,39 @@ public class PacketsController(DireControlContext db) : ControllerBase
         return Ok(positions);
     }
 
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<PacketDto>> GetById(int id, CancellationToken ct)
+    {
+        var p = await db.Packets
+            .AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(x => new PacketDto
+            {
+                Id = x.Id,
+                StationCallsign = x.StationCallsign,
+                ReceivedAt = x.ReceivedAt,
+                RawPacket = x.RawPacket,
+                ParsedType = x.ParsedType,
+                Latitude = x.Latitude,
+                Longitude = x.Longitude,
+                Path = x.Path,
+                ResolvedPath = x.ResolvedPath,
+                HopCount = x.HopCount,
+                UnknownHopCount = x.UnknownHopCount,
+                IsDirectHeard = x.HopCount == 0,
+                Comment = x.Comment,
+                WeatherData = x.WeatherData,
+                TelemetryData = x.TelemetryData,
+                MessageData = x.MessageData,
+                SignalData = x.SignalData,
+                GridSquare = x.GridSquare,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (p is null) return NotFound();
+        return Ok(p);
+    }
+
     [HttpGet("recent")]
     public async Task<ActionResult<IReadOnlyList<PacketDto>>> GetRecent(CancellationToken ct)
     {
@@ -47,6 +80,7 @@ public class PacketsController(DireControlContext db) : ControllerBase
                 ResolvedPath = p.ResolvedPath,
                 HopCount = p.HopCount,
                 UnknownHopCount = p.UnknownHopCount,
+                IsDirectHeard = p.HopCount == 0,
                 Comment = p.Comment,
                 WeatherData = p.WeatherData,
                 TelemetryData = p.TelemetryData,
