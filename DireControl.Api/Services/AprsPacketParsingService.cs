@@ -713,6 +713,19 @@ public sealed class AprsPacketParsingService(
 
         var secondsAfter = Math.Max(0, (int)(now - ownBeacon.BeaconedAt).TotalSeconds);
 
+        var existingConfirmation = await db.DigiConfirmations
+            .FirstOrDefaultAsync(c =>
+                c.OwnBeaconId == ownBeacon.Id &&
+                c.DigipeaterCallsign == digiCallsign, ct);
+
+        if (existingConfirmation != null)
+        {
+            logger.LogDebug(
+                "Duplicate confirmation from {Digi} for beacon {Id} — ignoring.",
+                digiCallsign, ownBeacon.Id);
+            return;
+        }
+
         var confirmation = new DigiConfirmation
         {
             OwnBeaconId = ownBeacon.Id,

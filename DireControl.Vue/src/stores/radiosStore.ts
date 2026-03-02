@@ -42,34 +42,31 @@ export const useRadiosStore = defineStore('radios', () => {
       radio.secondsSinceBeacon = 0
     }
 
-    // Update the lastBeacons map
+    // Update the lastBeacons map — always replace via set() so Vue's reactive
+    // Map triggers dependency tracking on the new entry (property mutation on a
+    // Map value is not reliably tracked).
     const existing = lastBeacons.value.get(dto.radioId)
-    if (existing) {
-      existing.beaconedAt = dto.beaconedAt
-      existing.secondsSinceBeacon = 0
-      existing.latitude = dto.lat
-      existing.longitude = dto.lon
-      existing.pathUsed = dto.pathUsed
-      existing.confirmations = []
-    } else {
-      lastBeacons.value.set(dto.radioId, {
-        radioId: dto.radioId,
-        radioName: radio?.name ?? dto.fullCallsign,
-        fullCallsign: dto.fullCallsign,
-        beaconedAt: dto.beaconedAt,
-        secondsSinceBeacon: 0,
-        latitude: dto.lat,
-        longitude: dto.lon,
-        pathUsed: dto.pathUsed,
-        comment: null,
-        confirmations: [],
-      })
-    }
+    lastBeacons.value.set(dto.radioId, {
+      radioId: dto.radioId,
+      radioName: existing?.radioName ?? radio?.name ?? dto.fullCallsign,
+      fullCallsign: dto.fullCallsign,
+      beaconedAt: dto.beaconedAt,
+      secondsSinceBeacon: 0,
+      latitude: dto.lat,
+      longitude: dto.lon,
+      pathUsed: dto.pathUsed,
+      comment: existing?.comment ?? null,
+      confirmations: [],
+    })
   }
 
   function onDigiConfirmation(dto: DigiConfirmationBroadcastDto) {
     const existing = lastBeacons.value.get(dto.radioId)
     if (existing) {
+      // Deduplicate by callsign — belt-and-suspenders guard against multiple
+      // SignalR events arriving before the backend check can prevent duplicates.
+      if (existing.confirmations.some((c) => c.digipeater === dto.digipeater)) return
+
       existing.confirmations = [
         ...existing.confirmations,
         {
