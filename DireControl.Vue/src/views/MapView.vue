@@ -662,17 +662,18 @@ function toggleSidebar() {
 }
 
 function onSidebarSelectStation(callsign: string) {
-  const prev = selectionStore.selectedCallsign
-  if (prev && prev !== callsign) removePath(prev)
+  console.log('[Select] onSidebarSelectStation for', callsign, '— stack:', new Error().stack)
   selectionStore.selectStation(callsign)
   const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
   if (s?.lastLat != null && s?.lastLon != null) {
     map.value?.flyTo([s.lastLat, s.lastLon], Math.max(map.value.getZoom(), 12))
   }
-  showPacketPath(callsign)
+  // Do NOT call removePath(prev) or showPacketPath here — the selectedCallsign
+  // watcher is the single caller for both, preventing duplicate draws.
 }
 
 function onDetailClose() {
+  console.log('[Select] onDetailClose called — stack:', new Error().stack)
   const cs = selectionStore.selectedCallsign
   selectionStore.deselect()
   if (cs) removePath(cs)
@@ -877,8 +878,13 @@ function toggleGhostMarkers() {
 // --- Packet Path Visualisation ---
 
 function removePath(callsign: string) {
+  console.log('[Path] removePath called for', callsign, '— stack:', new Error().stack)
   const entry = activePaths.get(callsign)
-  if (!entry) return
+  if (!entry) {
+    console.warn('[Path] No activePaths entry to remove for', callsign, '— map has', activePaths.size, 'entries:', [...activePaths.keys()])
+    return
+  }
+  console.log('[Path] Removing path group for', callsign, '— persistent:', entry.persistent)
   if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
   entry.group.remove()
   activePaths.delete(callsign)
@@ -1107,13 +1113,17 @@ function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
  * The path stays until the station is deselected.
  */
 async function showPacketPath(callsign: string) {
+  console.log('[Path] showPacketPath called for', callsign, '— stack:', new Error().stack)
   if (!map.value) return
   // Clear any existing path (auto or persistent) for this callsign
   removePath(callsign)
   try {
     const { items } = await getStationPackets(callsign, 1, 1)
     // Guard: station may have been deselected while the fetch was in flight
-    if (selectionStore.selectedCallsign !== callsign) return
+    if (selectionStore.selectedCallsign !== callsign) {
+      console.log('[Path] showPacketPath guard fired — callsign', callsign, 'no longer selected, aborting draw')
+      return
+    }
     if (items.length === 0) return
     const packet = items[0]!
     if (!packet.resolvedPath || packet.resolvedPath.length < 2) return
@@ -1122,7 +1132,9 @@ async function showPacketPath(callsign: string) {
     if (!drawPathLayers(group, packet.resolvedPath)) return
 
     group.addTo(map.value)
+    console.log('[Path] Drew path for', callsign, '— map container:', map.value.getContainer().id, '— activePaths size before set:', activePaths.size)
     activePaths.set(callsign, { group, fadeTimer: null, persistent: true })
+    console.log('[Path] activePaths size after set:', activePaths.size)
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
   }
@@ -1130,14 +1142,15 @@ async function showPacketPath(callsign: string) {
 
 function onMarkerClick(callsign: string) {
   if (selectionStore.selectedCallsign === callsign) {
+    console.log('[Select] onMarkerClick deselect for', callsign, '— stack:', new Error().stack)
     selectionStore.deselect()
     removePath(callsign)
     invalidateSizeAfterTransition()
   } else {
-    const prev = selectionStore.selectedCallsign
-    if (prev) removePath(prev)
+    console.log('[Select] onMarkerClick select for', callsign, '— stack:', new Error().stack)
     selectionStore.selectStation(callsign)
-    showPacketPath(callsign)
+    // Do NOT call removePath(prev) or showPacketPath here — the selectedCallsign
+    // watcher is the single caller for both, preventing duplicate draws.
     invalidateSizeAfterTransition()
   }
 }
@@ -1423,6 +1436,7 @@ watch(() => theme.global.current.value.dark, (dark) => {
 
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
+  console.log('[Select] selectedCallsign watch fired — callsign:', callsign, '| prev:', prev)
   if (callsign && callsign !== prev) {
     if (prev) removePath(prev)
     showPacketPath(callsign)
@@ -1487,8 +1501,10 @@ onMounted(async () => {
   })
   setTileProvider(selectedProvider.value)
   map.value.on('click', () => {
+    console.log('[Select] map background click — selectedCallsign:', selectionStore.selectedCallsign, '— stack:', new Error().stack)
     if (selectionStore.selectedCallsign) onDetailClose()
   })
+  console.log('[Map] click listeners after attach:', (map.value as unknown as { _events?: { click?: unknown[] } })._events?.click?.length ?? 'unknown')
   await loadStations()
   await loadStaleStations()
   await connectSignalR()
