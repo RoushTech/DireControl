@@ -353,6 +353,8 @@ public sealed class AprsPacketParsingService(
         HandlePosition(packet, info, db);
 
         // Rainfall fields in AprsSharp are in 100ths of an inch; convert to inches.
+        // Pressure in AprsSharp is in tenths of mb; convert to mb.
+        logger.LogDebug("APRSSharp pressure={Pressure} for packet {Raw}", info.BarometricPressure, packet.RawPacket);
         packet.WeatherData = new WeatherData
         {
             TemperatureF = (double?)info.Temperature,
@@ -360,7 +362,7 @@ public sealed class AprsPacketParsingService(
             WindDirectionDeg = info.WindDirection,
             WindGustMph = (double?)info.WindGust,
             HumidityPercent = info.Humidity,
-            PressureMbar = (double?)info.BarometricPressure,
+            PressureMbar = (double?)info.BarometricPressure / 10.0,
             RainfallLastHourIn = info.Rainfall1Hour.HasValue ? info.Rainfall1Hour.Value / 100.0 : null,
             RainfallLast24hIn = info.Rainfall24Hour.HasValue ? info.Rainfall24Hour.Value / 100.0 : null,
             RainfallSinceMidnightIn = info.RainfallSinceMidnight.HasValue ? info.RainfallSinceMidnight.Value / 100.0 : null,
