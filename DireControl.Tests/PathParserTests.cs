@@ -236,4 +236,87 @@ public class PathParserTests
         Assert.Equal(1, hops[0].HopIndex);
         Assert.Equal(1, hopCount);
     }
+
+    // -------------------------------------------------------------------------
+    // ParseTnc2Header — source / TOCALL / rawPath extraction
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Issue #14 test packet.
+    /// Raw: W4PFT-1>KN6RO-13,WE4MB-3*,WIDE2:@020107z3422.75N/08313.65W#…
+    /// After the AX.25 H-bit fix, RawPacket contains the starred path.
+    /// ParseTnc2Header must return the via portion without the TOCALL.
+    /// </summary>
+    [Fact]
+    public void ParseTnc2Header_Issue14_DigipeatedPacket()
+    {
+        const string raw = "W4PFT-1>KN6RO-13,WE4MB-3*,WIDE2:@020107z3422.75N/08313.65W#WX3in1Mini Updated 03-20-2023 U=14.2V";
+        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
+
+        Assert.Equal("W4PFT-1",   source);
+        Assert.Equal("KN6RO-13",  tocall);
+        Assert.Equal("WE4MB-3*,WIDE2", rawPath);
+    }
+
+    /// <summary>
+    /// Issue #11 — Packet 1.
+    /// Raw: KC4SAR-5>KN6RO-13,WIDE1,WE4MB-3,WIDE2:!…
+    /// No asterisks — direct packet stored as-is.
+    /// </summary>
+    [Fact]
+    public void ParseTnc2Header_Issue11_Packet1_NoAsterisks()
+    {
+        const string raw = "KC4SAR-5>KN6RO-13,WIDE1,WE4MB-3,WIDE2:!3400.59NT08402.69W&PHG8140Suwanee, GA digi-gate.";
+        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
+
+        Assert.Equal("KC4SAR-5",           source);
+        Assert.Equal("KN6RO-13",           tocall);
+        Assert.Equal("WIDE1,WE4MB-3,WIDE2", rawPath);
+    }
+
+    /// <summary>
+    /// Issue #13 test packet — TOCALL is a real callsign (WE4MB-3), one via entry (WIDE1).
+    /// Raw: KM4KMO-14>WE4MB-3,WIDE1:@…
+    /// </summary>
+    [Fact]
+    public void ParseTnc2Header_Issue13_CallsignTocall_OneViaEntry()
+    {
+        const string raw = "KM4KMO-14>WE4MB-3,WIDE1:@020113z3507.38NI08509.86W#Harrison, TN";
+        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
+
+        Assert.Equal("KM4KMO-14", source);
+        Assert.Equal("WE4MB-3",   tocall);
+        Assert.Equal("WIDE1",     rawPath);
+    }
+
+    /// <summary>
+    /// Packet with no via entries — only TOCALL present after '>'.
+    /// Raw: W1ABC>APRS:!…
+    /// rawPath must be empty.
+    /// </summary>
+    [Fact]
+    public void ParseTnc2Header_TocallOnly_EmptyRawPath()
+    {
+        const string raw = "W1ABC>APRS:!3400.59NT08402.69W&Test";
+        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
+
+        Assert.Equal("W1ABC", source);
+        Assert.Equal("APRS",  tocall);
+        Assert.Equal(string.Empty, rawPath);
+    }
+
+    /// <summary>
+    /// Multiple starred hops — both entries appear in rawPath with asterisks intact.
+    /// Raw: KC4SAR-5>KN6RO-13,WIDE1*,WE4MB-3*,WIDE2:!…
+    /// </summary>
+    [Fact]
+    public void ParseTnc2Header_MultipleStarredHops_AsterisksPreserved()
+    {
+        const string raw = "KC4SAR-5>KN6RO-13,WIDE1*,WE4MB-3*,WIDE2:!3400.59NT08402.69W&Test";
+        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
+
+        Assert.Equal("KC4SAR-5",              source);
+        Assert.Equal("KN6RO-13",              tocall);
+        Assert.Equal("WIDE1*,WE4MB-3*,WIDE2", rawPath);
+    }
 }

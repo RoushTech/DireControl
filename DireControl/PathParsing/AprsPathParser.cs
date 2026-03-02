@@ -27,6 +27,44 @@ public static class AprsPathParser
     };
 
     /// <summary>
+    /// Splits a TNC2-format string into its three header components.
+    /// TNC2 format: <c>SOURCE&gt;TOCALL,HOP1,...,HOPn:INFO</c>
+    /// </summary>
+    /// <param name="raw">The full raw TNC2 packet string.</param>
+    /// <returns>
+    ///   <list type="bullet">
+    ///     <item><description><c>Source</c>  — the originating callsign.</description></item>
+    ///     <item><description><c>Tocall</c>  — the destination / TOCALL field.</description></item>
+    ///     <item><description>
+    ///       <c>RawPath</c> — the via-hop portion of the path with TOCALL excluded and
+    ///       asterisk markers intact (e.g. <c>"WE4MB-3*,WIDE2"</c>).
+    ///       Empty string when there are no via entries.
+    ///     </description></item>
+    ///   </list>
+    /// </returns>
+    public static (string Source, string Tocall, string RawPath) ParseTnc2Header(string raw)
+    {
+        var colonIdx = raw.IndexOf(':');
+        var header   = colonIdx >= 0 ? raw[..colonIdx] : raw;
+
+        var gtIdx = header.IndexOf('>');
+        if (gtIdx < 0)
+            return (raw, string.Empty, string.Empty);
+
+        var source  = header[..gtIdx];
+        var afterGt = header[(gtIdx + 1)..];
+
+        var firstComma = afterGt.IndexOf(',');
+        if (firstComma < 0)
+            return (source, afterGt, string.Empty);  // only TOCALL, no via entries
+
+        var tocall  = afterGt[..firstComma];
+        var rawPath = afterGt[(firstComma + 1)..];   // "WE4MB-3*,WIDE2"
+
+        return (source, tocall, rawPath);
+    }
+
+    /// <summary>
     /// Returns <c>true</c> if <paramref name="callsign"/> is a generic APRS alias
     /// (e.g. WIDE1, WIDE2-1, RELAY, RFONLY) that does not identify a specific station.
     /// Leading or trailing <c>*</c> and whitespace are ignored.

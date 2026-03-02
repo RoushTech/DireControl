@@ -182,22 +182,26 @@ public sealed class AprsPacketParsingService(
 
         packet.ParsedType = MapPacketType(aprs.InfoField?.Type ?? AprsPacketType.Unknown);
 
-        // Extract path from the raw TNC2 string to preserve asterisk markers and avoid
-        // any APRSSharp path-list inconsistencies (e.g. source callsign leaking into Path).
-        // TNC2 format: SOURCE>TOCALL,HOP1,HOP2*:INFO — everything between '>' and ':'.
-        var colonIdx = packet.RawPacket.IndexOf(':');
-        var headerPart = colonIdx >= 0 ? packet.RawPacket[..colonIdx] : packet.RawPacket;
-        var gtIdx = headerPart.IndexOf('>');
-        var rawPathString = gtIdx >= 0 ? headerPart[(gtIdx + 1)..] : string.Empty;
+        // Extract path from the raw TNC2 string.  ParseTnc2Header reads directly
+        // from RawPacket so asterisk markers from the AX.25 H-bit are preserved;
+        // the returned RawPath already excludes the TOCALL.
+        var (_, tocall, rawPath) = AprsPathParser.ParseTnc2Header(packet.RawPacket);
 
-        packet.Path = rawPathString;
+        packet.Path = rawPath;   // e.g. "WE4MB-3*,WIDE2" — TOCALL absent, asterisks intact
 
-        List<string> rawPathList = rawPathString.Length > 0
-            ? rawPathString.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList()
-            : [];
+        // ExtractViaHops expects the full path list with TOCALL at index [0] so it
+        // can unconditionally skip it.  Reconstruct that list here.
+        List<string> fullPathList = string.IsNullOrEmpty(tocall)
+            ? []
+            : string.IsNullOrEmpty(rawPath)
+                ? [tocall]
+                : rawPath
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Prepend(tocall)
+                    .ToList();
 
         // Full ResolvedPath (with source + home + coordinates) is built in ResolvePathCoordinatesAsync.
-        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(rawPathList);
+        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(fullPathList);
         packet.HopCount = hopCount;
         packet.ResolvedPath = viaHops;
 
