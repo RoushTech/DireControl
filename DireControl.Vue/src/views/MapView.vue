@@ -339,7 +339,10 @@ function addStaleMarker(station: StationDto) {
   const icon = buildStaleIcon(station)
   const marker = L.marker([station.lastLat, station.lastLon], { icon, opacity: 0.5 })
     .bindPopup(`<strong>${station.callsign}</strong><br><em>Stale</em><br>Last seen: ${formatTime(station.lastSeen)}`)
-  marker.on('click', () => onMarkerClick(station.callsign))
+  marker.on('click', (e: L.LeafletMouseEvent) => {
+    L.DomEvent.stopPropagation(e)
+    onMarkerClick(station.callsign)
+  })
   marker.addTo(map.value)
   staleMarkers.set(station.callsign, marker)
 }
@@ -1103,6 +1106,8 @@ async function showPacketPath(callsign: string) {
   removePath(callsign)
   try {
     const { items } = await getStationPackets(callsign, 1, 1)
+    // Guard: station may have been deselected while the fetch was in flight
+    if (selectionStore.selectedCallsign !== callsign) return
     if (items.length === 0) return
     const packet = items[0]!
     if (!packet.resolvedPath || packet.resolvedPath.length < 2) return
@@ -1185,7 +1190,10 @@ function addOrUpdateMarker(callsign: string, lat: number, lon: number, lastSeen:
     const marker = L.marker([lat, lon], { icon })
       .bindPopup(popupContent(callsign, lastSeen, lat, lon))
       .addTo(map.value)
-    marker.on('click', () => onMarkerClick(callsign))
+    marker.on('click', (e: L.LeafletMouseEvent) => {
+      L.DomEvent.stopPropagation(e)
+      onMarkerClick(callsign)
+    })
     markers.set(callsign, marker)
   }
 }
@@ -1472,6 +1480,9 @@ onMounted(async () => {
     zoomControl: true,
   })
   setTileProvider(selectedProvider.value)
+  map.value.on('click', () => {
+    if (selectionStore.selectedCallsign) onDetailClose()
+  })
   await loadStations()
   await loadStaleStations()
   await connectSignalR()
