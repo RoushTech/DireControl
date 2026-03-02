@@ -1,21 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import { useRadiosStore } from '@/stores/radiosStore'
 import BeaconHistoryModal from './BeaconHistoryModal.vue'
+import { useTick } from '@/composables/useTick'
 
 const radiosStore = useRadiosStore()
 
-// Tick every second so the "X ago" counters update live
-const now = ref(Date.now())
-let ticker: ReturnType<typeof setInterval> | null = null
-
-onMounted(() => {
-  ticker = setInterval(() => { now.value = Date.now() }, 1000)
-})
-
-onUnmounted(() => {
-  if (ticker !== null) clearInterval(ticker)
-})
+// Shared singleton tick — no extra setInterval created if already running at 1 s
+const { now } = useTick(1000)
 
 // ─── Modal state ──────────────────────────────────────────────────────────────
 const historyOpen = ref(false)
