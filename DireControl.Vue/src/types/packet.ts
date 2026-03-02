@@ -101,6 +101,7 @@ export interface ResolvedPathEntry {
   longitude: number | null
   known: boolean
   hopIndex: number
+  aliasUsed: string | null
 }
 
 export interface SignalData {

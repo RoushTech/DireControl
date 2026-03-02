@@ -14,4 +14,10 @@ public class ResolvedPathEntry
     /// Zero-based index of this hop in the resolved path (0 = originating station).
     /// </summary>
     public int HopIndex { get; set; }
+
+    /// <summary>
+    /// The generic alias (e.g. "WIDE1", "WIDE2") that this digipeater consumed when
+    /// relaying the packet, or null if the hop was a direct relay without an alias.
+    /// </summary>
+    public string? AliasUsed { get; set; }
 }

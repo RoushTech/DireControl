@@ -98,19 +98,17 @@ public class PathParserTests
     }
 
     [Fact]
-    public void ExtractViaHops_WithStarMarkers_MultipleStarred()
+    public void ExtractViaHops_WithStarMarkers_MultipleStarred_AliasExcluded()
     {
-        // KN6RO-13 is the TOCALL; WIDE1* and WE4MB-3* were both used
+        // KN6RO-13 is the TOCALL; WIDE1* is a generic alias with no prior real hop
+        // (dropped entirely); WE4MB-3* is the only real digi hop; WIDE2 is unused.
         var aprs = new Packet("KC4SAR-5>KN6RO-13,WIDE1*,WE4MB-3*,WIDE2:!3400.59NT08402.69W&Test");
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        Assert.Equal(2, hops.Count);
-        Assert.Equal("WIDE1",   hops[0].Callsign);
-        Assert.Equal("WE4MB-3", hops[1].Callsign);
+        Assert.Single(hops);
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
         Assert.Equal(1, hops[0].HopIndex);
-        Assert.Equal(2, hops[1].HopIndex);
-        // Both WIDE1 and WE4MB-3 were starred (actually repeated), so hopCount = 2
-        Assert.Equal(2, hopCount);
+        Assert.Equal(1, hopCount);
     }
 
     // -------------------------------------------------------------------------
@@ -120,15 +118,15 @@ public class PathParserTests
     [Fact]
     public void ExtractViaHops_StandardAprsDestination_ExcludedFromHops()
     {
-        // APRS is the canonical TOCALL used by most clients
-        var aprs = new Packet("W1ABC>APRS,RELAY*,WIDE2-1:!3400.59NT08402.69W&Test");
+        // APRS is the canonical TOCALL used by most clients; WE4MB-3* is the real digi
+        var aprs = new Packet("W1ABC>APRS,WE4MB-3*,WIDE2-1:!3400.59NT08402.69W&Test");
         var (hops, _) = AprsPathParser.ExtractViaHops(aprs.Path);
 
         // "APRS" must NOT be in the hop list
         Assert.DoesNotContain(hops, h => h.Callsign == "APRS");
-        // "RELAY" (starred) IS the used hop
+        // "WE4MB-3" (starred real callsign) IS the used hop
         Assert.Single(hops);
-        Assert.Equal("RELAY", hops[0].Callsign);
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
     }
 
     /// <summary>
@@ -318,5 +316,126 @@ public class PathParserTests
         Assert.Equal("KC4SAR-5",              source);
         Assert.Equal("KN6RO-13",              tocall);
         Assert.Equal("WIDE1*,WE4MB-3*,WIDE2", rawPath);
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #17 — starred generic aliases must never become hops
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Primary case from issue #17.
+    /// Path: KA4EMA-3*,WIDE1*,WE4MB-3*,WIDE2*
+    /// KA4EMA-3 consumed WIDE1; WE4MB-3 consumed WIDE2.
+    /// Exactly two real hops; WIDE1 and WIDE2 are metadata, not hops.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue17_StarredAliases_NotHops_AttachedAsAliasUsed()
+    {
+        var aprs = new Packet("KR4BRU-9>APMI0A,KA4EMA-3*,WIDE1*,WE4MB-3*,WIDE2*:/020150z3504.35N/08511.40Wa065/000/A=000751Ramble-Ambulance");
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
+
+        Assert.Equal(2, hopCount);
+        Assert.Equal(2, hops.Count);
+
+        Assert.Equal("KA4EMA-3", hops[0].Callsign);
+        Assert.Equal(1,          hops[0].HopIndex);
+        Assert.Equal("WIDE1",    hops[0].AliasUsed);
+
+        Assert.Equal("WE4MB-3",  hops[1].Callsign);
+        Assert.Equal(2,          hops[1].HopIndex);
+        Assert.Equal("WIDE2",    hops[1].AliasUsed);
+
+        Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
+    }
+
+    /// <summary>
+    /// Single real hop with alias consumed — VK2RXX consumed WIDE2.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue17_SingleHopWithAlias()
+    {
+        var rawPath = new List<string> { "APRS", "VK2RXX*", "WIDE2*" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Equal(1, hopCount);
+        Assert.Single(hops);
+        Assert.Equal("VK2RXX", hops[0].Callsign);
+        Assert.Equal(1,        hops[0].HopIndex);
+        Assert.Equal("WIDE2",  hops[0].AliasUsed);
+
+        Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
+    }
+
+    /// <summary>
+    /// Path with only unused alias entries — direct packet, zero hops.
+    /// Raw: KM4KMO-14>WE4MB-3,WIDE1
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue17_UnusedAlias_DirectPacket_ZeroHops()
+    {
+        var aprs = new Packet("KM4KMO-14>WE4MB-3,WIDE1:@020113z3507.38NI08509.86W#Harrison, TN");
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
+
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
+    }
+
+    /// <summary>
+    /// Real starred hop with no alias following it — aliasUsed must be null.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue17_RealHopNoAlias_AliasUsedIsNull()
+    {
+        var rawPath = new List<string> { "APRS", "WE4MB-3*" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Equal(1, hopCount);
+        Assert.Single(hops);
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
+        Assert.Equal(1,         hops[0].HopIndex);
+        Assert.Null(hops[0].AliasUsed);
+    }
+
+    /// <summary>
+    /// Mixed: first real hop consumes WIDE1, second real hop has no alias.
+    /// Path: VK2RXX*,WIDE1*,VK2RYY*
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue17_Mixed_FirstHopAlias_SecondHopNoAlias()
+    {
+        var rawPath = new List<string> { "APRS", "VK2RXX*", "WIDE1*", "VK2RYY*" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Equal(2, hopCount);
+        Assert.Equal(2, hops.Count);
+
+        Assert.Equal("VK2RXX", hops[0].Callsign);
+        Assert.Equal(1,        hops[0].HopIndex);
+        Assert.Equal("WIDE1",  hops[0].AliasUsed);
+
+        Assert.Equal("VK2RYY", hops[1].Callsign);
+        Assert.Equal(2,        hops[1].HopIndex);
+        Assert.Null(hops[1].AliasUsed);
+
+        Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
+    }
+
+    /// <summary>
+    /// TOCALL is a real callsign — must still be excluded.
+    /// Path: KC4SAR-5>KN6RO-13,WE4MB-3*,WIDE2*
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue17_CallsignTocall_ExcludedAlias_AliasUsedAttached()
+    {
+        var rawPath = new List<string> { "KN6RO-13", "WE4MB-3*", "WIDE2*" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Equal(1, hopCount);
+        Assert.Single(hops);
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
+        Assert.Equal(1,         hops[0].HopIndex);
+        Assert.Equal("WIDE2",   hops[0].AliasUsed);
+
+        Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
     }
 }

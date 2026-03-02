@@ -87,6 +87,11 @@ public static class AprsPathParser
     /// through.  An entry without <c>*</c> is an unused request (alias requested but not
     /// consumed).  When no starred entries exist the packet was heard direct — zero hops.
     /// </para>
+    /// <para>
+    /// Generic aliases (WIDE1, WIDE2, RELAY, etc.) are never real hops.  When a starred
+    /// generic alias immediately follows a real callsign, its name is stored as
+    /// <see cref="ResolvedPathEntry.AliasUsed"/> on that preceding hop entry.
+    /// </para>
     /// </summary>
     /// <param name="aprsPath">
     ///   The path list whose first element is the TOCALL.
@@ -102,22 +107,37 @@ public static class AprsPathParser
         // allEntries[0] is the TOCALL — always skip it, no conditions.
         var viaEntries = allEntries.Count > 0 ? allEntries.Skip(1).ToList() : [];
 
-        // Only starred entries were actually used as hops.
-        // Entries without '*' are unused alias requests — not hops.
-        // No starred entries → direct packet, zero hops.
-        var hops = viaEntries
-            .Where(e => e.TrimEnd().EndsWith('*'))
-            .Select((e, i) => new ResolvedPathEntry
+        var hops = new List<ResolvedPathEntry>();
+
+        foreach (var raw in viaEntries)
+        {
+            var isUsed   = raw.TrimEnd().EndsWith('*');
+            var callsign = raw.TrimEnd('*').Trim();
+
+            if (!isUsed)
+                continue;  // unused alias request — not a hop, not metadata to record
+
+            if (string.IsNullOrWhiteSpace(callsign))
+                continue;
+
+            if (IsGenericAlias(callsign))
             {
-                Callsign = e.TrimEnd('*').Trim(),
-                HopIndex = i + 1,  // 0 is reserved for the originating station
-                Known = false,
-            })
-            .Where(e => !string.IsNullOrWhiteSpace(e.Callsign))
-            .ToList();
+                // Attach as metadata to the most recently added real hop
+                if (hops.Count > 0)
+                    hops[^1].AliasUsed = callsign;
+                continue;
+            }
 
-        var hopCount = hops.Count;
+            // Real callsign that was used — it's a hop
+            hops.Add(new ResolvedPathEntry
+            {
+                Callsign = callsign,
+                HopIndex = hops.Count + 1,  // 0 is reserved for the originating station
+                Known    = false,
+                AliasUsed = null,
+            });
+        }
 
-        return (hops, hopCount);
+        return (hops, hops.Count);
     }
 }

@@ -203,14 +203,22 @@ function heardViaLabel(p: PacketDto): string {
                         class="hop-node hop-node--source"
                         :title="`Select ${entry.callsign}`"
                         @click="onHopClick(entry.callsign)"
-                      >{{ entry.callsign }} ✓</span>
+                      >
+                        <span class="hop-callsign">{{ entry.callsign }} ✓</span>
+                      </span>
                       <span
                         v-else-if="entry.known"
                         class="hop-node hop-node--known"
                         :title="`Select ${entry.callsign}`"
                         @click="onHopClick(entry.callsign)"
-                      >{{ entry.callsign }} ✓</span>
-                      <span v-else class="hop-node hop-node--unknown">{{ entry.callsign }} ?</span>
+                      >
+                        <span class="hop-callsign">{{ entry.callsign }} ✓</span>
+                        <span v-if="entry.aliasUsed" class="hop-alias">via {{ entry.aliasUsed }}</span>
+                      </span>
+                      <span v-else class="hop-node hop-node--unknown">
+                        <span class="hop-callsign">{{ entry.callsign }} ?</span>
+                        <span v-if="entry.aliasUsed" class="hop-alias">via {{ entry.aliasUsed }}</span>
+                      </span>
                     </template>
                   </div>
                 </div>
@@ -397,7 +405,8 @@ function heardViaLabel(p: PacketDto): string {
 
 .hop-node {
   display: inline-flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   padding: 2px 6px;
   border-radius: 4px;
   font-family: monospace;
@@ -405,6 +414,17 @@ function heardViaLabel(p: PacketDto): string {
   font-weight: 500;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.18);
   background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.hop-callsign {
+  line-height: 1.3;
+}
+
+.hop-alias {
+  font-size: 0.65rem;
+  font-weight: 400;
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  line-height: 1.2;
 }
 
 .hop-node--source,
