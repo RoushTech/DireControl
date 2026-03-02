@@ -12,6 +12,9 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<Geofence> Geofences => Set<Geofence>();
     public DbSet<ProximityRule> ProximityRules => Set<ProximityRule>();
     public DbSet<StationStatistic> StationStatistics => Set<StationStatistic>();
+    public DbSet<Radio> Radios => Set<Radio>();
+    public DbSet<OwnBeacon> OwnBeacons => Set<OwnBeacon>();
+    public DbSet<DigiConfirmation> DigiConfirmations => Set<DigiConfirmation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

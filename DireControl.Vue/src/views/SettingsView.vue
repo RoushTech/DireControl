@@ -1,8 +1,125 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import L from 'leaflet'
 import { getGeofences, createGeofence, deleteGeofence, getProximityRules, createProximityRule, deleteProximityRule } from '@/api/alertsApi'
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
+import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
+import type { RadioDto } from '@/types/radio'
+
+// ─── Radios ───────────────────────────────────────────────────────────────────
+const radios = ref<RadioDto[]>([])
+const radioDialogOpen = ref(false)
+const editingRadioId = ref<string | null>(null)
+const radioSaving = ref(false)
+
+const rName = ref('')
+const rCallsign = ref('')
+const rSsid = ref('')
+const rPort = ref(0)
+const rExpectedInterval = ref(600)
+const rNotes = ref('')
+
+const portOptions = [
+  { title: 'Port A', value: 0 },
+  { title: 'Port B', value: 1 },
+]
+
+const radioFormValid = computed(() =>
+  rName.value.trim().length > 0 &&
+  /^[A-Z0-9]{3,6}$/i.test(rCallsign.value.trim())
+)
+
+const computedFullCallsign = computed(() => {
+  const cs = rCallsign.value.trim().toUpperCase()
+  const ssid = rSsid.value.trim()
+  return ssid ? `${cs}-${ssid}` : cs
+})
+
+const duplicateRadio = computed(() => {
+  if (!radioFormValid.value) return null
+  return radios.value.find(
+    (r) => r.fullCallsign === computedFullCallsign.value && r.id !== editingRadioId.value
+  ) ?? null
+})
+
+const ssidError = computed(() => {
+  const s = rSsid.value.trim()
+  if (s === '') return ''
+  const n = parseInt(s, 10)
+  if (isNaN(n) || n < 0 || n > 15) return 'SSID must be 0–15'
+  return ''
+})
+
+async function loadRadios() {
+  try { radios.value = await getRadios() } catch { /* */ }
+}
+
+function openAddRadio() {
+  editingRadioId.value = null
+  rName.value = ''
+  rCallsign.value = ''
+  rSsid.value = ''
+  rPort.value = 0
+  rExpectedInterval.value = 600
+  rNotes.value = ''
+  radioDialogOpen.value = true
+}
+
+function openEditRadio(radio: RadioDto) {
+  editingRadioId.value = radio.id
+  rName.value = radio.name
+  rCallsign.value = radio.callsign
+  rSsid.value = radio.ssid ?? ''
+  rPort.value = radio.direwolfPort
+  rExpectedInterval.value = radio.expectedIntervalSeconds
+  rNotes.value = radio.notes ?? ''
+  radioDialogOpen.value = true
+}
+
+async function saveRadio() {
+  if (!radioFormValid.value || ssidError.value) return
+  radioSaving.value = true
+  const payload = {
+    name: rName.value.trim(),
+    callsign: rCallsign.value.trim().toUpperCase(),
+    ssid: rSsid.value.trim() || null,
+    direwolfPort: rPort.value,
+    notes: rNotes.value.trim() || null,
+    expectedIntervalSeconds: rExpectedInterval.value,
+  }
+  try {
+    if (editingRadioId.value) {
+      const updated = await updateRadio(editingRadioId.value, payload)
+      const idx = radios.value.findIndex((r) => r.id === editingRadioId.value)
+      if (idx !== -1) radios.value[idx] = updated
+    } else {
+      const created = await createRadio(payload)
+      radios.value.push(created)
+    }
+    radioDialogOpen.value = false
+  } finally {
+    radioSaving.value = false
+  }
+}
+
+async function toggleActive(id: string) {
+  const updated = await toggleRadioActive(id)
+  const idx = radios.value.findIndex((r) => r.id === id)
+  if (idx !== -1) radios.value[idx] = updated
+}
+
+// ─── Delete (shared confirm dialog handles radios too) ────────────────────────
+function promptDeleteRadio(radio: RadioDto) {
+  const historyNote = radio.beaconCount > 0
+    ? ` This radio has ${radio.beaconCount} beacon records. Deleting will remove all history.`
+    : ''
+  deleteConfirmMessage.value = `Delete radio "${radio.name}"?${historyNote} This cannot be undone.`
+  deleteConfirmAction = async () => {
+    await deleteRadio(radio.id)
+    radios.value = radios.value.filter((r) => r.id !== radio.id)
+  }
+  deleteConfirmOpen.value = true
+}
 
 // ─── API Keys ────────────────────────────────────────────────────────────────
 const API_KEYS_STORAGE_KEY = 'direcontrol-api-keys'
@@ -59,7 +176,7 @@ let mapCircle: L.Circle | null = null
 let pickingFor: 'geofence' | 'rule' | null = null
 
 onMounted(async () => {
-  await Promise.all([loadGeofences(), loadRules()])
+  await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
 
 onUnmounted(() => {
@@ -201,6 +318,147 @@ async function confirmDelete() {
 <template>
   <div class="settings-view pa-4">
     <div class="text-h5 font-weight-bold mb-4">Settings</div>
+
+    <!-- ================================================================ -->
+    <!-- Radios -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2">
+      <span class="text-h6">Radios</span>
+      <v-spacer />
+      <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRadio">
+        Add Radio
+      </v-btn>
+    </div>
+
+    <v-card variant="outlined" class="mb-6">
+      <div v-if="radios.length === 0" class="text-center text-medium-emphasis py-4">
+        No radios configured
+      </div>
+      <template v-else>
+        <v-card
+          v-for="radio in radios"
+          :key="radio.id"
+          variant="flat"
+          class="radio-card pa-3 ma-2"
+          rounded="sm"
+          border
+        >
+          <div class="d-flex align-center justify-space-between">
+            <div class="text-body-1 font-weight-medium">{{ radio.name }}</div>
+            <div class="d-flex align-center ga-1">
+              <v-btn
+                icon="mdi-pencil"
+                size="x-small"
+                variant="text"
+                @click="openEditRadio(radio)"
+              />
+              <v-btn
+                icon="mdi-close"
+                size="x-small"
+                variant="text"
+                color="error"
+                @click="promptDeleteRadio(radio)"
+              />
+            </div>
+          </div>
+          <div class="d-flex align-center ga-2 mt-1">
+            <span class="text-caption font-weight-bold">{{ radio.fullCallsign }}</span>
+            <span class="text-caption text-medium-emphasis">·</span>
+            <span class="text-caption text-medium-emphasis">{{ radio.direwolfPort === 0 ? 'Port A' : 'Port B' }}</span>
+            <span class="text-caption text-medium-emphasis">·</span>
+            <v-chip
+              :color="radio.isActive ? 'green' : 'grey'"
+              size="x-small"
+              variant="tonal"
+              class="cursor-pointer"
+              @click="toggleActive(radio.id)"
+            >
+              {{ radio.isActive ? 'Active' : 'Inactive' }}
+            </v-chip>
+          </div>
+          <div v-if="radio.notes" class="text-caption text-medium-emphasis mt-1">
+            {{ radio.notes }}
+          </div>
+        </v-card>
+      </template>
+    </v-card>
+
+    <!-- Add / Edit Radio dialog -->
+    <v-dialog v-model="radioDialogOpen" max-width="480">
+      <v-card>
+        <v-card-title>{{ editingRadioId ? 'Edit Radio' : 'Add Radio' }}</v-card-title>
+        <v-card-text>
+          <!-- Duplicate warning -->
+          <v-alert
+            v-if="duplicateRadio"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            {{ computedFullCallsign }} is already configured as "{{ duplicateRadio.name }}". Are you sure?
+          </v-alert>
+
+          <v-text-field
+            v-model="rName"
+            label="Name *"
+            density="compact"
+            class="mb-2"
+            :rules="[(v: string) => v.trim().length > 0 || 'Required']"
+          />
+          <div class="d-flex ga-2 mb-2">
+            <v-text-field
+              v-model="rCallsign"
+              label="Callsign *"
+              density="compact"
+              :rules="[(v: string) => /^[A-Z0-9]{3,6}$/i.test(v.trim()) || '3–6 letters/digits']"
+              style="flex: 2"
+            />
+            <v-text-field
+              v-model="rSsid"
+              label="SSID"
+              density="compact"
+              :error-messages="ssidError || undefined"
+              placeholder="0–15"
+              style="flex: 1"
+            />
+          </div>
+          <v-select
+            v-model="rPort"
+            :items="portOptions"
+            item-title="title"
+            item-value="value"
+            label="Direwolf Port"
+            density="compact"
+            class="mb-2"
+          />
+          <v-text-field
+            v-model.number="rExpectedInterval"
+            label="Expected beacon interval (seconds)"
+            density="compact"
+            type="number"
+            class="mb-2"
+          />
+          <v-text-field
+            v-model="rNotes"
+            label="Notes"
+            density="compact"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="radioDialogOpen = false">Cancel</v-btn>
+          <v-btn
+            color="primary"
+            :disabled="!radioFormValid || !!ssidError"
+            :loading="radioSaving"
+            @click="saveRadio"
+          >
+            Save Radio
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- ================================================================ -->
     <!-- API Keys -->

@@ -8,4 +8,6 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string MessageReceivedMethod = "messageReceived";
     public const string MessageAckedMethod = "messageAcked";
     public const string AlertReceivedMethod = "alertReceived";
+    public const string OwnBeaconReceivedMethod = "ownBeaconReceived";
+    public const string DigiConfirmationMethod = "digiConfirmation";
 }

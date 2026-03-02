@@ -20,7 +20,10 @@ import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
 import StationDetailPanel from '@/components/StationDetailPanel.vue'
 import StationListSidebar from '@/components/StationListSidebar.vue'
 import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
+import OwnStationPanel from '@/components/OwnStationPanel.vue'
 import { useStationSelectionStore } from '@/stores/stationSelection'
+import { useRadiosStore } from '@/stores/radiosStore'
+import type { OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto } from '@/types/radio'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 
 const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
@@ -128,6 +131,7 @@ const DEFAULT_ZOOM = 5
 
 const selectionStore = useStationSelectionStore()
 const beaconStore = useBeaconStreamStore()
+const radiosStore = useRadiosStore()
 const theme = useTheme()
 
 const mapContainer = ref<HTMLDivElement>()
@@ -1178,6 +1182,39 @@ function triggerBeaconFlash(callsign: string, parsedType: string) {
   ring.addEventListener('animationend', () => ring.remove(), { once: true })
 }
 
+function triggerHomeMarkerFlash() {
+  const el = homeMarker?.getElement()
+  if (!el) return
+  const iconEl = el.querySelector('.aprs-icon')
+  if (!iconEl) return
+  const ring = document.createElement('div')
+  ring.className = 'beacon-flash beacon-flash-ownbeacon'
+  iconEl.appendChild(ring)
+  ring.addEventListener('animationend', () => ring.remove(), { once: true })
+}
+
+function drawConfirmationLine(dto: DigiConfirmationBroadcastDto) {
+  if (dto.lat == null || dto.lon == null) return
+  const homePos = settingsCache?.homePosition
+  if (!homePos) return
+  if (!map.value) return
+
+  const line = L.polyline(
+    [[homePos.lat, homePos.lon], [dto.lat, dto.lon]],
+    { color: '#FFD700', weight: 2, opacity: 1 },
+  ).addTo(map.value)
+
+  // Fade out starting at 5 s (3 s CSS transition), remove at 8 s
+  setTimeout(() => {
+    const el = (line as unknown as { _path?: SVGPathElement })._path
+    if (el) {
+      el.style.transition = 'opacity 3s ease-out'
+      el.style.opacity = '0'
+    }
+    setTimeout(() => line.remove(), 3000)
+  }, 5000)
+}
+
 function updateStaleDecayClasses() {
   const now = Date.now()
   const expiryMs = (settingsCache?.stationExpiryTimeoutMinutes ?? 120) * 60 * 1000
@@ -1402,6 +1439,16 @@ async function connectSignalR() {
     }
   })
 
+  connection.on('ownBeaconReceived', (dto: OwnBeaconBroadcastDto) => {
+    radiosStore.onOwnBeaconReceived(dto)
+    triggerHomeMarkerFlash()
+  })
+
+  connection.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => {
+    radiosStore.onDigiConfirmation(dto)
+    drawConfirmationLine(dto)
+  })
+
   try {
     await connection.start()
     console.log('SignalR connected')
@@ -1509,6 +1556,11 @@ onMounted(async () => {
   await loadStaleStations()
   await connectSignalR()
 
+  // Initialise radios — load list and last beacons, start the store's own SignalR connection.
+  radiosStore.startSignalR()
+  await radiosStore.fetchRadios()
+  await radiosStore.fetchAllLastBeacons()
+
   // Draw home station marker; show banner + start poll if position not known yet
   await drawHomeMarker()
   if (!settingsCache?.homePosition) {
@@ -1611,6 +1663,9 @@ defineExpose({ TILE_PROVIDERS })
     <!-- Map area -->
     <div class="map-wrapper">
       <div ref="mapContainer" class="map-container" />
+
+      <!-- Own station beacon panel (bottom-left overlay) -->
+      <OwnStationPanel />
 
       <!-- No home position banner -->
       <v-alert
@@ -2010,6 +2065,7 @@ defineExpose({ TILE_PROVIDERS })
 .beacon-flash-weather   { border-color: rgba(0,   150, 136, 0.9); }
 .beacon-flash-telemetry { border-color: rgba(156,  39, 176, 0.9); }
 .beacon-flash-unknown   { border-color: rgba(158, 158, 158, 0.9); }
+.beacon-flash-ownbeacon { border-color: rgba(255, 215,   0, 0.9); }
 
 @keyframes beacon-expand {
   0%   { transform: scale(0.5); opacity: 1; }

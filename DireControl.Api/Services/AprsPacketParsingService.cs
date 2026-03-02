@@ -76,6 +76,9 @@ public sealed class AprsPacketParsingService(
 
         var ourCallsign = options.Value.OurCallsign.Trim();
 
+        // Pre-load active radios so own-beacon detection doesn't need per-packet DB queries.
+        var activeRadios = await db.Radios.Where(r => r.IsActive).ToListAsync(ct);
+
         foreach (var packet in packets)
         {
             var effects = new List<MessageEffect>();
@@ -85,6 +88,7 @@ public sealed class AprsPacketParsingService(
                 await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct);
                 await db.SaveChangesAsync(ct);
 
+                await CheckOwnBeaconAsync(packet, activeRadios, db, ct);
                 await ApplyMessageEffectsAsync(effects, db, ourCallsign, ct);
 
                 var update = new PacketBroadcastDto
@@ -584,6 +588,146 @@ public sealed class AprsPacketParsingService(
                 ? "Unrecognized packet"
                 : $"Raw: {packet.RawPacket}"
         };
+    }
+
+    // ─── Own-beacon detection ─────────────────────────────────────────────────
+
+    private async Task CheckOwnBeaconAsync(
+        DbPacket packet,
+        List<Radio> activeRadios,
+        DireControlContext db,
+        CancellationToken ct)
+    {
+        var matched = activeRadios.FirstOrDefault(r =>
+            string.Equals(r.FullCallsign, packet.StationCallsign, StringComparison.OrdinalIgnoreCase));
+
+        if (matched is null)
+            return;
+
+        try
+        {
+            if (packet.HopCount == 0)
+                await RecordOwnBeaconAsync(matched, packet, db, ct);
+            else
+                await RecordDigiConfirmationAsync(matched, packet, db, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record own-beacon data for radio {Id}.", matched.Id);
+        }
+    }
+
+    private async Task RecordOwnBeaconAsync(Radio radio, DbPacket packet, DireControlContext db, CancellationToken ct)
+    {
+        var beacon = new OwnBeacon
+        {
+            RadioId = radio.Id,
+            BeaconedAt = packet.ReceivedAt,
+            Latitude = packet.Latitude,
+            Longitude = packet.Longitude,
+            Comment = string.IsNullOrEmpty(packet.Comment) ? null : packet.Comment,
+            PathUsed = string.IsNullOrEmpty(packet.Path) ? null : packet.Path,
+            HopCount = 0,
+        };
+
+        db.OwnBeacons.Add(beacon);
+        await db.SaveChangesAsync(ct);
+
+        await hubContext.Clients.All.SendAsync(PacketHub.OwnBeaconReceivedMethod, new OwnBeaconBroadcastDto
+        {
+            RadioId = radio.Id,
+            FullCallsign = radio.FullCallsign,
+            BeaconedAt = beacon.BeaconedAt,
+            Lat = beacon.Latitude,
+            Lon = beacon.Longitude,
+            PathUsed = beacon.PathUsed,
+        }, ct);
+
+        logger.LogDebug("Recorded own beacon for {Callsign} at {Time}.", radio.FullCallsign, beacon.BeaconedAt);
+    }
+
+    private async Task RecordDigiConfirmationAsync(Radio radio, DbPacket packet, DireControlContext db, CancellationToken ct)
+    {
+        var now = packet.ReceivedAt;
+        var window = now.AddSeconds(-90);
+
+        // Find the most recent direct echo (HopCount >= 0 excludes placeholders) within 90 s.
+        var ownBeacon = await db.OwnBeacons
+            .Where(b => b.RadioId == radio.Id && b.BeaconedAt >= window && b.HopCount >= 0)
+            .OrderByDescending(b => b.BeaconedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (ownBeacon is null)
+        {
+            // Digi echo arrived before (or without) a direct KISS echo — create placeholder.
+            ownBeacon = new OwnBeacon
+            {
+                RadioId = radio.Id,
+                BeaconedAt = now,
+                Latitude = packet.Latitude,
+                Longitude = packet.Longitude,
+                Comment = string.IsNullOrEmpty(packet.Comment) ? null : packet.Comment,
+                PathUsed = string.IsNullOrEmpty(packet.Path) ? null : packet.Path,
+                HopCount = -1,
+            };
+
+            db.OwnBeacons.Add(ownBeacon);
+            await db.SaveChangesAsync(ct);
+        }
+
+        // Identify relaying digipeater from resolved path.
+        // ResolvedPath layout after full processing: [0]=source, [1..n-1]=digi hops, [n]=home.
+        var intermediateHops = packet.ResolvedPath
+            .Where(e => e.HopIndex > 0 && e.HopIndex < packet.ResolvedPath.Count - 1)
+            .OrderBy(e => e.HopIndex)
+            .ToList();
+
+        var digiEntry = intermediateHops.FirstOrDefault(e => !AprsPathParser.IsGenericAlias(e.Callsign))
+                     ?? intermediateHops.FirstOrDefault();
+
+        var digiCallsign = digiEntry?.Callsign ?? "UNKNOWN";
+        var digiLat = digiEntry?.Latitude;
+        var digiLon = digiEntry?.Longitude;
+        var aliasUsed = digiEntry?.AliasUsed;
+
+        // Fall back to Stations table if coordinates are not in the path.
+        if (digiLat is null && digiCallsign != "UNKNOWN" && !AprsPathParser.IsGenericAlias(digiCallsign))
+        {
+            var digiStation = await db.Stations.AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Callsign == digiCallsign, ct);
+            digiLat = digiStation?.LastLat;
+            digiLon = digiStation?.LastLon;
+        }
+
+        var secondsAfter = Math.Max(0, (int)(now - ownBeacon.BeaconedAt).TotalSeconds);
+
+        var confirmation = new DigiConfirmation
+        {
+            OwnBeaconId = ownBeacon.Id,
+            ConfirmedAt = now,
+            DigipeaterCallsign = digiCallsign,
+            DigipeaterLat = digiLat,
+            DigipeaterLon = digiLon,
+            AliasUsed = aliasUsed,
+            SecondsAfterBeacon = secondsAfter,
+        };
+
+        db.DigiConfirmations.Add(confirmation);
+        await db.SaveChangesAsync(ct);
+
+        await hubContext.Clients.All.SendAsync(PacketHub.DigiConfirmationMethod, new DigiConfirmationBroadcastDto
+        {
+            RadioId = radio.Id,
+            FullCallsign = radio.FullCallsign,
+            Digipeater = digiCallsign,
+            ConfirmedAt = now,
+            SecondsAfterBeacon = secondsAfter,
+            Lat = digiLat,
+            Lon = digiLon,
+        }, ct);
+
+        logger.LogDebug("Recorded digi confirmation for {Callsign} via {Digi} (+{Secs}s).",
+            radio.FullCallsign, digiCallsign, secondsAfter);
     }
 }
 

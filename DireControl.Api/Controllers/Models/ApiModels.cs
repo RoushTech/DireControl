@@ -294,3 +294,98 @@ public sealed class CoverageGridSquareDto
     public double Lon { get; init; }
     public int PacketCount { get; init; }
 }
+
+// ─── Radio management ────────────────────────────────────────────────────────
+
+public sealed class RadioDto
+{
+    public required string Id { get; init; }
+    public required string Name { get; init; }
+    public required string Callsign { get; init; }
+    public string? Ssid { get; init; }
+    public required string FullCallsign { get; init; }
+    public int DirewolfPort { get; init; }
+    public string? Notes { get; init; }
+    public bool IsActive { get; init; }
+    public int ExpectedIntervalSeconds { get; init; }
+    public DateTime? LastBeaconedAt { get; init; }
+    public int? SecondsSinceBeacon { get; init; }
+    public int ConfirmationCount { get; init; }
+    public int BeaconCount { get; init; }
+}
+
+public sealed class CreateRadioRequest
+{
+    public required string Name { get; init; }
+    public required string Callsign { get; init; }
+    public string? Ssid { get; init; }
+    public int DirewolfPort { get; init; } = 0;
+    public string? Notes { get; init; }
+    public int ExpectedIntervalSeconds { get; init; } = 600;
+}
+
+public sealed class UpdateRadioRequest
+{
+    public required string Name { get; init; }
+    public required string Callsign { get; init; }
+    public string? Ssid { get; init; }
+    public int DirewolfPort { get; init; }
+    public string? Notes { get; init; }
+    public int ExpectedIntervalSeconds { get; init; }
+}
+
+public sealed class DigiConfirmationDto
+{
+    public required string Digipeater { get; init; }
+    public DateTime ConfirmedAt { get; init; }
+    public int SecondsAfterBeacon { get; init; }
+    public double? Lat { get; init; }
+    public double? Lon { get; init; }
+    public string? AliasUsed { get; init; }
+}
+
+public sealed class LastBeaconDto
+{
+    public required string RadioId { get; init; }
+    public required string RadioName { get; init; }
+    public required string FullCallsign { get; init; }
+    public DateTime? BeaconedAt { get; init; }
+    public int? SecondsSinceBeacon { get; init; }
+    public double? Latitude { get; init; }
+    public double? Longitude { get; init; }
+    public string? PathUsed { get; init; }
+    public string? Comment { get; init; }
+    public IReadOnlyList<DigiConfirmationDto> Confirmations { get; init; } = [];
+}
+
+public sealed class OwnBeaconHistoryItemDto
+{
+    public int Id { get; init; }
+    public DateTime BeaconedAt { get; init; }
+    public double? Latitude { get; init; }
+    public double? Longitude { get; init; }
+    public string? PathUsed { get; init; }
+    public int HopCount { get; init; }
+    public IReadOnlyList<DigiConfirmationDto> Confirmations { get; init; } = [];
+}
+
+public sealed class OwnBeaconBroadcastDto
+{
+    public required string RadioId { get; init; }
+    public required string FullCallsign { get; init; }
+    public DateTime BeaconedAt { get; init; }
+    public double? Lat { get; init; }
+    public double? Lon { get; init; }
+    public string? PathUsed { get; init; }
+}
+
+public sealed class DigiConfirmationBroadcastDto
+{
+    public required string RadioId { get; init; }
+    public required string FullCallsign { get; init; }
+    public required string Digipeater { get; init; }
+    public DateTime ConfirmedAt { get; init; }
+    public int SecondsAfterBeacon { get; init; }
+    public double? Lat { get; init; }
+    public double? Lon { get; init; }
+}
