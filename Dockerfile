@@ -14,8 +14,7 @@ ARG version=0.0.0
 ARG gitsha=unknown
 WORKDIR /src
 
-COPY DireControl/ DireControl/
-COPY DireControl.Api/ DireControl.Api/
+COPY . .
 RUN shortsha=$(printf '%.8s' "$gitsha") \
     && echo "Building version $version+$shortsha from $gitsha" \
     && dotnet publish DireControl.Api/DireControl.Api.csproj \
