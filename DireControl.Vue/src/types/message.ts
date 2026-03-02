@@ -12,6 +12,7 @@ export interface InboxMessageDto {
   toCallsign: string
   body: string
   messageId: string
+  pathUsed: string | null
   receivedAt: string
   isRead: boolean
   ackSent: boolean
@@ -36,6 +37,7 @@ export interface AllMessagePacketDto {
 export interface SendMessageRequest {
   toCallsign: string
   body: string
+  path?: string
 }
 
 export interface MessageAckDto {

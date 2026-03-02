@@ -33,15 +33,20 @@ public sealed class MessageSendingService(
     /// database with <c>AckSent = false</c>, and returns the saved record.
     /// Returns <see langword="null"/> if there is no active Direwolf connection.
     /// </summary>
+    /// <param name="path">
+    /// VIA digipeater path (e.g. "WIDE1-1,WIDE2-1"). Pass an empty string to
+    /// send direct with no digipeating.
+    /// </param>
     public async Task<Message?> SendMessageAsync(
         string toCallsign,
         string body,
         string messageId,
+        string path,
         CancellationToken ct = default)
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildMessageInfo(toCallsign, body, messageId);
-        var frame = BuildAx25Frame(ourCallsign, info);
+        var frame = BuildAx25Frame(ourCallsign, info, path);
 
         if (!connectionHolder.TrySend(frame))
         {
@@ -52,8 +57,8 @@ public sealed class MessageSendingService(
         }
 
         logger.LogInformation(
-            "Sent APRS message to {ToCallsign} (id={MessageId}): {Body}",
-            toCallsign, messageId, body);
+            "Sent APRS message to {ToCallsign} (id={MessageId}, path={Path}): {Body}",
+            toCallsign, messageId, string.IsNullOrEmpty(path) ? "(direct)" : path, body);
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
@@ -64,6 +69,7 @@ public sealed class MessageSendingService(
             ToCallsign = toCallsign.Trim().ToUpperInvariant(),
             Body = body,
             MessageId = messageId,
+            PathUsed = string.IsNullOrWhiteSpace(path) ? null : path.Trim(),
             ReceivedAt = DateTime.UtcNow,
             IsRead = true,
             AckSent = false,
@@ -81,15 +87,16 @@ public sealed class MessageSendingService(
     }
 
     /// <summary>
-    /// Sends an ACK for a received message.  Does not store anything new in the
-    /// database; the caller is responsible for setting <c>AckSent = true</c> on
-    /// the corresponding <see cref="Message"/> record.
+    /// Sends an ACK for a received message. ACKs are sent direct (no path).
+    /// Does not store anything new in the database; the caller is responsible
+    /// for setting <c>AckSent = true</c> on the corresponding
+    /// <see cref="Message"/> record.
     /// </summary>
     public void SendAck(string toCallsign, string originalMessageId)
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildAckInfo(toCallsign, originalMessageId);
-        var frame = BuildAx25Frame(ourCallsign, info);
+        var frame = BuildAx25Frame(ourCallsign, info, path: string.Empty);
 
         if (!connectionHolder.TrySend(frame))
         {
@@ -103,8 +110,8 @@ public sealed class MessageSendingService(
     }
 
     /// <summary>
-    /// Retransmits an existing message from the database.
-    /// Rebuilds and sends the AX.25 frame without creating a new database record.
+    /// Retransmits an existing message from the database, reusing the path
+    /// stored on the record so that retries go out the same way as the original.
     /// Returns <see langword="true"/> if sent successfully,
     /// <see langword="false"/> if there is no active Direwolf connection.
     /// </summary>
@@ -112,7 +119,7 @@ public sealed class MessageSendingService(
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildMessageInfo(message.ToCallsign, message.Body, message.MessageId);
-        var frame = BuildAx25Frame(ourCallsign, info);
+        var frame = BuildAx25Frame(ourCallsign, info, message.PathUsed ?? string.Empty);
 
         if (!connectionHolder.TrySend(frame))
         {
@@ -123,8 +130,10 @@ public sealed class MessageSendingService(
         }
 
         logger.LogInformation(
-            "Retransmitted message {Id} to {ToCallsign} (id={MessageId}, attempt {Attempt}).",
-            message.Id, message.ToCallsign, message.MessageId, message.RetryCount + 1);
+            "Retransmitted message {Id} to {ToCallsign} (id={MessageId}, path={Path}, attempt {Attempt}).",
+            message.Id, message.ToCallsign, message.MessageId,
+            string.IsNullOrEmpty(message.PathUsed) ? "(direct)" : message.PathUsed,
+            message.RetryCount + 1);
         return Task.FromResult(true);
     }
 
@@ -161,7 +170,11 @@ public sealed class MessageSendingService(
     /// Builds a raw AX.25 UI frame suitable for passing to
     /// <see cref="AprsSharp.KissTnc.Tnc.SendData"/>.
     /// </summary>
-    private static byte[] BuildAx25Frame(string sourceCallsign, string aprsInfo)
+    /// <param name="path">
+    /// Comma-separated digipeater path (e.g. "WIDE1-1,WIDE2-1").
+    /// Pass an empty string for direct/no-path operation.
+    /// </param>
+    private static byte[] BuildAx25Frame(string sourceCallsign, string aprsInfo, string path)
     {
         // APRS destination — "APRS" is the standard tocall for generic APRS.
         const string destination = "APRS";
@@ -169,13 +182,24 @@ public sealed class MessageSendingService(
         var (destBase, destSsid) = SplitCallsign(destination);
         var (srcBase, srcSsid) = SplitCallsign(sourceCallsign);
 
+        var pathItems = string.IsNullOrWhiteSpace(path)
+            ? []
+            : path.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
         var frame = new List<byte>(128);
 
-        // Destination address (not the last address)
+        // Destination address (never the last address in the frame)
         frame.AddRange(EncodeAddress(destBase, destSsid, isLast: false));
 
-        // Source address (last address — no digipeater path)
-        frame.AddRange(EncodeAddress(srcBase, srcSsid, isLast: true));
+        // Source address (last address only when there is no digipeater path)
+        frame.AddRange(EncodeAddress(srcBase, srcSsid, isLast: pathItems.Length == 0));
+
+        // Digipeater path addresses
+        for (var i = 0; i < pathItems.Length; i++)
+        {
+            var (dBase, dSsid) = SplitCallsign(pathItems[i]);
+            frame.AddRange(EncodeAddress(dBase, dSsid, isLast: i == pathItems.Length - 1));
+        }
 
         // AX.25 UI frame control + PID
         frame.Add(0x03); // Control: Unnumbered Information (UI)

@@ -71,6 +71,7 @@ export interface SettingsDto {
   direwolfReconnectDelaySeconds: number;
   maxRetryAttempts: number;
   initialRetryDelaySeconds: number;
+  outboundPath: string;
 }
 
 export interface CallsignCountDto {

@@ -57,6 +57,7 @@ public sealed class InboxMessageDto
     public required string ToCallsign { get; init; }
     public string Body { get; init; } = string.Empty;
     public string MessageId { get; init; } = string.Empty;
+    public string? PathUsed { get; init; }
     public DateTime ReceivedAt { get; init; }
     public bool IsRead { get; init; }
     public bool AckSent { get; init; }
@@ -103,6 +104,7 @@ public sealed class SettingsDto
     public int DirewolfReconnectDelaySeconds { get; init; }
     public int MaxRetryAttempts { get; init; }
     public int InitialRetryDelaySeconds { get; init; }
+    public required string OutboundPath { get; init; }
 }
 
 public sealed class TrackPointDto
@@ -145,6 +147,16 @@ public sealed class SendMessageRequest
 {
     public required string ToCallsign { get; init; }
     public required string Body { get; init; }
+    /// <summary>
+    /// Optional per-message VIA path override. When null or empty the
+    /// configured default outbound path is used.
+    /// </summary>
+    public string? Path { get; init; }
+}
+
+public sealed class UpdateOutboundPathRequest
+{
+    public string OutboundPath { get; init; } = string.Empty;
 }
 
 public sealed class MessageAckDto

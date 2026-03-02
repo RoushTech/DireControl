@@ -17,6 +17,13 @@ public class Message : IEntityTypeConfiguration<Message>
     public bool AckSent { get; set; }
     public bool ReplySent { get; set; }
 
+    /// <summary>
+    /// VIA path used when this message was originally sent.
+    /// Null or empty means the message was sent direct with no digipeating.
+    /// Stored so that retries use the same path as the initial send.
+    /// </summary>
+    public string? PathUsed { get; set; }
+
     // ── Retry fields ─────────────────────────────────────────────────────────
     /// <summary>Number of retransmissions performed beyond the initial send.</summary>
     public int RetryCount { get; set; }

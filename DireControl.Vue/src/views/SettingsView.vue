@@ -5,7 +5,7 @@ import { getGeofences, createGeofence, deleteGeofence, getProximityRules, create
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
-import { getSettings } from '@/api/stationsApi'
+import { getSettings, updateOutboundPath } from '@/api/stationsApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 
@@ -14,6 +14,37 @@ const { distanceUnit, formatDistance, setDistanceUnit } = useUnits()
 
 // ─── Retry settings (read-only display) ──────────────────────────────────────
 const retrySettings = ref<Pick<SettingsDto, 'maxRetryAttempts' | 'initialRetryDelaySeconds'> | null>(null)
+
+// ─── Messaging settings ───────────────────────────────────────────────────────
+const outboundPath = ref('')
+const outboundPathSaving = ref(false)
+const outboundPathSaveError = ref('')
+
+const PATH_REGEX = /^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$/
+
+const outboundPathError = computed(() => {
+  const p = outboundPath.value.trim()
+  if (!p) return ''
+  return PATH_REGEX.test(p) ? '' : 'Use comma-separated callsigns, e.g. WIDE1-1,WIDE2-1'
+})
+
+let pathSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function schedulePathSave() {
+  if (pathSaveTimer) clearTimeout(pathSaveTimer)
+  pathSaveTimer = setTimeout(async () => {
+    if (outboundPathError.value) return
+    outboundPathSaving.value = true
+    outboundPathSaveError.value = ''
+    try {
+      await updateOutboundPath(outboundPath.value.trim())
+    } catch {
+      outboundPathSaveError.value = 'Failed to save outbound path.'
+    } finally {
+      outboundPathSaving.value = false
+    }
+  }, 600)
+}
 
 // ─── Radios ───────────────────────────────────────────────────────────────────
 const radios = ref<RadioDto[]>([])
@@ -183,6 +214,7 @@ onMounted(async () => {
   try {
     const s = await getSettings()
     retrySettings.value = s
+    outboundPath.value = s.outboundPath
   } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
@@ -707,6 +739,55 @@ async function confirmDelete() {
           </tr>
         </tbody>
       </v-table>
+    </v-card>
+
+    <!-- ================================================================ -->
+    <!-- Messaging -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2 mt-6">
+      <span class="text-h6">Messaging</span>
+      <v-progress-circular
+        v-if="outboundPathSaving"
+        indeterminate
+        size="16"
+        width="2"
+        class="ml-3"
+      />
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <div class="text-subtitle-2 font-weight-medium mb-1">Default outbound path</div>
+      <v-text-field
+        v-model="outboundPath"
+        density="compact"
+        variant="outlined"
+        clearable
+        :error-messages="outboundPathError"
+        hide-details="auto"
+        placeholder="e.g. WIDE1-1,WIDE2-1"
+        class="mb-2"
+        style="max-width: 360px"
+        @update:model-value="schedulePathSave"
+      />
+      <div class="d-flex align-center flex-wrap gap-1 mb-3">
+        <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
+        <v-btn size="x-small" variant="tonal" @click="outboundPath = 'WIDE1-1,WIDE2-1'; schedulePathSave()">WIDE1-1,WIDE2-1</v-btn>
+        <v-btn size="x-small" variant="tonal" @click="outboundPath = 'WIDE2-1'; schedulePathSave()">WIDE2-1</v-btn>
+        <v-btn size="x-small" variant="tonal" @click="outboundPath = 'WIDE1-1'; schedulePathSave()">WIDE1-1</v-btn>
+        <v-btn size="x-small" variant="tonal" @click="outboundPath = ''; schedulePathSave()">Direct (no path)</v-btn>
+      </div>
+      <div class="text-body-2 text-medium-emphasis">
+        Added to all outbound messages. <code>WIDE1-1,WIDE2-1</code> is recommended for most fixed and mobile stations.
+        Leave blank to transmit direct with no digipeating.
+      </div>
+      <v-alert
+        v-if="outboundPathSaveError"
+        type="error"
+        density="compact"
+        class="mt-3"
+      >
+        {{ outboundPathSaveError }}
+      </v-alert>
     </v-card>
 
     <!-- Delete confirmation dialog -->

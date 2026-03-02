@@ -15,6 +15,7 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<Radio> Radios => Set<Radio>();
     public DbSet<OwnBeacon> OwnBeacons => Set<OwnBeacon>();
     public DbSet<DigiConfirmation> DigiConfirmations => Set<DigiConfirmation>();
+    public DbSet<UserSetting> UserSettings => Set<UserSetting>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

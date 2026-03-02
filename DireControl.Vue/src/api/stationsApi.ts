@@ -95,3 +95,7 @@ export async function getStationSignal(callsign: string): Promise<SignalPointDto
   )
   return data
 }
+
+export async function updateOutboundPath(outboundPath: string): Promise<void> {
+  await http.put('/api/v0/settings/outbound-path', { outboundPath })
+}

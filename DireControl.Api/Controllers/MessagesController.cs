@@ -37,6 +37,7 @@ public class MessagesController(
                 ToCallsign = m.ToCallsign,
                 Body = m.Body,
                 MessageId = m.MessageId,
+                PathUsed = m.PathUsed,
                 ReceivedAt = m.ReceivedAt,
                 IsRead = m.IsRead,
                 AckSent = m.AckSent,
@@ -102,11 +103,24 @@ public class MessagesController(
         if (body.Length > 67)
             body = body[..67];
 
+        // Resolve path: per-message override takes precedence over the stored default.
+        string path;
+        if (!string.IsNullOrWhiteSpace(request.Path))
+        {
+            path = request.Path.Trim();
+        }
+        else
+        {
+            var userSetting = await db.UserSettings.FindAsync([1], ct);
+            path = userSetting?.OutboundPath ?? "WIDE1-1,WIDE2-1";
+        }
+
         var messageId = MessageSendingService.GenerateMessageId();
         var message = await messageSendingService.SendMessageAsync(
             request.ToCallsign.Trim().ToUpperInvariant(),
             body,
             messageId,
+            path,
             ct);
 
         if (message is null)
@@ -212,6 +226,7 @@ public class MessagesController(
         ToCallsign   = m.ToCallsign,
         Body        = m.Body,
         MessageId   = m.MessageId,
+        PathUsed    = m.PathUsed,
         ReceivedAt  = m.ReceivedAt,
         IsRead      = m.IsRead,
         AckSent     = m.AckSent,

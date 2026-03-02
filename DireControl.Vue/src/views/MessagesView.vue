@@ -143,9 +143,20 @@ function showFailedToast(data: MessageFailedDto) {
 const composeOpen = ref(false)
 const composeTo = ref('')
 const composeBody = ref('')
+const composePath = ref('')
+const composeAdvancedOpen = ref(false)
+const defaultOutboundPath = ref('')
 const sending = ref(false)
 const sendError = ref('')
 const MAX_BODY = 67
+
+const PATH_REGEX = /^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$/
+
+const composePathError = computed(() => {
+  const p = composePath.value.trim()
+  if (!p) return ''
+  return PATH_REGEX.test(p) ? '' : 'Use comma-separated callsigns, e.g. WIDE1-1,WIDE2-1'
+})
 
 const addresseeSuggestions = computed(() => {
   const q = composeTo.value?.trim().toUpperCase()
@@ -158,6 +169,8 @@ const addresseeSuggestions = computed(() => {
 function openCompose(prefillTo = '') {
   composeTo.value = prefillTo
   composeBody.value = ''
+  composePath.value = defaultOutboundPath.value
+  composeAdvancedOpen.value = false
   sendError.value = ''
   composeOpen.value = true
 }
@@ -166,12 +179,14 @@ async function doSend() {
   const to = composeTo.value?.trim().toUpperCase() ?? ''
   if (!to || !composeBody.value.trim()) return
   if (to.length > 9 || !/^[A-Z0-9-]+$/.test(to)) return
+  if (composePathError.value) return
   sending.value = true
   sendError.value = ''
   try {
     await store.send({
       toCallsign: to,
       body: composeBody.value.trim().slice(0, MAX_BODY),
+      path: composePath.value.trim() || undefined,
     })
     composeOpen.value = false
     activeTab.value = 'outbox'
@@ -283,6 +298,8 @@ onMounted(async () => {
   try {
     const settings = await getSettings()
     ourCallsign.value = settings.ourCallsign
+    defaultOutboundPath.value = settings.outboundPath
+    composePath.value = settings.outboundPath
   } catch { /* ignore */ }
 
   try {
@@ -639,6 +656,38 @@ function replyTo(message: InboxMessageDto) {
             hide-details="auto"
             no-resize
           />
+
+          <div class="mt-3">
+            <v-btn
+              variant="text"
+              size="small"
+              :prepend-icon="composeAdvancedOpen ? 'mdi-chevron-down' : 'mdi-chevron-right'"
+              class="px-0 text-medium-emphasis"
+              @click="composeAdvancedOpen = !composeAdvancedOpen"
+            >
+              Advanced
+            </v-btn>
+            <div v-if="composeAdvancedOpen" class="mt-2">
+              <v-text-field
+                v-model="composePath"
+                label="Path"
+                density="compact"
+                variant="outlined"
+                clearable
+                :error-messages="composePathError"
+                hide-details="auto"
+                placeholder="e.g. WIDE1-1,WIDE2-1 or leave blank for direct"
+                class="mb-1"
+              />
+              <div class="d-flex align-center flex-wrap gap-1 mb-1">
+                <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
+                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'">WIDE1-1,WIDE2-1</v-btn>
+                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE2-1'">WIDE2-1</v-btn>
+                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1'">WIDE1-1</v-btn>
+                <v-btn size="x-small" variant="tonal" @click="composePath = ''">Direct (no path)</v-btn>
+              </div>
+            </div>
+          </div>
 
           <v-alert
             v-if="sendError"
