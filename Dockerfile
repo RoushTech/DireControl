@@ -14,10 +14,6 @@ ARG version=0.0.0
 ARG gitsha=unknown
 WORKDIR /src
 
-COPY DireControl/DireControl.csproj DireControl/
-COPY DireControl.Api/DireControl.Api.csproj DireControl.Api/
-RUN dotnet restore DireControl.Api/DireControl.Api.csproj
-
 COPY DireControl/ DireControl/
 COPY DireControl.Api/ DireControl.Api/
 RUN shortsha=$(printf '%.8s' "$gitsha") \
@@ -25,10 +21,8 @@ RUN shortsha=$(printf '%.8s' "$gitsha") \
     && dotnet publish DireControl.Api/DireControl.Api.csproj \
         -c Release \
         -o /app/publish \
-        --no-restore \
         /p:Version=$version \
-        /p:SourceRevisionId=$shortsha \
-        /p:InformationalVersion=$version+$shortsha
+        /p:SourceRevisionId=$shortsha
 
 # Stage 3: Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
