@@ -14,14 +14,16 @@ ARG version=0.0.0
 ARG gitsha=unknown
 WORKDIR /src
 
-COPY . .
+COPY DireControl/ DireControl/
+COPY DireControl.Api/ DireControl.Api/
 RUN shortsha=$(printf '%.8s' "$gitsha") \
     && echo "Building version $version+$shortsha from $gitsha" \
     && dotnet publish DireControl.Api/DireControl.Api.csproj \
         -c Release \
         -o /app/publish \
         /p:Version=$version \
-        /p:SourceRevisionId=$shortsha
+        /p:SourceRevisionId=$shortsha \
+        /p:EnableSourceControlManagerQueries=false
 
 # Stage 3: Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
