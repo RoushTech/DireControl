@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using AprsSharp.AprsParser;
 using DireControl.PathParsing;
 using Xunit;
@@ -46,62 +47,37 @@ public class PathParserTests
     }
 
     // -------------------------------------------------------------------------
-    // ExtractViaHops — no * markers (Direwolf may strip them)
+    // ExtractViaHops — no * markers → direct packet, zero hops
     // -------------------------------------------------------------------------
 
     /// <summary>
     /// Packet 1 from issue #11.
     /// Raw:  KC4SAR-5>KN6RO-13,WIDE1,WE4MB-3,WIDE2:...
-    /// TOCALL KN6RO-13 must be excluded; all remaining entries must appear in order.
+    /// No starred entries — packet was heard direct.  No hops should be returned.
     /// </summary>
     [Fact]
-    public void ExtractViaHops_Packet1_NoStars_ExcludesTocallAndIncludesAllEntries()
+    public void ExtractViaHops_Packet1_NoStars_DirectPacket_ZeroHops()
     {
         var aprs = new Packet("KC4SAR-5>KN6RO-13,WIDE1,WE4MB-3,WIDE2:!3400.59NT08402.69W&PHG8140Suwanee, GA digi-gate.");
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        // Three via entries: WIDE1, WE4MB-3, WIDE2
-        Assert.Equal(3, hops.Count);
-
-        Assert.Equal("WIDE1",   hops[0].Callsign);
-        Assert.Equal("WE4MB-3", hops[1].Callsign);
-        Assert.Equal("WIDE2",   hops[2].Callsign);
-
-        // HopIndex 0 is reserved for the source; via hops start at 1
-        Assert.Equal(1, hops[0].HopIndex);
-        Assert.Equal(2, hops[1].HopIndex);
-        Assert.Equal(3, hops[2].HopIndex);
-
-        // Only WE4MB-3 is a real callsign; aliases do not count toward hopCount
-        Assert.Equal(1, hopCount);
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
     }
 
     /// <summary>
     /// Packet 2 from issue #11.
     /// Raw:  ND1J-10>AB4KN-2,KN6RO-13,WIDE1,WE4MB-3,WIDE2:...
-    /// TOCALL AB4KN-2 must be excluded; KN6RO-13 must appear as the first via hop.
+    /// No starred entries — packet was heard direct.  No hops should be returned.
     /// </summary>
     [Fact]
-    public void ExtractViaHops_Packet2_NoStars_ExcludesTocallAndIncludesAllEntries()
+    public void ExtractViaHops_Packet2_NoStars_DirectPacket_ZeroHops()
     {
         var aprs = new Packet("ND1J-10>AB4KN-2,KN6RO-13,WIDE1,WE4MB-3,WIDE2:!3319.66NI08432.59W#PHG9250PI-DIREWOLF APRS IGATE/DIGI SENOIA GA 73!");
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        // Four via entries: KN6RO-13, WIDE1, WE4MB-3, WIDE2
-        Assert.Equal(4, hops.Count);
-
-        Assert.Equal("KN6RO-13", hops[0].Callsign);
-        Assert.Equal("WIDE1",    hops[1].Callsign);
-        Assert.Equal("WE4MB-3",  hops[2].Callsign);
-        Assert.Equal("WIDE2",    hops[3].Callsign);
-
-        Assert.Equal(1, hops[0].HopIndex);
-        Assert.Equal(2, hops[1].HopIndex);
-        Assert.Equal(3, hops[2].HopIndex);
-        Assert.Equal(4, hops[3].HopIndex);
-
-        // KN6RO-13 and WE4MB-3 are real callsigns
-        Assert.Equal(2, hopCount);
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
     }
 
     // -------------------------------------------------------------------------
@@ -138,7 +114,7 @@ public class PathParserTests
     }
 
     // -------------------------------------------------------------------------
-    // ExtractViaHops — TOCALL is never a callsign-only TOCALL being station
+    // ExtractViaHops — TOCALL is unconditionally excluded
     // -------------------------------------------------------------------------
 
     [Fact]
@@ -155,6 +131,23 @@ public class PathParserTests
         Assert.Equal("RELAY", hops[0].Callsign);
     }
 
+    /// <summary>
+    /// TOCALL exclusion must not be conditional on what the TOCALL looks like.
+    /// Here the TOCALL is a real callsign (WE4MB-3) rather than a software ID.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_CallsignTocall_ExcludedFromHops()
+    {
+        // WE4MB-3 is the TOCALL; WE4MB-3* is a starred hop from a different packet
+        var rawPath = new List<string> { "WE4MB-3", "WE4MB-3*" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        // TOCALL excluded; one starred hop remains
+        Assert.Single(hops);
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
+        Assert.Equal(1, hopCount);
+    }
+
     [Fact]
     public void ExtractViaHops_EmptyPath_ReturnsEmpty()
     {
@@ -165,28 +158,17 @@ public class PathParserTests
 
     /// <summary>
     /// Issue #12 test packet.
-    /// Raw: W4PFT-1>KN6RO-13,WE4MB-3,WIDE2:@020037z3422.75N/08313.65W#...
-    /// The path list produced by raw-string extraction is ["KN6RO-13", "WE4MB-3", "WIDE2"].
-    /// TOCALL KN6RO-13 must be excluded; WE4MB-3 is the only real hop; bare WIDE2 is a generic alias.
+    /// Raw path list ["KN6RO-13", "WE4MB-3", "WIDE2"] — no asterisks.
+    /// No starred entries → direct packet, zero hops.
     /// </summary>
     [Fact]
-    public void ExtractViaHops_Issue12Packet_BareWide2IsAlias()
+    public void ExtractViaHops_Issue12Packet_NoStars_DirectPacket_ZeroHops()
     {
-        // Simulate the raw path list extracted from "W4PFT-1>KN6RO-13,WE4MB-3,WIDE2:@..."
         var rawPath = new List<string> { "KN6RO-13", "WE4MB-3", "WIDE2" };
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
 
-        // Two via entries: WE4MB-3 and WIDE2 (KN6RO-13 is TOCALL at index 0, skipped)
-        Assert.Equal(2, hops.Count);
-
-        Assert.Equal("WE4MB-3", hops[0].Callsign);
-        Assert.Equal("WIDE2",   hops[1].Callsign);
-
-        Assert.Equal(1, hops[0].HopIndex);
-        Assert.Equal(2, hops[1].HopIndex);
-
-        // Only WE4MB-3 is a real digipeater; bare WIDE2 is a generic alias
-        Assert.Equal(1, hopCount);
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
     }
 
     // -------------------------------------------------------------------------
@@ -198,9 +180,60 @@ public class PathParserTests
     [Fact]
     public void ExtractViaHops_AllEntriesInitiallyNotKnown()
     {
-        var aprs = new Packet("ND1J-10>AB4KN-2,KN6RO-13,WIDE1,WE4MB-3,WIDE2:!3319.66NI08432.59W#Test");
+        // Use a packet with starred hops so we actually get entries to inspect
+        var aprs = new Packet("KC4SAR-5>KN6RO-13,WIDE1*,WE4MB-3*,WIDE2:!3400.59NT08402.69W&Test");
         var (hops, _) = AprsPathParser.ExtractViaHops(aprs.Path);
 
+        Assert.NotEmpty(hops);
         Assert.All(hops, h => Assert.False(h.Known));
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #13 — direct packet (unused alias, no hops)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Issue #13 test packet.
+    /// Raw:  KM4KMO-14>WE4MB-3,WIDE1:@020113z3507.38NI08509.86W#Harrison, TN
+    /// TOCALL WE4MB-3 must be excluded; WIDE1 has no '*' — unused alias, not a hop.
+    /// Packet is direct: zero hops returned.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue13Packet_UnusedWide1_DirectPacket_ZeroHops()
+    {
+        var aprs = new Packet("KM4KMO-14>WE4MB-3,WIDE1:@020113z3507.38NI08509.86W#Harrison, TN");
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
+
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
+    }
+
+    /// <summary>
+    /// Direct packet with no path entries at all — only TOCALL present, no via entries.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_NoPathEntries_DirectPacket_ZeroHops()
+    {
+        var rawPath = new List<string> { "APRS" };  // only the TOCALL
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
+    }
+
+    /// <summary>
+    /// Digipeated packet — WE4MB-3 is starred, WIDE2 is an unused alias not starred.
+    /// Only the starred entry (WE4MB-3) should appear; hop count = 1.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_Issue13_StarredRealCallsign_OneHop()
+    {
+        var rawPath = new List<string> { "APRS", "WE4MB-3*", "WIDE2" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Single(hops);
+        Assert.Equal("WE4MB-3", hops[0].Callsign);
+        Assert.Equal(1, hops[0].HopIndex);
+        Assert.Equal(1, hopCount);
     }
 }

@@ -38,27 +38,20 @@ public static class AprsPathParser
     }
 
     /// <summary>
-    /// Extracts the intermediate (via) hop list from an APRSSharp path array.
+    /// Extracts the intermediate (via) hop list from an APRS path array.
     /// <para>
-    /// APRSSharp puts the TOCALL (destination field) at index 0 when parsing TNC2
-    /// format — it is the packet's destination identifier, not a digipeater hop, and is
-    /// always skipped.  The remaining entries are the actual via path.
+    /// The first element of <paramref name="aprsPath"/> is always the TOCALL (destination
+    /// field) — it is never a digipeater hop and is unconditionally skipped, regardless of
+    /// whether it looks like a software identifier or a real callsign.
     /// </para>
-    /// <list type="bullet">
-    ///   <item>
-    ///     <b>With <c>*</c> markers</b> — only entries ending with <c>*</c> are included;
-    ///     these are the hops that have actually repeated the packet.
-    ///   </item>
-    ///   <item>
-    ///     <b>Without <c>*</c> markers</b> — all via entries are included in order.
-    ///     Direwolf sometimes strips the <c>*</c> flags; treating every entry as a used hop
-    ///     is the best we can do.  Generic aliases are preserved as <c>Known=false</c> entries
-    ///     so the hop count is accurate and the UI can display them with a "?" indicator.
-    ///   </item>
-    /// </list>
+    /// <para>
+    /// Only path entries ending with <c>*</c> represent hops the packet actually passed
+    /// through.  An entry without <c>*</c> is an unused request (alias requested but not
+    /// consumed).  When no starred entries exist the packet was heard direct — zero hops.
+    /// </para>
     /// </summary>
     /// <param name="aprsPath">
-    ///   The <c>Packet.Path</c> list from APRSSharp, whose first element is the TOCALL.
+    ///   The path list whose first element is the TOCALL.
     /// </param>
     /// <returns>
     ///   The intermediate hop entries (HopIndex 1…N) and the count of real digipeater hops.
@@ -68,48 +61,24 @@ public static class AprsPathParser
     {
         var allEntries = aprsPath?.ToList() ?? [];
 
-        // Path[0] is the TOCALL — skip it.
+        // allEntries[0] is the TOCALL — always skip it, no conditions.
         var viaEntries = allEntries.Count > 0 ? allEntries.Skip(1).ToList() : [];
 
-        bool hasStarMarkers = viaEntries.Any(e => e.TrimEnd().EndsWith('*'));
+        // Only starred entries were actually used as hops.
+        // Entries without '*' are unused alias requests — not hops.
+        // No starred entries → direct packet, zero hops.
+        var hops = viaEntries
+            .Where(e => e.TrimEnd().EndsWith('*'))
+            .Select((e, i) => new ResolvedPathEntry
+            {
+                Callsign = e.TrimEnd('*').Trim(),
+                HopIndex = i + 1,  // 0 is reserved for the originating station
+                Known = false,
+            })
+            .Where(e => !string.IsNullOrWhiteSpace(e.Callsign))
+            .ToList();
 
-        List<ResolvedPathEntry> hops;
-        int hopCount;
-
-        if (hasStarMarkers)
-        {
-            // Standard: only starred entries were actually repeated.
-            // Unused future hops (no '*') are not part of the actual path.
-            hops = viaEntries
-                .Where(e => e.TrimEnd().EndsWith('*'))
-                .Select((e, i) => new ResolvedPathEntry
-                {
-                    Callsign = e.TrimEnd('*').Trim(),
-                    HopIndex = i + 1,  // 0 is reserved for the originating station
-                    Known = false,
-                })
-                .Where(e => !string.IsNullOrWhiteSpace(e.Callsign))
-                .ToList();
-
-            hopCount = hops.Count;
-        }
-        else
-        {
-            // No star markers: Direwolf may have stripped '*' flags.
-            // Include every via entry so the hop chain is complete.
-            // Generic aliases will be marked Known=false by the coordinate resolver.
-            hops = viaEntries
-                .Select((e, i) => new ResolvedPathEntry
-                {
-                    Callsign = e.Trim(),
-                    HopIndex = i + 1,  // 0 is reserved for the originating station
-                    Known = false,
-                })
-                .Where(e => !string.IsNullOrWhiteSpace(e.Callsign))
-                .ToList();
-
-            hopCount = hops.Count(e => !IsGenericAlias(e.Callsign));
-        }
+        var hopCount = hops.Count;
 
         return (hops, hopCount);
     }
