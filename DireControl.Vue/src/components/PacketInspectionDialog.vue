@@ -196,17 +196,16 @@ function heardViaLabel(p: PacketDto): string {
                 <div class="field-key">Hops</div>
                 <div class="field-val">
                   <div class="hop-chain">
-                    <!-- Source station -->
-                    <span
-                      class="hop-node hop-node--source"
-                      :title="`Select ${packet.stationCallsign}`"
-                      @click="onHopClick(packet.stationCallsign)"
-                    >{{ packet.stationCallsign }}</span>
-
-                    <template v-for="entry in orderedPath" :key="entry.callsign">
-                      <span class="hop-arrow">──→</span>
+                    <template v-for="(entry, index) in orderedPath" :key="entry.callsign">
+                      <span v-if="index > 0" class="hop-arrow">──→</span>
                       <span
-                        v-if="entry.known"
+                        v-if="index === 0"
+                        class="hop-node hop-node--source"
+                        :title="`Select ${entry.callsign}`"
+                        @click="onHopClick(entry.callsign)"
+                      >{{ entry.callsign }} ✓</span>
+                      <span
+                        v-else-if="entry.known"
                         class="hop-node hop-node--known"
                         :title="`Select ${entry.callsign}`"
                         @click="onHopClick(entry.callsign)"
