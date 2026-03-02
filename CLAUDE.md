@@ -55,7 +55,7 @@ dotnet ef migrations remove \
 
 - All Axios HTTP calls are made through TypeScript classes located in `src/api` — no Axios requests outside of this directory
 - All API files import the shared Axios instance from `src/api/axios.ts` — do not call `axios.create` in individual API files; add interceptors or shared config in `axios.ts`
-- CORS is never needed and must never be added — in development the Vite dev server proxies `/api`, `/swagger`, and `/packetHub` to `http://localhost:5010`; in production the API serves the built frontend as static files, so all requests are same-origin
+- CORS is never needed and must never be added — in development the Vite dev server proxies `/api`, `/swagger`, and `/hubs` to `http://localhost:5010`; in production the API serves the built frontend as static files, so all requests are same-origin
 - State that is only used within a single component or class stays local; only reach for Pinia when sharing state across components or classes
 - Use Vuetify for all UI components
 - Path alias `@` resolves to `src/`

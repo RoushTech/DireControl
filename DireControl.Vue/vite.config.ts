@@ -14,7 +14,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:5010',
       '/swagger': 'http://localhost:5010',
-      '/packetHub': {
+      '/hubs': {
         target: 'http://localhost:5010',
         ws: true,
       },

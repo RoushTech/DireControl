@@ -55,7 +55,13 @@ const filteredAllMessages = computed(() => {
   })
 })
 
-// ─── Outbox ──────────────────────────────────────────────────────────────────
+// ─── Inbox / Outbox ──────────────────────────────────────────────────────────
+const inboundMessages = computed(() =>
+  store.inboxMessages.filter(
+    (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase()
+  )
+)
+
 const outboxMessages = computed(() =>
   store.inboxMessages.filter(
     (m) => m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
@@ -297,16 +303,8 @@ onUnmounted(() => {
   connection?.stop()
 })
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function isOutbound(message: InboxMessageDto) {
-  return message.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
-}
-
-function ackBadge(message: InboxMessageDto): { text: string; color: string } | null {
-  if (!isOutbound(message)) return null
-  return message.ackSent
-    ? { text: 'Acknowledged', color: 'success' }
-    : { text: 'Pending ACK', color: 'warning' }
+function replyTo(message: InboxMessageDto) {
+  openCompose(message.fromCallsign)
 }
 </script>
 
@@ -370,7 +368,7 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
         <v-table density="compact" hover>
           <thead>
             <tr>
-              <th>From / To</th>
+              <th>From</th>
               <th>Message</th>
               <th>Time</th>
               <th>Status</th>
@@ -379,27 +377,18 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
           </thead>
           <tbody>
             <tr
-              v-for="msg in store.inboxMessages"
+              v-for="msg in inboundMessages"
               :key="msg.id"
-              :class="{ 'font-weight-bold': !msg.isRead && !isOutbound(msg), 'text-blue-grey': isOutbound(msg) }"
+              :class="{ 'font-weight-bold': !msg.isRead }"
               style="cursor: pointer"
               @click="onRowClick(msg)"
             >
               <td>
-                <span v-if="isOutbound(msg)">
-                  → <a
-                    href="#"
-                    class="text-decoration-none"
-                    @click.stop.prevent="$router.push('/')"
-                  >{{ msg.toCallsign }}</a>
-                </span>
-                <span v-else>
-                  <a
-                    href="#"
-                    class="text-decoration-none"
-                    @click.stop.prevent="$router.push('/')"
-                  >{{ msg.fromCallsign }}</a>
-                </span>
+                <a
+                  href="#"
+                  class="text-decoration-none"
+                  @click.stop.prevent="$router.push('/')"
+                >{{ msg.fromCallsign }}</a>
               </td>
               <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
                 {{ msg.body }}
@@ -409,24 +398,16 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
               </td>
               <td>
                 <v-chip
-                  v-if="!msg.isRead && !isOutbound(msg)"
+                  v-if="!msg.isRead"
                   color="primary"
                   size="x-small"
                   class="mr-1"
                 >
                   Unread
                 </v-chip>
-                <v-chip
-                  v-if="ackBadge(msg)"
-                  :color="ackBadge(msg)!.color"
-                  size="x-small"
-                >
-                  {{ ackBadge(msg)!.text }}
-                </v-chip>
               </td>
               <td>
                 <v-btn
-                  v-if="!isOutbound(msg)"
                   icon="mdi-reply"
                   size="x-small"
                   variant="text"
@@ -434,7 +415,7 @@ function ackBadge(message: InboxMessageDto): { text: string; color: string } | n
                 />
               </td>
             </tr>
-            <tr v-if="store.inboxMessages.length === 0">
+            <tr v-if="inboundMessages.length === 0">
               <td colspan="5" class="text-center text-medium-emphasis py-6">
                 No messages yet.
               </td>
