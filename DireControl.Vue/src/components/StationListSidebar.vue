@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { StationType, HeardVia, type StationDto } from '@/types/station'
 import { timeAgo } from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
+import { useTick } from '@/composables/useTick'
 
 const props = defineProps<{
   stations: StationDto[]
@@ -30,6 +31,8 @@ defineExpose({
     searchFieldRef.value?.focus()
   },
 })
+
+const { now } = useTick(5000)
 
 const stationTypeOptions = [
   { label: 'All Types', value: null },
@@ -213,7 +216,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
             </v-chip>
           </div>
           <div class="d-flex align-center ga-2 text-caption text-medium-emphasis">
-            <span>{{ timeAgo(s.lastSeen) }}</span>
+            <span>{{ timeAgo(s.lastSeen, now.value) }}</span>
             <span v-if="packetCounts[s.callsign]">
               <v-icon size="10">mdi-radio-tower</v-icon> {{ packetCounts[s.callsign] }}
             </span>
@@ -242,7 +245,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
               </v-chip>
             </div>
             <div class="d-flex align-center ga-2 text-caption text-disabled">
-              <span>{{ timeAgo(s.lastSeen) }}</span>
+              <span>{{ timeAgo(s.lastSeen, now.value) }}</span>
             </div>
           </div>
         </div>

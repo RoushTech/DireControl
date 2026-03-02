@@ -34,6 +34,7 @@ import { timeAgo, formatUtc, compassDir } from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
+import { useTick } from '@/composables/useTick'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, Filler, Legend)
 
@@ -48,6 +49,8 @@ const emit = defineEmits<{
 }>()
 
 const selectionStore = useStationSelectionStore()
+
+const { now } = useTick(1000)
 
 const inspectedPacketId = ref<number | null>(null)
 
@@ -701,12 +704,12 @@ watch(tab, (newTab) => {
 
           <div class="info-label">First Seen</div>
           <div class="info-value" :title="formatUtc(station.firstSeen)">
-            {{ timeAgo(station.firstSeen) }}
+            {{ timeAgo(station.firstSeen, now.value) }}
           </div>
 
           <div class="info-label">Last Seen</div>
           <div class="info-value" :title="formatUtc(station.lastSeen)">
-            {{ timeAgo(station.lastSeen) }}
+            {{ timeAgo(station.lastSeen, now.value) }}
           </div>
 
           <template v-if="heardViaLabel">
@@ -822,7 +825,7 @@ watch(tab, (newTab) => {
               :title="p.isDirectHeard ? 'Direct' : 'Via Digi'"
             />
             <span class="text-caption text-medium-emphasis flex-shrink-0" :title="formatUtc(p.receivedAt)">
-              {{ timeAgo(p.receivedAt) }}
+              {{ timeAgo(p.receivedAt, now.value) }}
             </span>
           </div>
           <div v-if="p.comment" class="text-body-2 text-truncate mt-1">{{ p.comment }}</div>
