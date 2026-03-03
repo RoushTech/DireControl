@@ -628,6 +628,10 @@ public sealed class AprsPacketParsingService(
             return;
         }
 
+        logger.LogDebug(
+            "Own callsign detected: source={Source} hopCount={HopCount} path={Path}",
+            packet.StationCallsign, packet.HopCount, packet.Path);
+
         try
         {
             if (packet.HopCount == 0)
@@ -660,6 +664,7 @@ public sealed class AprsPacketParsingService(
         await hubContext.Clients.All.SendAsync(PacketHub.OwnBeaconReceivedMethod, new OwnBeaconBroadcastDto
         {
             RadioId = radio.Id,
+            BeaconId = beacon.Id,
             FullCallsign = radio.FullCallsign,
             BeaconedAt = beacon.BeaconedAt,
             Lat = beacon.Latitude,
@@ -755,6 +760,7 @@ public sealed class AprsPacketParsingService(
         await hubContext.Clients.All.SendAsync(PacketHub.DigiConfirmationMethod, new DigiConfirmationBroadcastDto
         {
             RadioId = radio.Id,
+            BeaconId = ownBeacon.Id,
             FullCallsign = radio.FullCallsign,
             Digipeater = digiCallsign,
             ConfirmedAt = now,

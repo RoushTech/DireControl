@@ -66,6 +66,7 @@ export interface OwnBeaconHistoryItemDto {
 
 export interface OwnBeaconBroadcastDto {
   radioId: string
+  beaconId: number
   fullCallsign: string
   beaconedAt: string
   lat: number | null
@@ -75,6 +76,7 @@ export interface OwnBeaconBroadcastDto {
 
 export interface DigiConfirmationBroadcastDto {
   radioId: string
+  beaconId: number
   fullCallsign: string
   digipeater: string
   confirmedAt: string

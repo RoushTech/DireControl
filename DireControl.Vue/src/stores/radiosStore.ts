@@ -7,6 +7,7 @@ import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBr
 export const useRadiosStore = defineStore('radios', () => {
   const radios = ref<RadioDto[]>([])
   const lastBeacons = ref<Map<string, LastBeaconDto>>(new Map())
+  const currentBeaconIds = ref<Map<string, number>>(new Map())
   const loading = ref(false)
   let connectionStarted = false
 
@@ -35,6 +36,9 @@ export const useRadiosStore = defineStore('radios', () => {
   }
 
   function onOwnBeaconReceived(dto: OwnBeaconBroadcastDto) {
+    // Track which beacon is current so DigiConfirmation events can be correlated
+    currentBeaconIds.value.set(dto.radioId, dto.beaconId)
+
     // Update the radio's lastBeaconedAt in the radios list
     const radio = radios.value.find((r) => r.id === dto.radioId)
     if (radio) {
@@ -61,6 +65,9 @@ export const useRadiosStore = defineStore('radios', () => {
   }
 
   function onDigiConfirmation(dto: DigiConfirmationBroadcastDto) {
+    // Ignore confirmations that don't belong to the current beacon
+    if (dto.beaconId !== currentBeaconIds.value.get(dto.radioId)) return
+
     const existing = lastBeacons.value.get(dto.radioId)
     if (existing) {
       // Deduplicate by callsign — belt-and-suspenders guard against multiple

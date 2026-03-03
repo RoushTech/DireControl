@@ -413,6 +413,7 @@ public sealed class OwnBeaconHistoryItemDto
 public sealed class OwnBeaconBroadcastDto
 {
     public required string RadioId { get; init; }
+    public int BeaconId { get; init; }
     public required string FullCallsign { get; init; }
     public DateTime BeaconedAt { get; init; }
     public double? Lat { get; init; }
@@ -423,6 +424,7 @@ public sealed class OwnBeaconBroadcastDto
 public sealed class DigiConfirmationBroadcastDto
 {
     public required string RadioId { get; init; }
+    public int BeaconId { get; init; }
     public required string FullCallsign { get; init; }
     public required string Digipeater { get; init; }
     public DateTime ConfirmedAt { get; init; }
