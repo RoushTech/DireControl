@@ -10,6 +10,12 @@ export enum PacketType {
   Unparseable = 8,
 }
 
+export enum PacketSource {
+  Rf = 0,
+  AprsIs = 1,
+  Own = 2,
+}
+
 export const PACKET_TYPE_LABELS: Record<PacketType, string> = {
   [PacketType.Position]: 'Position',
   [PacketType.Message]: 'Message',
@@ -85,6 +91,7 @@ export interface PacketBroadcastDto {
   summary: string
   hopCount: number
   resolvedPath: ResolvedPathEntry[]
+  source: PacketSource
 }
 
 export interface TrackPointDto {
@@ -135,6 +142,7 @@ export interface PacketDto {
   weatherData: WeatherData | null
   telemetryData: TelemetryData | null
   messageData: MessageData | null
+  source: PacketSource
 }
 
 export interface WeatherReadingDto {

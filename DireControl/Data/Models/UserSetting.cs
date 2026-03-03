@@ -13,8 +13,36 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// </summary>
     public string OutboundPath { get; set; } = "WIDE1-1,WIDE2-1";
 
+    // ─── APRS-IS settings ────────────────────────────────────────────────────
+
+    /// <summary>Whether the DireControl APRS-IS client is enabled.</summary>
+    public bool AprsIsEnabled { get; set; } = false;
+
+    /// <summary>APRS-IS server hostname. Defaults to the global round-robin.</summary>
+    public string AprsIsHost { get; set; } = "rotate.aprs2.net";
+
+    /// <summary>APRS-IS filtered server port.</summary>
+    public int AprsIsPort { get; set; } = 14580;
+
+    /// <summary>
+    /// APRS-IS passcode override. When null, the passcode is auto-computed
+    /// from OurCallsign using the standard algorithm.
+    /// </summary>
+    public int? AprsIsPasscode { get; set; }
+
+    /// <summary>
+    /// APRS-IS server-side filter string, e.g. "r/35.18/-85.08/500 t/m".
+    /// </summary>
+    public string AprsIsFilter { get; set; } = "r/39.0/-98.0/500 t/m";
+
+    /// <summary>
+    /// Number of seconds within which a duplicate packet (same callsign + info field)
+    /// from either RF or APRS-IS is suppressed.
+    /// </summary>
+    public int DeduplicationWindowSeconds { get; set; } = 60;
+
     public void Configure(EntityTypeBuilder<UserSetting> builder)
     {
-        builder.HasData(new UserSetting { Id = 1, OutboundPath = "WIDE1-1,WIDE2-1" });
+        builder.HasData(new UserSetting { Id = 1 });
     }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useTheme } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
@@ -20,6 +20,10 @@ const uiStore = useUiStore()
 const isDark = ref(theme.global.current.value.dark)
 const apiOffline = ref(false)
 const direwolfDisconnected = ref(false)
+const aprsIsState = ref('Disabled')
+const aprsIsServerName = ref<string | null>(null)
+const aprsIsFilter = ref('')
+const aprsIsSessionPacketCount = ref(0)
 const showShortcutsDialog = ref(false)
 const version = ref<string | null>(null)
 const mobileDrawerOpen = ref(false)
@@ -45,11 +49,35 @@ function toggleTheme() {
 // Status polling
 let statusInterval: ReturnType<typeof setInterval> | null = null
 
+const aprsIsStateColor = computed(() => {
+  switch (aprsIsState.value) {
+    case 'Connected': return 'success'
+    case 'Connecting': return 'warning'
+    case 'AuthFailed': return 'error'
+    case 'Disconnected': return 'warning'
+    default: return 'grey'
+  }
+})
+
+const aprsIsStateLabel = computed(() => {
+  switch (aprsIsState.value) {
+    case 'Connected': return 'Connected'
+    case 'Connecting': return 'Connecting…'
+    case 'AuthFailed': return 'Auth Failed'
+    case 'Disconnected': return 'Disconnected'
+    default: return 'Disabled'
+  }
+})
+
 async function pollStatus() {
   try {
     const status = await getStatus()
     apiOffline.value = false
     direwolfDisconnected.value = !status.direwolfConnected
+    aprsIsState.value = status.aprsIsState
+    aprsIsServerName.value = status.aprsIsServerName
+    aprsIsFilter.value = status.aprsIsFilter
+    aprsIsSessionPacketCount.value = status.aprsIsSessionPacketCount
   } catch {
     apiOffline.value = true
     direwolfDisconnected.value = false
@@ -255,6 +283,34 @@ onUnmounted(() => {
           class="desktop-nav"
           @click="showShortcutsDialog = true"
         />
+
+        <!-- APRS-IS status dot -->
+        <v-menu v-if="aprsIsState !== 'Disabled'" open-on-hover :close-delay="100">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" variant="text" size="small" aria-label="APRS-IS status">
+              <v-icon :color="aprsIsStateColor" size="12">mdi-circle</v-icon>
+              <span class="ml-1 text-caption desktop-nav">IS</span>
+            </v-btn>
+          </template>
+          <v-card min-width="240" density="compact">
+            <v-card-title class="text-subtitle-2 pb-1">APRS-IS</v-card-title>
+            <v-card-text class="pt-0">
+              <div class="d-flex align-center mb-1">
+                <v-icon :color="aprsIsStateColor" size="12" class="mr-2">mdi-circle</v-icon>
+                <span class="text-body-2">{{ aprsIsStateLabel }}</span>
+              </div>
+              <div v-if="aprsIsServerName" class="text-caption text-medium-emphasis">
+                Server: {{ aprsIsServerName }}
+              </div>
+              <div v-if="aprsIsFilter" class="text-caption text-medium-emphasis mt-1">
+                Filter: {{ aprsIsFilter }}
+              </div>
+              <div class="text-caption text-medium-emphasis mt-1">
+                Session packets: {{ aprsIsSessionPacketCount.toLocaleString() }}
+              </div>
+            </v-card-text>
+          </v-card>
+        </v-menu>
       </template>
     </v-app-bar>
 

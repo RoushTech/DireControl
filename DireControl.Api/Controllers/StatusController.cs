@@ -6,9 +6,21 @@ namespace DireControl.Api.Controllers;
 
 [ApiController]
 [Route("api/v0/status")]
-public class StatusController(KissConnectionHolder connectionHolder) : ControllerBase
+public class StatusController(
+    KissConnectionHolder connectionHolder,
+    IAprsIsStatusService aprsIsStatus) : ControllerBase
 {
     [HttpGet]
-    public ActionResult<StatusDto> GetStatus() =>
-        Ok(new StatusDto { DirewolfConnected = connectionHolder.IsConnected });
+    public ActionResult<StatusDto> GetStatus()
+    {
+        var s = aprsIsStatus;
+        return Ok(new StatusDto
+        {
+            DirewolfConnected = connectionHolder.IsConnected,
+            AprsIsState = s.State.ToString(),
+            AprsIsServerName = s.ServerName,
+            AprsIsFilter = s.ActiveFilter,
+            AprsIsSessionPacketCount = s.SessionPacketCount,
+        });
+    }
 }

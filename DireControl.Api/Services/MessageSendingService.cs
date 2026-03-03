@@ -31,7 +31,7 @@ public sealed class MessageSendingService(
     /// <summary>
     /// Sends a message to <paramref name="toCallsign"/>, stores it in the
     /// database with <c>AckSent = false</c>, and returns the saved record.
-    /// Returns <see langword="null"/> if there is no active Direwolf connection.
+    /// Returns <see langword="null"/> if no active Direwolf connection is available.
     /// </summary>
     /// <param name="path">
     /// VIA digipeater path (e.g. "WIDE1-1,WIDE2-1"). Pass an empty string to
@@ -58,10 +58,12 @@ public sealed class MessageSendingService(
 
         logger.LogInformation(
             "Sent APRS message to {ToCallsign} (id={MessageId}, path={Path}): {Body}",
-            toCallsign, messageId, string.IsNullOrEmpty(path) ? "(direct)" : path, body);
+            toCallsign, messageId,
+            string.IsNullOrEmpty(path) ? "(direct)" : path,
+            body);
 
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        using var storeScope = scopeFactory.CreateScope();
+        var storeDb = storeScope.ServiceProvider.GetRequiredService<DireControlContext>();
 
         var message = new Message
         {
@@ -81,8 +83,8 @@ public sealed class MessageSendingService(
             NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds),
         };
 
-        db.Messages.Add(message);
-        await db.SaveChangesAsync(ct);
+        storeDb.Messages.Add(message);
+        await storeDb.SaveChangesAsync(ct);
         return message;
     }
 
@@ -113,7 +115,7 @@ public sealed class MessageSendingService(
     /// Retransmits an existing message from the database, reusing the path
     /// stored on the record so that retries go out the same way as the original.
     /// Returns <see langword="true"/> if sent successfully,
-    /// <see langword="false"/> if there is no active Direwolf connection.
+    /// <see langword="false"/> if there is no active connection.
     /// </summary>
     public Task<bool> RetransmitAsync(Message message, CancellationToken ct = default)
     {
@@ -121,20 +123,20 @@ public sealed class MessageSendingService(
         var info = BuildMessageInfo(message.ToCallsign, message.Body, message.MessageId);
         var frame = BuildAx25Frame(ourCallsign, info, message.PathUsed ?? string.Empty);
 
-        if (!connectionHolder.TrySend(frame))
-        {
+        var sent = connectionHolder.TrySend(frame);
+        if (!sent)
             logger.LogWarning(
                 "Cannot retransmit message {Id} to {ToCallsign}: no active Direwolf connection.",
                 message.Id, message.ToCallsign);
-            return Task.FromResult(false);
-        }
 
-        logger.LogInformation(
-            "Retransmitted message {Id} to {ToCallsign} (id={MessageId}, path={Path}, attempt {Attempt}).",
-            message.Id, message.ToCallsign, message.MessageId,
-            string.IsNullOrEmpty(message.PathUsed) ? "(direct)" : message.PathUsed,
-            message.RetryCount + 1);
-        return Task.FromResult(true);
+        if (sent)
+            logger.LogInformation(
+                "Retransmitted message {Id} to {ToCallsign} (id={MessageId}, path={Path}, attempt {Attempt}).",
+                message.Id, message.ToCallsign, message.MessageId,
+                string.IsNullOrEmpty(message.PathUsed) ? "(direct)" : message.PathUsed,
+                message.RetryCount + 1);
+
+        return Task.FromResult(sent);
     }
 
     // -------------------------------------------------------------------------

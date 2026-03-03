@@ -50,10 +50,13 @@ services
         .Services
     .AddHostedService<KissTcpService>()
     .AddHostedService<AprsPacketParsingService>()
+    .AddHostedService<AprsIsService>()
     .AddHostedService<StationExpiryService>()
     .AddHostedService<AlertingService>()
     .AddHostedService<MessageRetryService>()
     .AddSingleton<KissConnectionHolder>()
+    .AddSingleton<AprsIsReconnectTrigger>()
+    .AddSingleton<IAprsIsStatusService, AprsIsStatusService>()
     .AddSingleton<BeaconService>()
     .AddSingleton<MessageSendingService>()
     .AddSingleton<PendingAlertChannel>()

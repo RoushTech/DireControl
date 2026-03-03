@@ -24,6 +24,12 @@ public class Station : IEntityTypeConfiguration<Station>
     public string? GridSquare { get; set; }
     public HeardVia HeardVia { get; set; } = HeardVia.Unknown;
 
+    /// <summary>Last time a packet from this station was received via RF (Direwolf KISS).</summary>
+    public DateTime? LastHeardRf { get; set; }
+
+    /// <summary>Last time a packet from this station was received via APRS-IS.</summary>
+    public DateTime? LastHeardAprsIs { get; set; }
+
     public ICollection<Packet> Packets { get; set; } = [];
     public StationStatistic? Statistics { get; set; }
 

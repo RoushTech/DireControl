@@ -17,6 +17,14 @@ export enum HeardVia {
   IgateRfDigi = 6,
 }
 
+export enum AprsIsConnectionState {
+  Disabled = 'Disabled',
+  Connecting = 'Connecting',
+  Connected = 'Connected',
+  AuthFailed = 'AuthFailed',
+  Disconnected = 'Disconnected',
+}
+
 export interface QrzLookupData {
   name: string | null;
   city: string | null;
@@ -58,6 +66,8 @@ export interface StationDto {
   isOnWatchList: boolean;
   gridSquare: string | null;
   heardVia: HeardVia;
+  lastHeardRf: string | null;
+  lastHeardAprsIs: string | null;
 }
 
 export interface HomePositionDto {
@@ -75,6 +85,13 @@ export interface SettingsDto {
   maxRetryAttempts: number;
   initialRetryDelaySeconds: number;
   outboundPath: string;
+  aprsIsEnabled: boolean;
+  aprsIsHost: string;
+  aprsIsPort: number;
+  aprsIsPasscodeOverride: number | null;
+  aprsIsPasscodeComputed: number;
+  aprsIsFilter: string;
+  deduplicationWindowSeconds: number;
 }
 
 export interface CallsignCountDto {

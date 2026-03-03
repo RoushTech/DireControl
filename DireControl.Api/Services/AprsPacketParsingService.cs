@@ -96,6 +96,7 @@ public sealed class AprsPacketParsingService(
                     Id = packet.Id,
                     Callsign = packet.StationCallsign,
                     ParsedType = packet.ParsedType.ToString(),
+                    Source = packet.Source,
                     ReceivedAt = packet.ReceivedAt,
                     Latitude = packet.Latitude,
                     Longitude = packet.Longitude,

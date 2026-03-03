@@ -12,6 +12,16 @@ public class Packet : IEntityTypeConfiguration<Packet>
     public DateTime ReceivedAt { get; set; }
     public required string RawPacket { get; set; }
     public PacketType ParsedType { get; set; } = PacketType.Unknown;
+
+    /// <summary>How this packet reached DireControl (RF via Direwolf KISS, or APRS-IS).</summary>
+    public PacketSource Source { get; set; } = PacketSource.Rf;
+
+    /// <summary>
+    /// Everything after the first ':' in the TNC2 string — the APRS info field.
+    /// Stored for efficient deduplication across RF and APRS-IS paths.
+    /// </summary>
+    public string InfoField { get; set; } = string.Empty;
+
     public double? Latitude { get; set; }
     public double? Longitude { get; set; }
     public string Path { get; set; } = string.Empty;
@@ -36,6 +46,7 @@ public class Packet : IEntityTypeConfiguration<Packet>
                .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(p => p.StationCallsign);
         builder.HasIndex(p => p.ReceivedAt);
+        builder.HasIndex(p => new { p.StationCallsign, p.ReceivedAt });
 
         builder.Property(p => p.ResolvedPath)
                .HasConversion(

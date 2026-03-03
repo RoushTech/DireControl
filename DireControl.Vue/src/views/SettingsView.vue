@@ -5,7 +5,7 @@ import { getGeofences, createGeofence, deleteGeofence, getProximityRules, create
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
-import { getSettings, updateOutboundPath } from '@/api/stationsApi'
+import { getSettings, updateOutboundPath, updateAprsIsSettings } from '@/api/stationsApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 
@@ -44,6 +44,40 @@ function schedulePathSave() {
       outboundPathSaving.value = false
     }
   }, 600)
+}
+
+// ─── APRS-IS settings ─────────────────────────────────────────────────────────
+const aprsIsEnabled = ref(false)
+const aprsIsHost = ref('rotate.aprs2.net')
+const aprsIsPort = ref(14580)
+const aprsIsPasscodeOverride = ref<number | null>(null)
+const aprsIsPasscodeComputed = ref(0)
+const aprsIsFilter = ref('r/39.0/-98.0/500 t/m')
+const deduplicationWindowSeconds = ref(60)
+const aprsIsSaving = ref(false)
+const aprsIsSaveError = ref('')
+const aprsIsSaveSuccess = ref(false)
+
+async function saveAprsIsSettings() {
+  aprsIsSaving.value = true
+  aprsIsSaveError.value = ''
+  aprsIsSaveSuccess.value = false
+  try {
+    await updateAprsIsSettings({
+      aprsIsEnabled: aprsIsEnabled.value,
+      aprsIsHost: aprsIsHost.value.trim(),
+      aprsIsPort: aprsIsPort.value,
+      aprsIsPasscodeOverride: aprsIsPasscodeOverride.value,
+      aprsIsFilter: aprsIsFilter.value.trim(),
+      deduplicationWindowSeconds: deduplicationWindowSeconds.value,
+    })
+    aprsIsSaveSuccess.value = true
+    setTimeout(() => { aprsIsSaveSuccess.value = false }, 3000)
+  } catch {
+    aprsIsSaveError.value = 'Failed to save APRS-IS settings.'
+  } finally {
+    aprsIsSaving.value = false
+  }
 }
 
 // ─── Radios ───────────────────────────────────────────────────────────────────
@@ -227,6 +261,13 @@ onMounted(async () => {
     const s = await getSettings()
     retrySettings.value = s
     outboundPath.value = s.outboundPath
+    aprsIsEnabled.value = s.aprsIsEnabled
+    aprsIsHost.value = s.aprsIsHost
+    aprsIsPort.value = s.aprsIsPort
+    aprsIsPasscodeOverride.value = s.aprsIsPasscodeOverride
+    aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
+    aprsIsFilter.value = s.aprsIsFilter
+    deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
   } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
@@ -828,6 +869,97 @@ async function confirmDelete() {
         class="mt-3"
       >
         {{ outboundPathSaveError }}
+      </v-alert>
+    </v-card>
+
+    <!-- ================================================================ -->
+    <!-- APRS-IS -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2 mt-6">
+      <span class="text-h6">APRS-IS</span>
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <v-switch
+        v-model="aprsIsEnabled"
+        label="Enable APRS-IS connection"
+        hide-details
+        density="compact"
+        class="mb-4"
+      />
+
+      <div class="d-flex ga-2 mb-2">
+        <v-text-field
+          v-model="aprsIsHost"
+          label="Server"
+          density="compact"
+          style="flex: 3"
+        />
+        <v-text-field
+          v-model.number="aprsIsPort"
+          label="Port"
+          density="compact"
+          type="number"
+          style="flex: 1"
+        />
+      </div>
+
+      <div class="text-body-2 text-medium-emphasis mb-1">
+        Passcode (auto-computed: <strong>{{ aprsIsPasscodeComputed }}</strong>)
+      </div>
+      <v-text-field
+        v-model.number="aprsIsPasscodeOverride"
+        label="Passcode override (leave blank to use auto-computed)"
+        density="compact"
+        type="number"
+        clearable
+        class="mb-2"
+        style="max-width: 360px"
+      />
+
+      <v-text-field
+        v-model="aprsIsFilter"
+        label="Server-side filter"
+        density="compact"
+        class="mb-2"
+        hint="e.g. r/39.0/-98.0/500 t/m — restricts what packets the server sends to you"
+        persistent-hint
+      />
+
+      <v-text-field
+        v-model.number="deduplicationWindowSeconds"
+        label="Deduplication window (seconds)"
+        density="compact"
+        type="number"
+        class="mb-3 mt-2"
+        style="max-width: 240px"
+        hint="Packets with the same callsign and info field within this window are counted as duplicates"
+        persistent-hint
+      />
+
+      <div class="d-flex align-center ga-3 mt-4">
+        <v-btn
+          size="small"
+          color="primary"
+          prepend-icon="mdi-content-save"
+          :loading="aprsIsSaving"
+          @click="saveAprsIsSettings"
+        >
+          Save APRS-IS Settings
+        </v-btn>
+        <v-fade-transition>
+          <span v-if="aprsIsSaveSuccess" class="text-caption text-success">
+            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+          </span>
+        </v-fade-transition>
+      </div>
+      <v-alert
+        v-if="aprsIsSaveError"
+        type="error"
+        density="compact"
+        class="mt-3"
+      >
+        {{ aprsIsSaveError }}
       </v-alert>
     </v-card>
 

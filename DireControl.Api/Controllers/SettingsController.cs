@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
+
 namespace DireControl.Api.Controllers;
 
 [ApiController]
@@ -14,6 +15,7 @@ namespace DireControl.Api.Controllers;
 public class SettingsController(
     IOptions<DireControlOptions> options,
     IOptions<DirewolfOptions> direwolfOptions,
+    AprsIsReconnectTrigger reconnectTrigger,
     DireControlContext db) : ControllerBase
 {
     private static readonly Regex PathRegex =
@@ -40,8 +42,8 @@ public class SettingsController(
                 homePosition = new HomePositionDto { Lat = station.LastLat!.Value, Lon = station.LastLon!.Value };
         }
 
-        var userSetting = await db.UserSettings.FindAsync([1], ct);
-        var outboundPath = userSetting?.OutboundPath ?? "WIDE1-1,WIDE2-1";
+        var userSetting = await db.UserSettings.FindAsync([1], ct) ?? new UserSetting { Id = 1 };
+        var computedPasscode = AprsPasscodeHelper.GeneratePasscode(opt.OurCallsign);
 
         return Ok(new SettingsDto
         {
@@ -53,7 +55,14 @@ public class SettingsController(
             DirewolfReconnectDelaySeconds = direwolfOptions.Value.ReconnectDelaySeconds,
             MaxRetryAttempts = opt.MaxRetryAttempts,
             InitialRetryDelaySeconds = opt.InitialRetryDelaySeconds,
-            OutboundPath = outboundPath,
+            OutboundPath = userSetting.OutboundPath,
+            AprsIsEnabled = userSetting.AprsIsEnabled,
+            AprsIsHost = userSetting.AprsIsHost,
+            AprsIsPort = userSetting.AprsIsPort,
+            AprsIsPasscodeOverride = userSetting.AprsIsPasscode,
+            AprsIsPasscodeComputed = computedPasscode,
+            AprsIsFilter = userSetting.AprsIsFilter,
+            DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
         });
     }
 
@@ -79,6 +88,42 @@ public class SettingsController(
         }
 
         await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpPut("aprs-is")]
+    public async Task<ActionResult> UpdateAprsIsSettings(
+        [FromBody] UpdateAprsIsSettingsRequest request,
+        CancellationToken ct)
+    {
+        if (request.AprsIsPort is < 1 or > 65535)
+            return BadRequest("Port must be between 1 and 65535.");
+
+        if (string.IsNullOrWhiteSpace(request.AprsIsHost))
+            return BadRequest("Server hostname is required.");
+
+        if (request.DeduplicationWindowSeconds is < 10 or > 3600)
+            return BadRequest("Deduplication window must be between 10 and 3600 seconds.");
+
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        setting.AprsIsEnabled = request.AprsIsEnabled;
+        setting.AprsIsHost = request.AprsIsHost.Trim();
+        setting.AprsIsPort = request.AprsIsPort;
+        setting.AprsIsPasscode = request.AprsIsPasscodeOverride;
+        setting.AprsIsFilter = request.AprsIsFilter.Trim();
+        setting.DeduplicationWindowSeconds = request.DeduplicationWindowSeconds;
+
+        await db.SaveChangesAsync(ct);
+
+        // Signal AprsIsService to drop and re-establish connection with new settings.
+        reconnectTrigger.Trigger();
+
         return NoContent();
     }
 }

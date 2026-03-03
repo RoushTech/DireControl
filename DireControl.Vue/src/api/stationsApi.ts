@@ -106,3 +106,14 @@ export async function getStationSignal(callsign: string): Promise<SignalPointDto
 export async function updateOutboundPath(outboundPath: string): Promise<void> {
   await http.put('/api/v0/settings/outbound-path', { outboundPath })
 }
+
+export async function updateAprsIsSettings(payload: {
+  aprsIsEnabled: boolean
+  aprsIsHost: string
+  aprsIsPort: number
+  aprsIsPasscodeOverride: number | null
+  aprsIsFilter: string
+  deduplicationWindowSeconds: number
+}): Promise<void> {
+  await http.put('/api/v0/settings/aprs-is', payload)
+}

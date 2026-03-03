@@ -3,6 +3,8 @@ using AprsSharp.KissTnc;
 using AprsSharp.Shared;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Enums;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Services;
@@ -116,8 +118,42 @@ public sealed class KissTcpService(
             return;
         }
 
+        var colonIdx = rawPacket.IndexOf(':');
+        var infoField = colonIdx >= 0 ? rawPacket[(colonIdx + 1)..] : string.Empty;
+
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+
+        // Load dedup window
+        var setting = await db.UserSettings.FindAsync(new object[] { 1 }, ct);
+        var dedupWindowSeconds = setting?.DeduplicationWindowSeconds ?? 60;
+        var dedupWindow = DateTime.UtcNow.AddSeconds(-dedupWindowSeconds);
+
+        // If an APRS-IS copy arrived first, upgrade it to RF rather than inserting a duplicate.
+        var existingAprsIs = await db.Packets
+            .Where(p =>
+                p.StationCallsign == callsign &&
+                p.InfoField == infoField &&
+                p.Source == PacketSource.AprsIs &&
+                p.ReceivedAt >= dedupWindow)
+            .OrderByDescending(p => p.ReceivedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (existingAprsIs is not null)
+        {
+            existingAprsIs.Source = PacketSource.Rf;
+            var rfStation = await db.Stations.FindAsync(new object[] { callsign }, ct);
+            if (rfStation is not null)
+            {
+                rfStation.LastSeen = DateTime.UtcNow;
+                rfStation.LastHeardRf = DateTime.UtcNow;
+            }
+            await db.SaveChangesAsync(ct);
+            logger.LogDebug(
+                "RF upgrade: APRS-IS packet id={Id} from {Callsign} upgraded to RF.",
+                existingAprsIs.Id, callsign);
+            return;
+        }
 
         var station = await db.Stations.FindAsync(new object[] { callsign }, ct);
         if (station is null)
@@ -127,12 +163,14 @@ public sealed class KissTcpService(
                 Callsign = callsign,
                 FirstSeen = DateTime.UtcNow,
                 LastSeen = DateTime.UtcNow,
+                LastHeardRf = DateTime.UtcNow,
                 Symbol = "/-",
             });
         }
         else
         {
             station.LastSeen = DateTime.UtcNow;
+            station.LastHeardRf = DateTime.UtcNow;
         }
 
         db.Packets.Add(new Packet
@@ -140,6 +178,8 @@ public sealed class KissTcpService(
             StationCallsign = callsign,
             ReceivedAt = DateTime.UtcNow,
             RawPacket = rawPacket,
+            Source = PacketSource.Rf,
+            InfoField = infoField,
             KissChannel = kissChannel,
             // Direwolf's standard KISS TCP interface carries only the raw AX.25 frame
             // bytes — there is no signal-quality metadata (decode quality, frequency
@@ -150,7 +190,7 @@ public sealed class KissTcpService(
 
         await db.SaveChangesAsync(ct);
 
-        logger.LogDebug("Stored packet from {Callsign}: {RawPacket}", callsign, rawPacket);
+        logger.LogDebug("Stored RF packet from {Callsign}: {RawPacket}", callsign, rawPacket);
     }
 
     /// <summary>

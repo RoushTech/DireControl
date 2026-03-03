@@ -26,6 +26,8 @@ public sealed class StationDto
     public bool IsOnWatchList { get; init; }
     public string? GridSquare { get; init; }
     public HeardVia HeardVia { get; init; }
+    public DateTime? LastHeardRf { get; init; }
+    public DateTime? LastHeardAprsIs { get; init; }
 }
 
 public sealed class PacketDto
@@ -35,6 +37,7 @@ public sealed class PacketDto
     public DateTime ReceivedAt { get; init; }
     public required string RawPacket { get; init; }
     public PacketType ParsedType { get; init; }
+    public PacketSource Source { get; init; }
     public double? Latitude { get; init; }
     public double? Longitude { get; init; }
     public string Path { get; init; } = string.Empty;
@@ -105,6 +108,25 @@ public sealed class SettingsDto
     public int MaxRetryAttempts { get; init; }
     public int InitialRetryDelaySeconds { get; init; }
     public required string OutboundPath { get; init; }
+
+    // APRS-IS settings
+    public bool AprsIsEnabled { get; init; }
+    public required string AprsIsHost { get; init; }
+    public int AprsIsPort { get; init; }
+    public int? AprsIsPasscodeOverride { get; init; }
+    public int AprsIsPasscodeComputed { get; init; }
+    public required string AprsIsFilter { get; init; }
+    public int DeduplicationWindowSeconds { get; init; }
+}
+
+public sealed class UpdateAprsIsSettingsRequest
+{
+    public bool AprsIsEnabled { get; init; }
+    public required string AprsIsHost { get; init; }
+    public int AprsIsPort { get; init; }
+    public int? AprsIsPasscodeOverride { get; init; }
+    public required string AprsIsFilter { get; init; }
+    public int DeduplicationWindowSeconds { get; init; }
 }
 
 public sealed class TrackPointDto
@@ -135,6 +157,7 @@ public sealed class PacketBroadcastDto
     public int Id { get; init; }
     public required string Callsign { get; init; }
     public required string ParsedType { get; init; }
+    public PacketSource Source { get; init; }
     public DateTime ReceivedAt { get; init; }
     public double? Latitude { get; init; }
     public double? Longitude { get; init; }
@@ -305,6 +328,10 @@ public sealed class StatusDto
 {
     public bool DirewolfConnected { get; init; }
     public bool ApiOnline { get; init; } = true;
+    public required string AprsIsState { get; init; }
+    public string? AprsIsServerName { get; init; }
+    public string AprsIsFilter { get; init; } = string.Empty;
+    public long AprsIsSessionPacketCount { get; init; }
 }
 
 public sealed class SignalPointDto

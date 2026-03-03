@@ -372,6 +372,8 @@ public class StationsController(
         IsOnWatchList = s.IsOnWatchList,
         GridSquare = s.GridSquare,
         HeardVia = s.HeardVia,
+        LastHeardRf = s.LastHeardRf,
+        LastHeardAprsIs = s.LastHeardAprsIs,
     };
 
     private static System.Linq.Expressions.Expression<Func<DireControl.Data.Models.Packet, PacketDto>> ToPacketDto() => p => new PacketDto
@@ -381,6 +383,7 @@ public class StationsController(
         ReceivedAt = p.ReceivedAt,
         RawPacket = p.RawPacket,
         ParsedType = p.ParsedType,
+        Source = p.Source,
         Latitude = p.Latitude,
         Longitude = p.Longitude,
         Path = p.Path,
