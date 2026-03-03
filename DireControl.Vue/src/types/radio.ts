@@ -6,6 +6,9 @@ export interface RadioDto {
   fullCallsign: string
   channelNumber: number
   notes: string | null
+  beaconPath: string | null
+  beaconSymbol: string | null
+  beaconComment: string | null
   isActive: boolean
   expectedIntervalSeconds: number
   lastBeaconedAt: string | null
@@ -20,6 +23,9 @@ export interface CreateRadioRequest {
   ssid: string | null
   channelNumber: number
   notes: string | null
+  beaconPath: string | null
+  beaconSymbol: string | null
+  beaconComment: string | null
   expectedIntervalSeconds: number
 }
 
@@ -29,6 +35,9 @@ export interface UpdateRadioRequest {
   ssid: string | null
   channelNumber: number
   notes: string | null
+  beaconPath: string | null
+  beaconSymbol: string | null
+  beaconComment: string | null
   expectedIntervalSeconds: number
 }
 

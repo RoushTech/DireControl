@@ -1,4 +1,5 @@
 using DireControl.Api.Controllers.Models;
+using DireControl.Api.Services;
 using DireControl.Data;
 using DireControl.Data.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -8,7 +9,7 @@ namespace DireControl.Api.Controllers;
 
 [ApiController]
 [Route("api/v0/radios")]
-public class RadiosController(DireControlContext db) : ControllerBase
+public class RadiosController(DireControlContext db, BeaconService beaconService) : ControllerBase
 {
     // ─── List ──────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,9 @@ public class RadiosController(DireControlContext db) : ControllerBase
             Ssid = string.IsNullOrWhiteSpace(request.Ssid) ? null : request.Ssid.Trim(),
             ChannelNumber = request.ChannelNumber,
             Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
+            BeaconPath = string.IsNullOrWhiteSpace(request.BeaconPath) ? null : request.BeaconPath.Trim(),
+            BeaconSymbol = string.IsNullOrWhiteSpace(request.BeaconSymbol) ? null : request.BeaconSymbol.Trim(),
+            BeaconComment = string.IsNullOrWhiteSpace(request.BeaconComment) ? null : request.BeaconComment.Trim(),
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
             ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600,
@@ -142,6 +146,9 @@ public class RadiosController(DireControlContext db) : ControllerBase
         radio.Ssid = string.IsNullOrWhiteSpace(request.Ssid) ? null : request.Ssid.Trim();
         radio.ChannelNumber = request.ChannelNumber;
         radio.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
+        radio.BeaconPath = string.IsNullOrWhiteSpace(request.BeaconPath) ? null : request.BeaconPath.Trim();
+        radio.BeaconSymbol = string.IsNullOrWhiteSpace(request.BeaconSymbol) ? null : request.BeaconSymbol.Trim();
+        radio.BeaconComment = string.IsNullOrWhiteSpace(request.BeaconComment) ? null : request.BeaconComment.Trim();
         radio.ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600;
         radio.FullCallsign = Radio.ComputeFullCallsign(radio.Callsign, radio.Ssid);
 
@@ -188,6 +195,23 @@ public class RadiosController(DireControlContext db) : ControllerBase
 
         var now = DateTime.UtcNow;
         return Ok(ToDto(radio, [], [], [], now));
+    }
+
+    // ─── Beacon now ────────────────────────────────────────────────────────────
+
+    [HttpPost("{id}/beacon")]
+    public async Task<IActionResult> BeaconNow(string id, CancellationToken ct)
+    {
+        var radio = await db.Radios.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (radio is null) return NotFound();
+
+        var beacon = await beaconService.BeaconNowAsync(radio, ct);
+
+        return beacon is null
+            ? Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                detail: "Beacon could not be sent. Check that Direwolf is connected and home position is configured.")
+            : NoContent();
     }
 
     // ─── Last beacon ───────────────────────────────────────────────────────────
@@ -295,6 +319,9 @@ public class RadiosController(DireControlContext db) : ControllerBase
             FullCallsign = radio.FullCallsign,
             ChannelNumber = radio.ChannelNumber,
             Notes = radio.Notes,
+            BeaconPath = radio.BeaconPath,
+            BeaconSymbol = radio.BeaconSymbol,
+            BeaconComment = radio.BeaconComment,
             IsActive = radio.IsActive,
             ExpectedIntervalSeconds = radio.ExpectedIntervalSeconds,
             LastBeaconedAt = lastBeaconMap.ContainsKey(radio.Id) ? lastBeaconedAt : null,

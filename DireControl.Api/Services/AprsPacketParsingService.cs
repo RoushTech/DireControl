@@ -647,6 +647,21 @@ public sealed class AprsPacketParsingService(
 
     private async Task RecordOwnBeaconAsync(Radio radio, DbPacket packet, DireControlContext db, CancellationToken ct)
     {
+        // Deduplication: BeaconNowAsync records a HopCount=0 entry at send time.  When
+        // Direwolf's KISS echo arrives shortly afterwards it would create a duplicate.
+        // Suppress the echo if a matching entry already exists within 30 seconds.
+        var dedupWindow = packet.ReceivedAt.AddSeconds(-30);
+        var alreadyRecorded = await db.OwnBeacons
+            .AnyAsync(b => b.RadioId == radio.Id && b.HopCount == 0 && b.BeaconedAt >= dedupWindow, ct);
+
+        if (alreadyRecorded)
+        {
+            logger.LogDebug(
+                "Skipping duplicate own-beacon KISS echo for {Callsign} — already recorded within 30 s.",
+                radio.FullCallsign);
+            return;
+        }
+
         var beacon = new OwnBeacon
         {
             RadioId = radio.Id,

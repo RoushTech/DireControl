@@ -54,6 +54,7 @@ services
     .AddHostedService<AlertingService>()
     .AddHostedService<MessageRetryService>()
     .AddSingleton<KissConnectionHolder>()
+    .AddSingleton<BeaconService>()
     .AddSingleton<MessageSendingService>()
     .AddSingleton<PendingAlertChannel>()
     .AddSingleton<CallsignLookupService>()

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRadiosStore } from '@/stores/radiosStore'
 import BeaconHistoryModal from './BeaconHistoryModal.vue'
 import { useTick } from '@/composables/useTick'
+import { beaconNow } from '@/api/radiosApi'
 
 const radiosStore = useRadiosStore()
 
@@ -16,6 +17,23 @@ const historyRadioId = ref('')
 function openHistory(radioId: string) {
   historyRadioId.value = radioId
   historyOpen.value = true
+}
+
+// ─── Beacon Now ───────────────────────────────────────────────────────────────
+const beaconing = ref<Record<string, boolean>>({})
+const beaconError = ref<Record<string, string>>({})
+
+async function doBeaconNow(radioId: string) {
+  beaconing.value[radioId] = true
+  beaconError.value[radioId] = ''
+  try {
+    await beaconNow(radioId)
+  } catch {
+    beaconError.value[radioId] = 'Failed'
+    setTimeout(() => { beaconError.value[radioId] = '' }, 3000)
+  } finally {
+    beaconing.value[radioId] = false
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,6 +90,21 @@ function recentConfirmations(radioId: string) {
           class="text-caption text-success"
         >
           ✓ {{ conf.digipeater }} ({{ conf.secondsAfterBeacon }}s)
+        </span>
+      </div>
+      <div class="d-flex align-center mt-2">
+        <v-btn
+          size="x-small"
+          variant="tonal"
+          color="primary"
+          prepend-icon="mdi-access-point"
+          :loading="beaconing[radio.id]"
+          @click.stop="doBeaconNow(radio.id)"
+        >
+          Beacon Now
+        </v-btn>
+        <span v-if="beaconError[radio.id]" class="text-caption text-error ml-2">
+          {{ beaconError[radio.id] }}
         </span>
       </div>
     </div>

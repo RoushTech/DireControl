@@ -58,6 +58,9 @@ const rSsid = ref('')
 const rChannel = ref(0)
 const rExpectedInterval = ref(600)
 const rNotes = ref('')
+const rBeaconPath = ref('')
+const rBeaconSymbol = ref('')
+const rBeaconComment = ref('')
 
 const radioFormValid = computed(() =>
   rName.value.trim().length > 0 &&
@@ -97,6 +100,9 @@ function openAddRadio() {
   rChannel.value = 0
   rExpectedInterval.value = 600
   rNotes.value = ''
+  rBeaconPath.value = ''
+  rBeaconSymbol.value = ''
+  rBeaconComment.value = ''
   radioDialogOpen.value = true
 }
 
@@ -108,6 +114,9 @@ function openEditRadio(radio: RadioDto) {
   rChannel.value = radio.channelNumber
   rExpectedInterval.value = radio.expectedIntervalSeconds
   rNotes.value = radio.notes ?? ''
+  rBeaconPath.value = radio.beaconPath ?? ''
+  rBeaconSymbol.value = radio.beaconSymbol ?? ''
+  rBeaconComment.value = radio.beaconComment ?? ''
   radioDialogOpen.value = true
 }
 
@@ -120,6 +129,9 @@ async function saveRadio() {
     ssid: rSsid.value.trim() || null,
     channelNumber: rChannel.value,
     notes: rNotes.value.trim() || null,
+    beaconPath: rBeaconPath.value.trim() || null,
+    beaconSymbol: rBeaconSymbol.value.trim() || null,
+    beaconComment: rBeaconComment.value.trim() || null,
     expectedIntervalSeconds: rExpectedInterval.value,
   }
   try {
@@ -484,7 +496,36 @@ async function confirmDelete() {
             v-model="rNotes"
             label="Notes"
             density="compact"
+            class="mb-3"
           />
+          <div class="text-subtitle-2 font-weight-medium mb-2">Beacon Config (optional)</div>
+          <v-text-field
+            v-model="rBeaconPath"
+            label="Beacon path"
+            density="compact"
+            class="mb-2"
+            placeholder="e.g. WIDE1-1,WIDE2-1"
+            hint="Leave blank for direct (no digipeating)"
+            persistent-hint
+          />
+          <div class="d-flex ga-2">
+            <v-text-field
+              v-model="rBeaconSymbol"
+              label="Symbol"
+              density="compact"
+              placeholder="e.g. /-"
+              hint="Table+code, e.g. /- house"
+              persistent-hint
+              maxlength="2"
+              style="flex: 1"
+            />
+            <v-text-field
+              v-model="rBeaconComment"
+              label="Comment"
+              density="compact"
+              style="flex: 3"
+            />
+          </div>
         </v-card-text>
         <v-card-actions>
           <v-spacer />

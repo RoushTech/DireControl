@@ -48,3 +48,7 @@ export async function getBeaconHistory(id: string, limit = 50): Promise<OwnBeaco
   )
   return data
 }
+
+export async function beaconNow(id: string): Promise<void> {
+  await http.post(`/api/v0/radios/${encodeURIComponent(id)}/beacon`)
+}
