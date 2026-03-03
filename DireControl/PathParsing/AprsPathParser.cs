@@ -150,6 +150,9 @@ public static class AprsPathParser
     /// Generic aliases (WIDE1, WIDE2, RELAY, etc.) are never real hops.  When a starred
     /// generic alias immediately follows a real callsign, its name is stored as
     /// <see cref="ResolvedPathEntry.AliasUsed"/> on that preceding hop entry.
+    /// This covers both the standard form (<c>W4CAT-2*,WIDE2-1</c>) and the non-standard
+    /// form used by some digipeaters where the callsign is unstarred and the alias it
+    /// consumed carries the star (<c>W4CAT-2,WIDE2*</c>).
     /// </para>
     /// <para>
     /// Internet tokens (<c>q</c> codes, TCPIP, TCPXX, NOGATE, RFONLY) and the igate
@@ -176,8 +179,9 @@ public static class AprsPathParser
         bool internetSectionStarted = false;
         bool prevWasQCode = false;
 
-        foreach (var raw in viaEntries)
+        for (int i = 0; i < viaEntries.Count; i++)
         {
+            var raw      = viaEntries[i];
             var callsign = raw.TrimEnd('*').Trim();
 
             if (IsInternetToken(callsign))
@@ -200,7 +204,34 @@ public static class AprsPathParser
             var isUsed = raw.TrimEnd().EndsWith('*');
 
             if (!isUsed)
-                continue;  // unused alias request — not a hop, not metadata to record
+            {
+                if (IsGenericAlias(callsign))
+                    continue;  // unused alias request — not a hop, not metadata to record
+
+                // Unstarred real callsign.  Some digipeaters insert their own call
+                // (without '*') before the alias they consumed, producing a path
+                // segment like "W4CAT-2,WIDE2*" instead of the standard "W4CAT-2*,WIDE2-1".
+                // If the next entry is a starred generic alias, this callsign is that hop.
+                if (i + 1 < viaEntries.Count)
+                {
+                    var nextRaw      = viaEntries[i + 1];
+                    var nextCallsign = nextRaw.TrimEnd('*').Trim();
+                    if (nextRaw.TrimEnd().EndsWith('*') && IsGenericAlias(nextCallsign))
+                    {
+                        hops.Add(new ResolvedPathEntry
+                        {
+                            Callsign  = callsign,
+                            HopIndex  = hops.Count + 1,
+                            Known     = false,
+                            AliasUsed = nextCallsign,
+                        });
+                        i++;  // consume the starred alias — already recorded as AliasUsed
+                        continue;
+                    }
+                }
+
+                continue;  // unstarred real callsign with no starred alias following — skip
+            }
 
             if (string.IsNullOrWhiteSpace(callsign))
                 continue;
@@ -216,9 +247,9 @@ public static class AprsPathParser
             // Real callsign that was used — it's a hop
             hops.Add(new ResolvedPathEntry
             {
-                Callsign = callsign,
-                HopIndex = hops.Count + 1,  // 0 is reserved for the originating station
-                Known    = false,
+                Callsign  = callsign,
+                HopIndex  = hops.Count + 1,  // 0 is reserved for the originating station
+                Known     = false,
                 AliasUsed = null,
             });
         }

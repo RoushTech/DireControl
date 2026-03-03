@@ -439,6 +439,50 @@ public class PathParserTests
 
         Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
     }
+
+    // -------------------------------------------------------------------------
+    // "Digi-before-alias" pattern — unstarred callsign immediately before a
+    // starred generic alias, e.g. "W4CAT-2,WIDE2*".
+    // Some digipeaters write their own callsign (unstarred) then mark the alias
+    // they consumed instead of the more common "W4CAT-2*,WIDE2-1" convention.
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Exact real-world path reported by user:
+    /// NT4UX-2,WIDE2,W4CAT-2,WIDE2*,qAR,N8DEU-7
+    /// W4CAT-2 (unstarred) immediately precedes WIDE2* — it consumed that alias.
+    /// Should produce exactly one hop (W4CAT-2, AliasUsed=WIDE2) and IgateRfDigi.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_UnstarredDigiBeforeStarredAlias_CountedAsHop()
+    {
+        // APRS is TOCALL; WIDE2 unused; W4CAT-2 unstarred before WIDE2*; then igated
+        var rawPath = new List<string> { "APRS", "WIDE2", "W4CAT-2", "WIDE2*", "qAR", "N8DEU-7" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Equal(1, hopCount);
+        Assert.Single(hops);
+        Assert.Equal("W4CAT-2", hops[0].Callsign);
+        Assert.Equal(1,         hops[0].HopIndex);
+        Assert.Equal("WIDE2",   hops[0].AliasUsed);
+
+        Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
+    }
+
+    /// <summary>
+    /// Unstarred real callsign NOT followed by a starred generic alias must still
+    /// be treated as unused (direct packet, zero hops).
+    /// Path: APRS, W4CAT-2, WIDE2  — both unstarred, nothing consumed.
+    /// </summary>
+    [Fact]
+    public void ExtractViaHops_UnstarredDigiWithoutStarredAlias_NotCountedAsHop()
+    {
+        var rawPath = new List<string> { "APRS", "W4CAT-2", "WIDE2" };
+        var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
+
+        Assert.Empty(hops);
+        Assert.Equal(0, hopCount);
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -514,6 +558,13 @@ public class PathResolverTests
         new[] { "W1ABC", "W3UWU" },
         new[] { (string?)null, null },
         0, HeardVia.IgateRf)]
+
+    // Unstarred digi before starred alias — W4CAT-2,WIDE2* pattern (real-world report)
+    [InlineData(
+        "W1ABC>APRS,WIDE2,W4CAT-2,WIDE2*,qAR,N8DEU-7:!data",
+        new[] { "W1ABC", "W4CAT-2", "W3UWU" },
+        new[] { (string?)null, "WIDE2", null },
+        1, HeardVia.IgateRfDigi)]
 
     // NOGATE token — RF only, not internet
     [InlineData(
