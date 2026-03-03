@@ -324,7 +324,7 @@ function replyTo(message: InboxMessageDto) {
 </script>
 
 <template>
-  <v-container fluid class="pa-4 fill-height d-flex flex-column messages-panel">
+  <v-container fluid class="pa-4 d-flex flex-column messages-panel">
     <!-- Header row -->
     <v-row no-gutters align="center" class="mb-3">
       <v-col>

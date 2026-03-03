@@ -18,6 +18,9 @@ const initialTheme = storedTheme ?? (prefersDark ? 'dark' : 'light')
 const vuetify = createVuetify({
   components,
   directives,
+  display: {
+    mobileBreakpoint: 768,
+  },
   theme: {
     defaultTheme: initialTheme,
   },
