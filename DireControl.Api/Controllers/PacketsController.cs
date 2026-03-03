@@ -92,4 +92,49 @@ public class PacketsController(DireControlContext db) : ControllerBase
 
         return Ok(packets);
     }
+
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<PacketDto>>> GetSince(
+        [FromQuery] DateTime? since,
+        [FromQuery] int limit = 200,
+        CancellationToken ct = default)
+    {
+        var query = db.Packets.AsNoTracking();
+
+        if (since.HasValue)
+        {
+            var sinceUtc = since.Value.Kind == DateTimeKind.Utc
+                ? since.Value
+                : since.Value.ToUniversalTime();
+            query = query.Where(p => p.ReceivedAt >= sinceUtc);
+        }
+
+        var packets = await query
+            .OrderBy(p => p.ReceivedAt)
+            .Take(Math.Min(limit, 500))
+            .Select(p => new PacketDto
+            {
+                Id = p.Id,
+                StationCallsign = p.StationCallsign,
+                ReceivedAt = p.ReceivedAt,
+                RawPacket = p.RawPacket,
+                ParsedType = p.ParsedType,
+                Latitude = p.Latitude,
+                Longitude = p.Longitude,
+                Path = p.Path,
+                ResolvedPath = p.ResolvedPath,
+                HopCount = p.HopCount,
+                UnknownHopCount = p.UnknownHopCount,
+                IsDirectHeard = p.HopCount == 0,
+                Comment = p.Comment,
+                WeatherData = p.WeatherData,
+                TelemetryData = p.TelemetryData,
+                MessageData = p.MessageData,
+                SignalData = p.SignalData,
+                GridSquare = p.GridSquare,
+            })
+            .ToListAsync(ct);
+
+        return Ok(packets);
+    }
 }

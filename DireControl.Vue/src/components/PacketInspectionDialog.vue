@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import { useDisplay } from 'vuetify'
 import { getPacket } from '@/api/stationsApi'
 import {
   PacketType,
@@ -9,6 +10,8 @@ import {
   type ResolvedPathEntry,
 } from '@/types/packet'
 import { compassDir16 } from '@/utils/time'
+
+const { mobile } = useDisplay()
 
 const props = defineProps<{
   packetId: number | null
@@ -50,14 +53,23 @@ function onClose() {
 
 async function copyRaw() {
   if (!packet.value) return
+  const text = packet.value.rawPacket
   try {
-    await navigator.clipboard.writeText(packet.value.rawPacket)
+    await navigator.clipboard.writeText(text)
     copyFeedback.value = true
-    setTimeout(() => {
-      copyFeedback.value = false
-    }, 1500)
   } catch {
-    // clipboard not available
+    // Fallback for non-secure contexts (HTTP) or denied permission
+    const el = document.createElement('textarea')
+    el.value = text
+    el.style.position = 'fixed'
+    el.style.opacity = '0'
+    document.body.appendChild(el)
+    el.select()
+    document.execCommand('copy')
+    document.body.removeChild(el)
+    copyFeedback.value = true
+  } finally {
+    setTimeout(() => { copyFeedback.value = false }, 1500)
   }
 }
 
@@ -116,12 +128,13 @@ function heardViaLabel(p: PacketDto): string {
 <template>
   <v-dialog
     :model-value="isOpen"
-    max-width="680"
+    :max-width="mobile ? undefined : '680'"
+    :fullscreen="mobile"
     scrollable
     @update:model-value="v => !v && onClose()"
     @keydown.esc="onClose()"
   >
-    <v-card style="max-height: 80vh; display: flex; flex-direction: column;">
+    <v-card :style="mobile ? 'display:flex;flex-direction:column' : 'max-height:80vh;display:flex;flex-direction:column'">
       <!-- Header -->
       <div class="dialog-header">
         <div class="d-flex align-center ga-2 flex-wrap">
@@ -133,7 +146,7 @@ function heardViaLabel(p: PacketDto): string {
         </div>
         <div class="d-flex align-center ga-1">
           <v-btn
-            size="x-small"
+            :size="mobile ? 'small' : 'x-small'"
             variant="tonal"
             :color="copyFeedback ? 'success' : 'default'"
             :disabled="!packet"
@@ -350,6 +363,18 @@ function heardViaLabel(p: PacketDto): string {
           Could not load packet.
         </div>
       </v-card-text>
+
+      <!-- Full-width Copy Raw for mobile -->
+      <v-card-actions v-if="mobile && packet" class="pa-3">
+        <v-btn
+          :color="copyFeedback ? 'success' : 'primary'"
+          variant="tonal"
+          block
+          @click="copyRaw"
+        >
+          {{ copyFeedback ? 'Copied ✓' : 'Copy Raw Packet' }}
+        </v-btn>
+      </v-card-actions>
     </v-card>
   </v-dialog>
 </template>

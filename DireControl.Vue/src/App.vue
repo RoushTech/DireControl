@@ -22,12 +22,12 @@ const apiOffline = ref(false)
 const direwolfDisconnected = ref(false)
 const showShortcutsDialog = ref(false)
 const version = ref<string | null>(null)
+const mobileDrawerOpen = ref(false)
 
 const shortcuts = [
   { key: 'M', description: 'Open compose message' },
   { key: 'F', description: 'Focus station search' },
   { key: 'B', description: 'Go to Beacon Stream' },
-  { key: 'R', description: 'Go to Replay' },
   { key: 'Esc', description: 'Close panel / deselect station' },
   { key: '?', description: 'Show this shortcuts overlay' },
 ]
@@ -92,11 +92,6 @@ function onKeydown(e: KeyboardEvent) {
       e.preventDefault()
       router.push('/beacons')
       break
-    case 'r':
-    case 'R':
-      e.preventDefault()
-      router.push('/replay')
-      break
   }
 }
 
@@ -136,39 +131,113 @@ onUnmounted(() => {
 
 <template>
   <v-app>
+    <!-- Mobile navigation drawer -->
+    <v-navigation-drawer
+      v-if="!route.meta.isPopOut"
+      v-model="mobileDrawerOpen"
+      temporary
+      location="left"
+    >
+      <v-list density="compact" nav>
+        <v-list-item
+          to="/"
+          prepend-icon="mdi-map"
+          title="Map"
+          @click="mobileDrawerOpen = false"
+        />
+        <v-list-item
+          to="/beacons"
+          prepend-icon="mdi-radio-tower"
+          title="Beacon Stream"
+          @click="mobileDrawerOpen = false"
+        />
+        <v-list-item
+          to="/messages"
+          prepend-icon="mdi-message-text"
+          title="Messages"
+          @click="mobileDrawerOpen = false"
+        >
+          <template #append>
+            <v-badge
+              v-if="messagesStore.unreadCount > 0"
+              :content="messagesStore.unreadCount"
+              color="error"
+              inline
+            />
+          </template>
+        </v-list-item>
+        <v-list-item
+          to="/alerts"
+          prepend-icon="mdi-bell"
+          title="Alerts"
+          @click="mobileDrawerOpen = false"
+        >
+          <template #append>
+            <v-badge
+              v-if="alertsStore.unacknowledgedCount > 0"
+              :content="alertsStore.unacknowledgedCount"
+              color="warning"
+              inline
+            />
+          </template>
+        </v-list-item>
+        <v-list-item
+          to="/statistics"
+          prepend-icon="mdi-chart-bar"
+          title="Statistics"
+          @click="mobileDrawerOpen = false"
+        />
+        <v-list-item
+          to="/settings"
+          prepend-icon="mdi-cog"
+          title="Settings"
+          @click="mobileDrawerOpen = false"
+        />
+      </v-list>
+    </v-navigation-drawer>
+
     <!-- App bar — hidden in pop-out windows -->
     <v-app-bar v-if="!route.meta.isPopOut" density="compact" color="surface">
+      <!-- Hamburger button — mobile only -->
+      <v-app-bar-nav-icon
+        class="d-flex d-mobile-nav-hide"
+        size="small"
+        @click="mobileDrawerOpen = !mobileDrawerOpen"
+      />
+
       <v-app-bar-title class="font-weight-bold">
         DireControl
         <span v-if="version" class="text-caption text-medium-emphasis ml-2">{{ version }}</span>
       </v-app-bar-title>
       <template #append>
-        <v-btn to="/" variant="text" size="small">Map</v-btn>
-        <v-btn to="/beacons" variant="text" size="small">Beacon Stream</v-btn>
+        <!-- Desktop nav — hidden on mobile -->
+        <div class="desktop-nav">
+          <v-btn to="/" variant="text" size="small">Map</v-btn>
+          <v-btn to="/beacons" variant="text" size="small">Beacon Stream</v-btn>
 
-        <v-btn to="/messages" variant="text" size="small" class="position-relative">
-          Messages
-          <v-badge
-            v-if="messagesStore.unreadCount > 0"
-            :content="messagesStore.unreadCount"
-            color="error"
-            floating
-          />
-        </v-btn>
+          <v-btn to="/messages" variant="text" size="small" class="position-relative">
+            Messages
+            <v-badge
+              v-if="messagesStore.unreadCount > 0"
+              :content="messagesStore.unreadCount"
+              color="error"
+              floating
+            />
+          </v-btn>
 
-        <v-btn to="/alerts" variant="text" size="small" class="position-relative">
-          Alerts
-          <v-badge
-            v-if="alertsStore.unacknowledgedCount > 0"
-            :content="alertsStore.unacknowledgedCount"
-            color="warning"
-            floating
-          />
-        </v-btn>
+          <v-btn to="/alerts" variant="text" size="small" class="position-relative">
+            Alerts
+            <v-badge
+              v-if="alertsStore.unacknowledgedCount > 0"
+              :content="alertsStore.unacknowledgedCount"
+              color="warning"
+              floating
+            />
+          </v-btn>
 
-        <v-btn to="/replay" variant="text" size="small">Replay</v-btn>
-        <v-btn to="/statistics" variant="text" size="small">Statistics</v-btn>
-        <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
+          <v-btn to="/statistics" variant="text" size="small">Statistics</v-btn>
+          <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
+        </div>
 
         <v-btn
           :icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
@@ -183,6 +252,7 @@ onUnmounted(() => {
           variant="text"
           size="small"
           aria-label="Keyboard shortcuts"
+          class="desktop-nav"
           @click="showShortcutsDialog = true"
         />
       </template>
@@ -295,5 +365,26 @@ body,
   font-family: monospace;
   font-size: 0.875em;
   background: rgba(var(--v-theme-surface-variant), 0.5);
+}
+
+/* Desktop nav: shown on wide screens, hidden on mobile */
+.desktop-nav {
+  display: flex;
+  align-items: center;
+}
+
+/* Hamburger: hidden on desktop, shown on mobile */
+.d-mobile-nav-hide {
+  display: none !important;
+}
+
+@media (max-width: 768px) {
+  .desktop-nav {
+    display: none !important;
+  }
+
+  .d-mobile-nav-hide {
+    display: inline-flex !important;
+  }
 }
 </style>

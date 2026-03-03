@@ -818,4 +818,11 @@ async function confirmDelete() {
 .section-header {
   margin-top: 8px;
 }
+
+@media (max-width: 768px) {
+  .settings-view {
+    max-width: 100%;
+    width: 100%;
+  }
+}
 </style>

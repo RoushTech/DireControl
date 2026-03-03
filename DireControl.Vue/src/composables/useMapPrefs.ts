@@ -1,0 +1,22 @@
+import { ref, watch, type Ref } from 'vue'
+
+function pref<T>(key: string, defaultVal: T): Ref<T> {
+  const stored = localStorage.getItem(`mapPrefs.${key}`)
+  const ref_ = ref<T>(stored !== null ? (JSON.parse(stored) as T) : defaultVal)
+  watch(ref_, (val) => localStorage.setItem(`mapPrefs.${key}`, JSON.stringify(val)))
+  return ref_ as Ref<T>
+}
+
+export function useMapPrefs() {
+  return {
+    tracks: pref('tracks', true),
+    estPos: pref('estPos', true),
+    stale: pref('stale', true),
+    zones: pref('zones', false),
+    heatmap: pref('heatmap', false),
+    coverage: pref('coverage', false),
+    rangeRings: pref('rangeRings', false),
+    ringDistance: pref('ringDistance', 25),
+    ringPanelOpen: pref('ringPanelOpen', false),
+  }
+}

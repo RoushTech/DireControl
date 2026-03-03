@@ -40,6 +40,13 @@ export async function getRecentPackets(): Promise<PacketDto[]> {
   return data;
 }
 
+export async function getPacketsSince(since: string, limit = 200): Promise<PacketDto[]> {
+  const { data } = await http.get<PacketDto[]>("/api/v0/packets", {
+    params: { since, limit },
+  });
+  return data;
+}
+
 export async function getPacket(id: number): Promise<PacketDto> {
   const { data } = await http.get<PacketDto>(`/api/v0/packets/${id}`);
   return data;

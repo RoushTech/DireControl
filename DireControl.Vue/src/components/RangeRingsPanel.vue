@@ -2,11 +2,11 @@
 import { ref, watch } from 'vue'
 import { useUnits } from '@/composables/useUnits'
 
-const expanded = ref(true)
 const { distanceUnit } = useUnits()
 const showRings = defineModel<boolean>('showRings', { required: true })
 // distances are always stored internally in km
 const distances = defineModel<number[]>('distances', { required: true })
+const expanded = defineModel<boolean>('expanded', { default: false })
 
 // Convert internal km value to the current display unit for editing
 function toDisplay(km: number): string {

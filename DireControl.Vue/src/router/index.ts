@@ -51,11 +51,6 @@ const router = createRouter({
       component: () => import('@/views/BeaconStreamView.vue'),
       meta: { isPopOut: true },
     },
-    {
-      path: '/replay',
-      name: 'replay',
-      component: () => import('@/views/ReplayView.vue'),
-    },
   ],
 })
 

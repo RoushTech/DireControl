@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
-import { useTheme } from 'vuetify'
+import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
 import {
@@ -17,6 +17,7 @@ import type { TileProviderConfig } from '@/types/map'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
 import { useUnits } from '@/composables/useUnits'
+import { useMapPrefs } from '@/composables/useMapPrefs'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
 import StationDetailPanel from '@/components/StationDetailPanel.vue'
 import StationListSidebar from '@/components/StationListSidebar.vue'
@@ -134,7 +135,18 @@ const selectionStore = useStationSelectionStore()
 const beaconStore = useBeaconStreamStore()
 const radiosStore = useRadiosStore()
 const theme = useTheme()
+const { mobile } = useDisplay()
 const { distanceUnit, formatDistance } = useUnits()
+const {
+  tracks: showTracks,
+  estPos: showGhostMarkers,
+  stale: showStaleStations,
+  zones: showOverlays,
+  heatmap: showHeatmap,
+  coverage: showCoverage,
+  rangeRings: showRings,
+  ringPanelOpen,
+} = useMapPrefs()
 
 const mapContainer = ref<HTMLDivElement>()
 const sidebarRef = ref<InstanceType<typeof StationListSidebar> | null>(null)
@@ -176,12 +188,15 @@ const detailRefreshKey = ref(0)
 const stationsList = ref<StationDto[]>([])
 const sessionPacketCounts = ref<Record<string, number>>({})
 
+// Mobile-specific sheet/menu state
+const mobileLayerMenuOpen = ref(false)
+const mobileStationSheetOpen = ref(false)
+
 // Highlight marker for packet position
 let highlightMarker: L.CircleMarker | null = null
 let highlightTimeout: ReturnType<typeof setTimeout> | null = null
 
 // Movement tracks state
-const showTracks = ref(false)
 const trackLayers = new Map<string, L.LayerGroup>()
 
 // Packet path visualisation state
@@ -191,7 +206,6 @@ type PathEntry = { group: L.LayerGroup; fadeTimer: ReturnType<typeof setTimeout>
 const activePaths = new Map<string, PathEntry>()
 
 // Estimated position (ghost marker) state
-const showGhostMarkers = ref(true)
 const ghostLayers = new Map<string, L.LayerGroup>()
 let ghostUpdateInterval: ReturnType<typeof setInterval> | null = null
 let staleDecayInterval: ReturnType<typeof setInterval> | null = null
@@ -199,11 +213,9 @@ let staleDecayInterval: ReturnType<typeof setInterval> | null = null
 // Stale station state
 const staleStationCache = new Map<string, StationDto>()
 const staleMarkers = new Map<string, L.Marker>()
-const showStaleStations = ref(false)
 const staleStationsList = ref<StationDto[]>([])
 
 // Geofence / proximity-rule circle overlays
-const showOverlays = ref(false)
 let overlayLayerGroup: L.LayerGroup | null = null
 
 // Settings cache
@@ -230,7 +242,6 @@ function loadRingDistancesFromStorage(): number[] {
   }
   return [5, 10, 25]
 }
-const showRings = ref(false)
 const ringDistances = ref<number[]>(loadRingDistancesFromStorage())
 
 // Migrate ring distances stored as miles (values ≤ 100 and no previously saved km values
@@ -246,13 +257,11 @@ const ringDistances = ref<number[]>(loadRingDistancesFromStorage())
 let ringLayerGroup: L.LayerGroup | null = null
 
 // Heatmap state
-const showHeatmap = ref(false)
 const heatmapLoading = ref(false)
 let heatmapLayer: L.HeatLayer | null = null
 let heatmapPositions: [number, number][] | null = null
 
 // Coverage state
-const showCoverage = ref(false)
 const coverageLoading = ref(false)
 let coverageLayerGroup: L.LayerGroup | null = null
 let coverageData: CoverageGridSquareDto[] | null = null
@@ -1591,7 +1600,10 @@ onMounted(async () => {
 
   // Draw home station marker; show banner + start poll if position not known yet
   await drawHomeMarker()
-  if (!settingsCache?.homePosition) {
+  if (settingsCache?.homePosition) {
+    // Center map on home position at zoom 9 on every page load (issue #32 item 1)
+    map.value.setView([settingsCache.homePosition.lat, settingsCache.homePosition.lon], 9)
+  } else {
     showNoHomePositionBanner.value = true
     homePositionPollInterval = setInterval(checkHomePosition, 60_000)
   }
@@ -1603,6 +1615,37 @@ onMounted(async () => {
   // Initial stale decay pass + periodic update every 60 s
   updateStaleDecayClasses()
   staleDecayInterval = setInterval(updateStaleDecayClasses, 60_000)
+
+  // Restore persisted layer states (issue #32 item 2)
+  if (showRings.value) await drawRings()
+  if (showOverlays.value) await loadAndDrawOverlays()
+  if (showHeatmap.value) {
+    heatmapLoading.value = true
+    try {
+      if (!heatmapPositions) {
+        const positions = await getPacketPositions()
+        heatmapPositions = positions.map(p => [p.latitude, p.longitude] as [number, number])
+      }
+      if (map.value) {
+        heatmapLayer = L.heatLayer(heatmapPositions, { radius: 18, blur: 15, maxZoom: 17, minOpacity: 0.3 }).addTo(map.value)
+      }
+    } catch {
+      showHeatmap.value = false
+    } finally {
+      heatmapLoading.value = false
+    }
+  }
+  if (showCoverage.value) {
+    coverageLoading.value = true
+    try {
+      if (!coverageData) coverageData = await getCoverageGridSquares()
+      drawCoverage()
+    } catch {
+      showCoverage.value = false
+    } finally {
+      coverageLoading.value = false
+    }
+  }
 
   // Handle pending selection (e.g. navigation from BeaconStreamView)
   if (selectionStore.selectedCallsign) {
@@ -1674,8 +1717,8 @@ defineExpose({ TILE_PROVIDERS })
 
 <template>
   <div class="map-layout">
-    <!-- Left sidebar -->
-    <div class="sidebar-left" :class="{ 'sidebar-open': showSidebar }">
+    <!-- Left sidebar (desktop only) -->
+    <div v-if="!mobile" class="sidebar-left" :class="{ 'sidebar-open': showSidebar }">
       <StationListSidebar
         ref="sidebarRef"
         :stations="stationsList"
@@ -1714,8 +1757,9 @@ defineExpose({ TILE_PROVIDERS })
         @update:selected="setTileProvider"
       />
 
-      <!-- Sidebar toggle -->
+      <!-- Sidebar toggle (desktop only) -->
       <v-btn
+        v-if="!mobile"
         class="sidebar-toggle-btn"
         :icon="showSidebar ? 'mdi-chevron-left' : 'mdi-chevron-right'"
         size="small"
@@ -1726,6 +1770,7 @@ defineExpose({ TILE_PROVIDERS })
 
       <!-- Track toggle -->
       <v-btn
+        v-if="!mobile"
         class="track-toggle-btn"
         :color="showTracks ? 'primary' : 'grey-darken-1'"
         size="small"
@@ -1738,6 +1783,7 @@ defineExpose({ TILE_PROVIDERS })
 
       <!-- Ghost marker toggle -->
       <v-btn
+        v-if="!mobile"
         class="ghost-toggle-btn"
         :color="showGhostMarkers ? 'indigo' : 'grey-darken-1'"
         size="small"
@@ -1750,6 +1796,7 @@ defineExpose({ TILE_PROVIDERS })
 
       <!-- Stale stations toggle -->
       <v-btn
+        v-if="!mobile"
         class="stale-toggle-btn"
         :color="showStaleStations ? 'brown-lighten-1' : 'grey-darken-1'"
         size="small"
@@ -1762,6 +1809,7 @@ defineExpose({ TILE_PROVIDERS })
 
       <!-- Overlays toggle (geofences + proximity rules) -->
       <v-btn
+        v-if="!mobile"
         class="overlays-toggle-btn"
         :color="showOverlays ? 'teal-darken-1' : 'grey-darken-1'"
         size="small"
@@ -1774,6 +1822,7 @@ defineExpose({ TILE_PROVIDERS })
 
       <!-- Heatmap toggle -->
       <v-btn
+        v-if="!mobile"
         class="heatmap-toggle-btn"
         :color="showHeatmap ? 'deep-orange-darken-1' : 'grey-darken-1'"
         :loading="heatmapLoading"
@@ -1787,6 +1836,7 @@ defineExpose({ TILE_PROVIDERS })
 
       <!-- Coverage map toggle -->
       <v-btn
+        v-if="!mobile"
         class="coverage-toggle-btn"
         :color="showCoverage ? 'green-darken-2' : 'grey-darken-1'"
         :loading="coverageLoading"
@@ -1809,17 +1859,78 @@ defineExpose({ TILE_PROVIDERS })
         @click="openPopOut"
       />
 
-      <!-- Range rings panel -->
-      <div class="range-rings-container">
+      <!-- Mobile: layer menu button (⋮) -->
+      <v-menu v-if="mobile" v-model="mobileLayerMenuOpen" location="bottom start" :close-on-content-click="false">
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            class="mobile-layer-btn"
+            color="surface"
+            size="small"
+            variant="elevated"
+            icon="mdi-layers"
+            title="Layers"
+          />
+        </template>
+        <v-list density="compact" min-width="220">
+          <v-list-item @click="toggleTracks">
+            <template #prepend><v-icon :color="showTracks ? 'primary' : 'grey'">mdi-map-marker-path</v-icon></template>
+            <v-list-item-title>{{ showTracks ? 'Hide Tracks' : 'Show Tracks' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item @click="toggleGhostMarkers">
+            <template #prepend><v-icon :color="showGhostMarkers ? 'indigo' : 'grey'">mdi-map-marker-question</v-icon></template>
+            <v-list-item-title>{{ showGhostMarkers ? 'Hide Est. Positions' : 'Show Est. Positions' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item @click="toggleStaleStations">
+            <template #prepend><v-icon :color="showStaleStations ? 'brown-lighten-1' : 'grey'">mdi-clock-alert-outline</v-icon></template>
+            <v-list-item-title>{{ showStaleStations ? 'Hide Stale' : 'Show Stale' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item @click="toggleOverlays">
+            <template #prepend><v-icon :color="showOverlays ? 'teal-darken-1' : 'grey'">mdi-layers</v-icon></template>
+            <v-list-item-title>{{ showOverlays ? 'Hide Zones' : 'Show Zones' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item @click="toggleHeatmap">
+            <template #prepend><v-icon :color="showHeatmap ? 'deep-orange-darken-1' : 'grey'">mdi-fire</v-icon></template>
+            <v-list-item-title>{{ showHeatmap ? 'Hide Heatmap' : 'Heatmap' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item @click="toggleCoverage">
+            <template #prepend><v-icon :color="showCoverage ? 'green-darken-2' : 'grey'">mdi-grid</v-icon></template>
+            <v-list-item-title>{{ showCoverage ? 'Hide Coverage' : 'Coverage Grid' }}</v-list-item-title>
+          </v-list-item>
+          <v-divider class="my-1" />
+          <v-list-item @click="showRings = !showRings">
+            <template #prepend><v-icon :color="showRings ? 'blue-darken-1' : 'grey'">mdi-circle-double</v-icon></template>
+            <v-list-item-title>{{ showRings ? 'Hide Range Rings' : 'Show Range Rings' }}</v-list-item-title>
+          </v-list-item>
+        </v-list>
+      </v-menu>
+
+      <!-- Mobile: station list sheet trigger -->
+      <v-btn
+        v-if="mobile"
+        class="mobile-stations-btn"
+        color="surface"
+        size="small"
+        variant="elevated"
+        prepend-icon="mdi-format-list-bulleted"
+        @click="mobileStationSheetOpen = true"
+      >
+        Stations
+      </v-btn>
+
+      <!-- Range rings panel (desktop only) -->
+      <div v-if="!mobile" class="range-rings-container">
         <RangeRingsPanel
           v-model:show-rings="showRings"
           v-model:distances="ringDistances"
+          v-model:expanded="ringPanelOpen"
         />
       </div>
     </div>
 
-    <!-- Right detail panel -->
+    <!-- Right detail panel (desktop only) -->
     <div
+      v-if="!mobile"
       class="panel-right"
       :class="{ 'panel-open': selectionStore.selectedCallsign, 'panel-resizing': isResizing }"
       :style="selectionStore.selectedCallsign ? { width: panelWidth + 'px' } : undefined"
@@ -1833,6 +1944,48 @@ defineExpose({ TILE_PROVIDERS })
       />
     </div>
   </div>
+
+  <!-- Mobile: station list bottom sheet -->
+  <v-bottom-sheet v-if="mobile" v-model="mobileStationSheetOpen" max-height="70vh">
+    <v-card>
+      <v-card-title class="d-flex align-center">
+        Stations
+        <v-spacer />
+        <v-btn icon="mdi-close" size="small" variant="text" @click="mobileStationSheetOpen = false" />
+      </v-card-title>
+      <v-divider />
+      <div style="overflow-y: auto; max-height: calc(70vh - 60px)">
+        <StationListSidebar
+          :stations="stationsList"
+          :packet-counts="sessionPacketCounts"
+          :selected-callsign="selectionStore.selectedCallsign"
+          :stale-stations="staleStationsList"
+          :show-stale="showStaleStations"
+          @select-station="(cs) => { onSidebarSelectStation(cs); mobileStationSheetOpen = false }"
+          @update:show-stale="showStaleStations = $event; $event ? showCachedStaleMarkers() : hideStaleMarkers()"
+        />
+      </div>
+    </v-card>
+  </v-bottom-sheet>
+
+  <!-- Mobile: station detail bottom sheet -->
+  <v-bottom-sheet
+    v-if="mobile"
+    :model-value="!!selectionStore.selectedCallsign"
+    max-height="65vh"
+    @update:model-value="v => !v && onDetailClose()"
+  >
+    <v-card style="height: 65vh; display: flex; flex-direction: column;">
+      <div style="overflow-y: auto; flex: 1;">
+        <StationDetailPanel
+          :callsign="selectionStore.selectedCallsign"
+          :refresh-key="detailRefreshKey"
+          @close="onDetailClose"
+          @highlight-position="onHighlightPosition"
+        />
+      </div>
+    </v-card>
+  </v-bottom-sheet>
 
   <!-- Tile provider fallback notification -->
   <v-snackbar
@@ -1970,6 +2123,22 @@ defineExpose({ TILE_PROVIDERS })
   position: absolute;
   top: 50px;
   left: 10px;
+  z-index: 1000;
+}
+
+/* Mobile controls */
+.mobile-layer-btn {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1000;
+}
+
+.mobile-stations-btn {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 1000;
 }
 </style>

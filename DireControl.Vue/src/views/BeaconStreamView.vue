@@ -8,7 +8,7 @@ import {
 } from '@microsoft/signalr'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 import { useStationSelectionStore } from '@/stores/stationSelection'
-import { getRecentPackets } from '@/api/stationsApi'
+import { getPacketsSince } from '@/api/stationsApi'
 import {
   PacketType,
   PACKET_TYPE_LABELS,
@@ -82,11 +82,10 @@ function onDialogSelectStation(callsign: string) {
 
 async function seedFromApi() {
   try {
-    const recent = await getRecentPackets()
-    const sorted = [...recent].sort(
-      (a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
-    )
-    store.seedFromApi(sorted.map(packetDtoToStreamEntry))
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const packets = await getPacketsSince(since, 200)
+    // API returns ascending (oldest first) — seed in that order so newest is at bottom
+    store.seedFromApi(packets.map(packetDtoToStreamEntry))
   } catch {
     // ignore
   }
@@ -143,37 +142,43 @@ function openPopOut() {
   <div class="beacon-view">
     <!-- Toolbar -->
     <div class="beacon-toolbar">
-      <div class="d-flex align-center ga-2 flex-wrap">
-        <v-text-field
-          ref="filterFieldRef"
-          v-model="store.callsignFilter"
-          placeholder="Callsign filter"
-          density="compact"
-          variant="outlined"
-          hide-details
-          clearable
-          style="max-width: 160px"
-        />
-        <v-select
-          v-model="store.typeFilter"
-          :items="packetTypeOptions"
-          item-title="label"
-          item-value="value"
-          label="Type"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="max-width: 140px"
-        />
-        <v-text-field
-          v-model="store.textFilter"
-          placeholder="Search packets…"
-          density="compact"
-          variant="outlined"
-          hide-details
-          clearable
-          style="max-width: 200px"
-        />
+      <div class="beacon-filters">
+        <div class="beacon-filter-row">
+          <v-text-field
+            ref="filterFieldRef"
+            v-model="store.callsignFilter"
+            placeholder="Callsign filter"
+            density="compact"
+            variant="outlined"
+            hide-details
+            clearable
+            class="beacon-filter-input"
+          />
+        </div>
+        <div class="beacon-filter-row">
+          <v-text-field
+            v-model="store.textFilter"
+            placeholder="Search packets…"
+            density="compact"
+            variant="outlined"
+            hide-details
+            clearable
+            class="beacon-filter-input"
+          />
+        </div>
+        <div class="beacon-filter-row">
+          <v-select
+            v-model="store.typeFilter"
+            :items="packetTypeOptions"
+            item-title="label"
+            item-value="value"
+            label="Type"
+            density="compact"
+            variant="outlined"
+            hide-details
+            class="beacon-filter-input"
+          />
+        </div>
       </div>
 
       <div class="d-flex align-center ga-2">
@@ -286,12 +291,29 @@ function openPopOut() {
 
 .beacon-toolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 8px 12px;
   gap: 8px;
   flex-shrink: 0;
-  flex-wrap: wrap;
+}
+
+.beacon-filters {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.beacon-filter-row {
+  width: 100%;
+}
+
+.beacon-filter-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
 }
 
 .beacon-header {
