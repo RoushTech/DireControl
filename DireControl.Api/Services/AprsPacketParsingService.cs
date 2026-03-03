@@ -303,19 +303,33 @@ public sealed class AprsPacketParsingService(
                     existing.LastComputedAt = now;
                 }
 
-                // Recompute HeardVia from last 10 packets for this station
-                var recentHopCounts = await db.Packets
+                // Recompute HeardVia from last 10 packets for this station.
+                // Pull both HopCount and Path so each packet can be classified independently.
+                var recentPacketData = await db.Packets
                     .Where(p => p.StationCallsign == callsign)
                     .OrderByDescending(p => p.ReceivedAt)
                     .Take(10)
-                    .Select(p => p.HopCount)
+                    .Select(p => new { p.HopCount, p.Path })
                     .ToListAsync(ct);
 
-                if (recentHopCounts.Count > 0)
+                if (recentPacketData.Count > 0)
                 {
-                    station.HeardVia = recentHopCounts.All(h => h == 0) ? HeardVia.Direct
-                        : recentHopCounts.All(h => h > 0) ? HeardVia.Digi
-                        : HeardVia.DirectAndDigi;
+                    var perPacketVias = recentPacketData
+                        .Select(p =>
+                        {
+                            IReadOnlyList<string> entries = string.IsNullOrEmpty(p.Path)
+                                ? []
+                                : p.Path.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                            return AprsPathParser.ClassifyHeardVia(entries, p.HopCount);
+                        })
+                        .ToList();
+
+                    var hasDirectRf = perPacketVias.Any(v => v == HeardVia.Direct);
+                    var hasDigi     = perPacketVias.Any(v => v == HeardVia.Digi);
+
+                    station.HeardVia = hasDirectRf && hasDigi
+                        ? HeardVia.DirectAndDigi
+                        : perPacketVias[0];  // most recent packet's classification
                 }
 
                 await db.SaveChangesAsync(ct);

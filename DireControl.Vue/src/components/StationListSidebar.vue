@@ -66,12 +66,18 @@ const heardViaLabel: Partial<Record<HeardVia, string>> = {
   [HeardVia.Direct]: 'Direct',
   [HeardVia.Digi]: 'Digi',
   [HeardVia.DirectAndDigi]: 'D+D',
+  [HeardVia.IgateRf]: 'iGate',
+  [HeardVia.IgateRfDigi]: 'iGate+D',
+  [HeardVia.Internet]: 'Internet',
 }
 
 const heardViaColor: Partial<Record<HeardVia, string>> = {
   [HeardVia.Direct]: 'green',
   [HeardVia.Digi]: 'amber-darken-2',
   [HeardVia.DirectAndDigi]: 'teal',
+  [HeardVia.IgateRf]: 'blue',
+  [HeardVia.IgateRfDigi]: 'purple',
+  [HeardVia.Internet]: 'grey',
 }
 
 function symbolStyle(s: StationDto) {

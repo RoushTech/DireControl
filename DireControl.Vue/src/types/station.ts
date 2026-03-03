@@ -12,6 +12,9 @@ export enum HeardVia {
   Direct = 1,
   Digi = 2,
   DirectAndDigi = 3,
+  Internet = 4,
+  IgateRf = 5,
+  IgateRfDigi = 6,
 }
 
 export interface QrzLookupData {

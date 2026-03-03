@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using AprsSharp.AprsParser;
+using DireControl.Enums;
 using DireControl.PathParsing;
 using Xunit;
 
@@ -437,5 +438,113 @@ public class PathParserTests
         Assert.Equal("WIDE2",   hops[0].AliasUsed);
 
         Assert.DoesNotContain(hops, h => AprsPathParser.IsGenericAlias(h.Callsign));
+    }
+}
+
+// -------------------------------------------------------------------------
+// PathResolver.Resolve — full-path classification including source and home
+// -------------------------------------------------------------------------
+
+public class PathResolverTests
+{
+    // No station coordinates needed for these tests; pass null for stationLookup.
+    private static readonly IReadOnlyDictionary<string, (double Lat, double Lon)>? MockStations = null;
+
+    [Theory]
+
+    // Direct RF — no hops, no q construct
+    [InlineData(
+        "W1ABC>APRS:!data",
+        new[] { "W1ABC", "W3UWU" },
+        new[] { (string?)null, null },
+        0, HeardVia.Direct)]
+
+    // RF via one digi
+    [InlineData(
+        "W1ABC>APRS,KD4RFT-10*,WIDE1*:!data",
+        new[] { "W1ABC", "KD4RFT-10", "W3UWU" },
+        new[] { (string?)null, "WIDE1", null },
+        1, HeardVia.Digi)]
+
+    // RF via two digis
+    [InlineData(
+        "W1ABC>APRS,KD4RFT-10*,WIDE1*,WE4MB-3*,WIDE2*:!data",
+        new[] { "W1ABC", "KD4RFT-10", "WE4MB-3", "W3UWU" },
+        new[] { (string?)null, "WIDE1", "WIDE2", null },
+        2, HeardVia.Digi)]
+
+    // igated from RF direct — qAR, no RF hops
+    [InlineData(
+        "W1ABC>APRS,qAR,VK2ION:!data",
+        new[] { "W1ABC", "W3UWU" },
+        new[] { (string?)null, null },
+        0, HeardVia.IgateRf)]
+
+    // igated from RF via digi — qAR with starred hops before it
+    [InlineData(
+        "W1ABC>APRS,KD4RFT-10*,WIDE1*,qAR,VK2ION:!data",
+        new[] { "W1ABC", "KD4RFT-10", "W3UWU" },
+        new[] { (string?)null, "WIDE1", null },
+        1, HeardVia.IgateRfDigi)]
+
+    // Pure internet origin — qAC
+    [InlineData(
+        "W1ABC>APRS,TCPIP*,qAC,VK2ION:!data",
+        new[] { "W1ABC", "W3UWU" },
+        new[] { (string?)null, null },
+        0, HeardVia.Internet)]
+
+    // TCPIP direct inject — no q code
+    [InlineData(
+        "W1ABC>APRS,TCPIP*:!data",
+        new[] { "W1ABC", "W3UWU" },
+        new[] { (string?)null, null },
+        0, HeardVia.Internet)]
+
+    // igate callsign must not appear as a hop node (same path as igated-via-digi case)
+    [InlineData(
+        "W1ABC>APRS,KD4RFT-10*,WIDE1*,qAR,VK2ION:!data",
+        new[] { "W1ABC", "KD4RFT-10", "W3UWU" },
+        new[] { (string?)null, "WIDE1", null },
+        1, HeardVia.IgateRfDigi)]
+
+    // Unused path entries before q — WIDE2-1 unstarred, then qAR
+    [InlineData(
+        "W1ABC>APRS,WIDE2-1,qAR,VK2ION:!data",
+        new[] { "W1ABC", "W3UWU" },
+        new[] { (string?)null, null },
+        0, HeardVia.IgateRf)]
+
+    // NOGATE token — RF only, not internet
+    [InlineData(
+        "W1ABC>APRS,WE4MB-3*,WIDE2*,NOGATE:!data",
+        new[] { "W1ABC", "WE4MB-3", "W3UWU" },
+        new[] { (string?)null, "WIDE2", null },
+        1, HeardVia.Digi)]
+
+    public void PathParser_ClassifiesCorrectly(
+        string raw,
+        string[] expectedCallsigns,
+        string?[] expectedAliasUsed,
+        int expectedHopCount,
+        HeardVia expectedHeardVia)
+    {
+        var result = PathResolver.Resolve(raw, homeCallsign: "W3UWU", stationLookup: MockStations);
+
+        Assert.Equal(expectedHopCount, result.HopCount);
+        Assert.Equal(expectedHeardVia, result.HeardVia);
+        Assert.Equal(expectedCallsigns.Length, result.Hops.Count);
+
+        for (var i = 0; i < expectedCallsigns.Length; i++)
+        {
+            Assert.Equal(expectedCallsigns[i], result.Hops[i].Callsign);
+            Assert.Equal(expectedAliasUsed[i], result.Hops[i].AliasUsed);
+        }
+
+        // Internet tokens must never appear as hop nodes
+        Assert.DoesNotContain(result.Hops, h =>
+            h.Callsign.StartsWith("q", System.StringComparison.OrdinalIgnoreCase) ||
+            h.Callsign.Equals("TCPIP", System.StringComparison.OrdinalIgnoreCase) ||
+            h.Callsign.Equals("TCPXX", System.StringComparison.OrdinalIgnoreCase));
     }
 }

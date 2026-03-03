@@ -413,6 +413,9 @@ const heardViaLabel = computed((): string | null => {
     [HeardVia.Direct]: 'Direct',
     [HeardVia.Digi]: 'Via Digipeater',
     [HeardVia.DirectAndDigi]: 'Direct & Digi',
+    [HeardVia.IgateRf]: 'iGate',
+    [HeardVia.IgateRfDigi]: 'iGate+Digi',
+    [HeardVia.Internet]: 'Internet',
   }
   return labels[station.value.heardVia] ?? null
 })
@@ -423,6 +426,9 @@ const heardViaColor = computed((): string => {
     [HeardVia.Direct]: 'green',
     [HeardVia.Digi]: 'amber-darken-2',
     [HeardVia.DirectAndDigi]: 'teal',
+    [HeardVia.IgateRf]: 'blue',
+    [HeardVia.IgateRfDigi]: 'purple',
+    [HeardVia.Internet]: 'grey',
   }
   return colors[station.value.heardVia] ?? 'grey'
 })

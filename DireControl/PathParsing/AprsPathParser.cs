@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using DireControl.Data.Models;
+using DireControl.Enums;
 
 namespace DireControl.PathParsing;
 
@@ -76,6 +77,64 @@ public static class AprsPathParser
     }
 
     /// <summary>
+    /// Returns <c>true</c> if <paramref name="hop"/> is an internet-routing token that
+    /// must never appear as a hop node in <c>ResolvedPath</c>.
+    /// Covers <c>q</c> codes, <c>TCPIP</c>, <c>TCPXX</c>, <c>NOGATE</c>, and <c>RFONLY</c>.
+    /// Leading or trailing <c>*</c> and whitespace are ignored.
+    /// </summary>
+    public static bool IsInternetToken(string hop)
+    {
+        var stripped = hop.TrimEnd('*').Trim();
+        return stripped.StartsWith("q", StringComparison.OrdinalIgnoreCase)
+            || stripped.Equals("TCPIP",  StringComparison.OrdinalIgnoreCase)
+            || stripped.Equals("TCPXX",  StringComparison.OrdinalIgnoreCase)
+            || stripped.Equals("NOGATE", StringComparison.OrdinalIgnoreCase)
+            || stripped.Equals("RFONLY", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Classifies how a packet was received based on its via-path entries and RF hop count.
+    /// </summary>
+    /// <param name="pathEntries">
+    ///   The via-path entries after the TOCALL, with <c>*</c> markers intact.
+    ///   These are the raw comma-separated tokens from the path field.
+    /// </param>
+    /// <param name="hopCount">Number of RF digipeater hops (internet tokens excluded).</param>
+    public static HeardVia ClassifyHeardVia(IReadOnlyList<string> pathEntries, int hopCount)
+    {
+        bool hasQConstruct = pathEntries.Any(h =>
+            h.TrimEnd('*').Trim().StartsWith("q", StringComparison.OrdinalIgnoreCase));
+        bool hasTcpIp = pathEntries.Any(h =>
+            h.TrimEnd('*').Trim().StartsWith("TCPIP", StringComparison.OrdinalIgnoreCase));
+
+        if (!hasQConstruct && !hasTcpIp)
+        {
+            // Pure RF packet
+            return hopCount == 0 ? HeardVia.Direct : HeardVia.Digi;
+        }
+
+        if (hasTcpIp || pathEntries.Any(h =>
+                h.TrimEnd('*').Trim().Equals("qAC", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Originated on the internet, no RF leg
+            return HeardVia.Internet;
+        }
+
+        if (pathEntries.Any(h =>
+            {
+                var s = h.TrimEnd('*').Trim();
+                return s.Equals("qAR", StringComparison.OrdinalIgnoreCase)
+                    || s.Equals("qAO", StringComparison.OrdinalIgnoreCase);
+            }))
+        {
+            // Originated on RF, igated to internet
+            return hopCount > 0 ? HeardVia.IgateRfDigi : HeardVia.IgateRf;
+        }
+
+        return HeardVia.Unknown;
+    }
+
+    /// <summary>
     /// Extracts the intermediate (via) hop list from an APRS path array.
     /// <para>
     /// The first element of <paramref name="aprsPath"/> is always the TOCALL (destination
@@ -92,12 +151,17 @@ public static class AprsPathParser
     /// generic alias immediately follows a real callsign, its name is stored as
     /// <see cref="ResolvedPathEntry.AliasUsed"/> on that preceding hop entry.
     /// </para>
+    /// <para>
+    /// Internet tokens (<c>q</c> codes, TCPIP, TCPXX, NOGATE, RFONLY) and the igate
+    /// callsign that follows a <c>q</c> code are never added as hop nodes.  Processing
+    /// stops once the internet section begins.
+    /// </para>
     /// </summary>
     /// <param name="aprsPath">
     ///   The path list whose first element is the TOCALL.
     /// </param>
     /// <returns>
-    ///   The intermediate hop entries (HopIndex 1…N) and the count of real digipeater hops.
+    ///   The intermediate hop entries (HopIndex 1…N) and the count of real RF digipeater hops.
     /// </returns>
     public static (List<ResolvedPathEntry> Hops, int HopCount) ExtractViaHops(
         IList<string>? aprsPath)
@@ -109,10 +173,31 @@ public static class AprsPathParser
 
         var hops = new List<ResolvedPathEntry>();
 
+        bool internetSectionStarted = false;
+        bool prevWasQCode = false;
+
         foreach (var raw in viaEntries)
         {
-            var isUsed   = raw.TrimEnd().EndsWith('*');
             var callsign = raw.TrimEnd('*').Trim();
+
+            if (IsInternetToken(callsign))
+            {
+                internetSectionStarted = true;
+                prevWasQCode = callsign.StartsWith("q", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (internetSectionStarted && prevWasQCode)
+            {
+                // This entry is the igate callsign immediately after a q code — skip it
+                prevWasQCode = false;
+                continue;
+            }
+
+            if (internetSectionStarted)
+                break;  // Past the internet section; nothing further is an RF hop
+
+            var isUsed = raw.TrimEnd().EndsWith('*');
 
             if (!isUsed)
                 continue;  // unused alias request — not a hop, not metadata to record
