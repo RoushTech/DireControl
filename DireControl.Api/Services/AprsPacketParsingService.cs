@@ -618,8 +618,8 @@ public sealed class AprsPacketParsingService(
         if (matched is null)
             return;
 
-        // Secondary: confirm the source callsign matches
-        if (!string.Equals(matched.FullCallsign, packet.StationCallsign, StringComparison.OrdinalIgnoreCase))
+        // Secondary: confirm the source callsign matches exactly (with -0 equivalence)
+        if (!CallsignMatcher.Matches(matched, packet.StationCallsign))
         {
             logger.LogWarning(
                 "Packet on channel {Channel} from {Source} does not match configured " +
