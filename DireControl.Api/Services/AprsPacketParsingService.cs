@@ -702,6 +702,20 @@ public sealed class AprsPacketParsingService(
 
             db.OwnBeacons.Add(ownBeacon);
             await db.SaveChangesAsync(ct);
+
+            // No direct KISS echo was available, so the frontend will never receive an
+            // ownBeaconReceived event for this beacon.  Broadcast one now so the "last
+            // beacon" panel updates without requiring a page refresh.
+            await hubContext.Clients.All.SendAsync(PacketHub.OwnBeaconReceivedMethod, new OwnBeaconBroadcastDto
+            {
+                RadioId = radio.Id,
+                BeaconId = ownBeacon.Id,
+                FullCallsign = radio.FullCallsign,
+                BeaconedAt = ownBeacon.BeaconedAt,
+                Lat = ownBeacon.Latitude,
+                Lon = ownBeacon.Longitude,
+                PathUsed = ownBeacon.PathUsed,
+            }, ct);
         }
 
         // Identify relaying digipeater from resolved path.

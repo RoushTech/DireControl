@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr'
 import { getRadios, getLastBeacon } from '@/api/radiosApi'
 import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto } from '@/types/radio'
 
 export const useRadiosStore = defineStore('radios', () => {
   const radios = ref<RadioDto[]>([])
-  const lastBeacons = ref<Map<string, LastBeaconDto>>(new Map())
+  // reactive plain-object keyed by radioId — more reliable than ref<Map> because
+  // Vue 3 property-assignment triggers are always tracked for plain reactive objects.
+  const lastBeacons = reactive<Record<string, LastBeaconDto | undefined>>({})
   const currentBeaconIds = ref<Map<string, number>>(new Map())
   const loading = ref(false)
   let connectionStarted = false
@@ -25,7 +27,7 @@ export const useRadiosStore = defineStore('radios', () => {
   async function fetchLastBeacon(radioId: string) {
     try {
       const dto = await getLastBeacon(radioId)
-      lastBeacons.value.set(radioId, dto)
+      lastBeacons[radioId] = dto
     } catch { /* ignore */ }
   }
 
@@ -46,11 +48,8 @@ export const useRadiosStore = defineStore('radios', () => {
       radio.secondsSinceBeacon = 0
     }
 
-    // Update the lastBeacons map — always replace via set() so Vue's reactive
-    // Map triggers dependency tracking on the new entry (property mutation on a
-    // Map value is not reliably tracked).
-    const existing = lastBeacons.value.get(dto.radioId)
-    lastBeacons.value.set(dto.radioId, {
+    const existing = lastBeacons[dto.radioId]
+    lastBeacons[dto.radioId] = {
       radioId: dto.radioId,
       radioName: existing?.radioName ?? radio?.name ?? dto.fullCallsign,
       fullCallsign: dto.fullCallsign,
@@ -61,14 +60,14 @@ export const useRadiosStore = defineStore('radios', () => {
       pathUsed: dto.pathUsed,
       comment: existing?.comment ?? null,
       confirmations: [],
-    })
+    }
   }
 
   function onDigiConfirmation(dto: DigiConfirmationBroadcastDto) {
     // Ignore confirmations that don't belong to the current beacon
     if (dto.beaconId !== currentBeaconIds.value.get(dto.radioId)) return
 
-    const existing = lastBeacons.value.get(dto.radioId)
+    const existing = lastBeacons[dto.radioId]
     if (existing) {
       // Deduplicate by callsign — belt-and-suspenders guard against multiple
       // SignalR events arriving before the backend check can prevent duplicates.
@@ -129,7 +128,7 @@ export const useRadiosStore = defineStore('radios', () => {
   }
 
   function getLastBeaconForRadio(radioId: string): LastBeaconDto | undefined {
-    return lastBeacons.value.get(radioId)
+    return lastBeacons[radioId]
   }
 
   return {
