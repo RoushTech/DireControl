@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useDisplay } from 'vuetify'
 import {
   HubConnectionBuilder,
   LogLevel,
@@ -24,7 +23,6 @@ import { useTick } from '@/composables/useTick'
 const store = useMessagesStore()
 const uiStore = useUiStore()
 const { now } = useTick(1000)
-const { mobile } = useDisplay()
 
 // ─── Settings & stations ────────────────────────────────────────────────────
 const ourCallsign = ref('')
@@ -324,7 +322,7 @@ function replyTo(message: InboxMessageDto) {
 </script>
 
 <template>
-  <v-container fluid class="pa-4 d-flex flex-column messages-panel">
+  <div class="messages-view">
     <!-- Header row -->
     <v-row no-gutters align="center" class="mb-3">
       <v-col>
@@ -596,13 +594,11 @@ function replyTo(message: InboxMessageDto) {
     </v-window>
 
     <!-- ── Compose Dialog ─────────────────────────────────────────────────── -->
-    <v-dialog v-model="composeOpen" :max-width="mobile ? undefined : '520'" :fullscreen="mobile" @keydown.esc="composeOpen = false">
+    <v-dialog v-model="composeOpen" max-width="520" @keydown.esc="composeOpen = false">
       <v-card>
         <v-card-title class="d-flex align-center">
           <v-icon class="mr-2">mdi-message-text-outline</v-icon>
           Compose Message
-          <v-spacer v-if="mobile" />
-          <v-btn v-if="mobile" icon="mdi-close" size="small" variant="text" @click="composeOpen = false" />
         </v-card-title>
 
         <v-card-text>
@@ -703,7 +699,7 @@ function replyTo(message: InboxMessageDto) {
           </v-alert>
         </v-card-text>
 
-        <v-card-actions :style="mobile ? 'padding-bottom: env(safe-area-inset-bottom, 0px)' : undefined">
+        <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="composeOpen = false">Cancel</v-btn>
           <v-btn
@@ -740,16 +736,17 @@ function replyTo(message: InboxMessageDto) {
         <v-btn variant="text" @click="failedToast = false">Dismiss</v-btn>
       </template>
     </v-snackbar>
-  </v-container>
+  </div>
 </template>
 
 <style scoped>
-.messages-panel {
+.messages-view {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   justify-content: flex-start;
   height: 100%;
+  padding: 16px;
   overflow-y: auto;
 }
 </style>
