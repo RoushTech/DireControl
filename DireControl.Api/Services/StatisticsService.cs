@@ -50,7 +50,7 @@ public sealed class StatisticsService(
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
 
         var now = DateTime.UtcNow;
-        var todayStart = now.Date;
+        var todayStart = DateTime.Now.Date.ToUniversalTime();
         var weekStart = todayStart.AddDays(-7);
         var h24Start = now.AddHours(-24);
 

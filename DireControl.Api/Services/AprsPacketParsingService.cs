@@ -247,7 +247,7 @@ public sealed class AprsPacketParsingService(
         CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var todayStart = now.Date;
+        var todayStart = DateTime.Now.Date.ToUniversalTime();
 
         foreach (var callsign in callsigns)
         {
