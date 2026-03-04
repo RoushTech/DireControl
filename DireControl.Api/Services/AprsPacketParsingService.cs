@@ -627,21 +627,9 @@ public sealed class AprsPacketParsingService(
         DireControlContext db,
         CancellationToken ct)
     {
-        // Primary: match by KISS channel number
-        var matched = activeRadios.FirstOrDefault(r => r.ChannelNumber == packet.KissChannel);
-
+        var matched = CallsignMatcher.FindMatchingRadio(packet, activeRadios);
         if (matched is null)
             return;
-
-        // Secondary: confirm the source callsign matches exactly (with -0 equivalence)
-        if (!CallsignMatcher.Matches(matched, packet.StationCallsign))
-        {
-            logger.LogWarning(
-                "Packet on channel {Channel} from {Source} does not match configured " +
-                "radio callsign {Expected} — processing as normal station packet",
-                packet.KissChannel, packet.StationCallsign, matched.FullCallsign);
-            return;
-        }
 
         logger.LogDebug(
             "Own callsign detected: source={Source} hopCount={HopCount} path={Path}",
