@@ -47,6 +47,37 @@ internal static class MessageHandlingLogic
             ct);
 
     /// <summary>
+    /// For a third-party APRS packet (info field starts with <c>}</c>), extracts
+    /// the inner TNC2 string and the callsign of the original sender.
+    /// Returns <see langword="false"/> if <paramref name="rawPacket"/> is not a
+    /// third-party frame or the inner content is empty.
+    /// </summary>
+    internal static bool TryExtractThirdPartyInner(
+        string rawPacket,
+        out string innerRaw,
+        out string innerSender)
+    {
+        var colonIdx = rawPacket.IndexOf(':');
+        if (colonIdx >= 0
+            && colonIdx + 2 < rawPacket.Length
+            && rawPacket[colonIdx + 1] == '}')
+        {
+            var candidate = rawPacket[(colonIdx + 2)..];
+            if (!string.IsNullOrEmpty(candidate))
+            {
+                var senderEnd = candidate.IndexOf('>');
+                innerRaw    = candidate;
+                innerSender = senderEnd > 0 ? candidate[..senderEnd].Trim() : candidate;
+                return true;
+            }
+        }
+
+        innerRaw    = string.Empty;
+        innerSender = string.Empty;
+        return false;
+    }
+
+    /// <summary>
     /// Marks the outbound message sent by <paramref name="ourCallsign"/> to
     /// <paramref name="fromCallsign"/> with id <paramref name="originalMsgId"/> as
     /// acknowledged and clears its retry schedule.

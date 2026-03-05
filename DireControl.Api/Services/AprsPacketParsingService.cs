@@ -297,6 +297,34 @@ public sealed class AprsPacketParsingService(
                 s.StationType = StationType.Weather;
             });
         }
+
+        // Third-party packets (info field starts with '}'): the outer source is the
+        // igate that forwarded the packet; the actual sender and payload live in the
+        // inner TNC2 string.  AprsSharp 0.4.1 provides no structured
+        // ThirdPartyTrafficInfo class, so we extract the inner string manually and
+        // re-parse it.  Only message packets inside third-party frames are handled;
+        // other inner types are left as Unparseable.
+        if (aprs.InfoField?.Type == AprsPacketType.ThirdPartyTraffic)
+        {
+            if (MessageHandlingLogic.TryExtractThirdPartyInner(
+                    packet.RawPacket, out var innerRaw, out var innerSender))
+            {
+                try
+                {
+                    var innerAprs = new AprsSharp.AprsParser.Packet(innerRaw);
+                    if (innerAprs.InfoField is MessageInfo innerMsg)
+                    {
+                        packet.ParsedType = OurPacketType.Message;
+                        await HandleMessageAsync(packet, innerMsg, db, ourCallsign, effects, ct,
+                            senderCallsignOverride: innerSender);
+                    }
+                }
+                catch
+                {
+                    // inner packet unparseable — leave ParsedType as Unparseable
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -533,8 +561,10 @@ public sealed class AprsPacketParsingService(
         DireControlContext db,
         string ourCallsign,
         List<MessageEffect> effects,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? senderCallsignOverride = null)
     {
+        var fromCallsign = senderCallsignOverride ?? packet.StationCallsign;
         var addressee = info.Addressee ?? string.Empty;
         var body = info.Content ?? string.Empty;
         var messageId = info.Id ?? string.Empty;
@@ -558,7 +588,7 @@ public sealed class AprsPacketParsingService(
             effects.Add(new MessageEffect(
                 IsNewInboxMessage: false,
                 IsAckReceived: true,
-                PeerCallsign: packet.StationCallsign,
+                PeerCallsign: fromCallsign,
                 MessageId: messageId,
                 OriginalMsgId: originalMsgId));
             return;
@@ -570,14 +600,14 @@ public sealed class AprsPacketParsingService(
         if (!string.IsNullOrWhiteSpace(messageId))
         {
             var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-                packet.StationCallsign, messageId, db, ct);
+                fromCallsign, messageId, db, ct);
 
             if (isDuplicate)
             {
                 effects.Add(new MessageEffect(
                     IsNewInboxMessage: false,
                     IsAckReceived: false,
-                    PeerCallsign: packet.StationCallsign,
+                    PeerCallsign: fromCallsign,
                     MessageId: messageId,
                     IsDuplicateInboxMessage: true));
                 return;
@@ -587,7 +617,7 @@ public sealed class AprsPacketParsingService(
         // Regular message addressed to us — add to inbox.
         db.Messages.Add(new Message
         {
-            FromCallsign = packet.StationCallsign,
+            FromCallsign = fromCallsign,
             ToCallsign = addressee.Trim(),
             Body = body,
             MessageId = messageId,
@@ -602,7 +632,7 @@ public sealed class AprsPacketParsingService(
             effects.Add(new MessageEffect(
                 IsNewInboxMessage: true,
                 IsAckReceived: false,
-                PeerCallsign: packet.StationCallsign,
+                PeerCallsign: fromCallsign,
                 MessageId: messageId));
         }
     }

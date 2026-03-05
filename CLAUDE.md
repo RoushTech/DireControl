@@ -60,3 +60,10 @@ dotnet ef migrations remove \
 - Use Vuetify for all UI components
 - Path alias `@` resolves to `src/`
 - Formatting is handled by `oxfmt`; linting by `oxlint` then `eslint` — run `npm run lint` before committing
+
+## Testing
+
+- Every new APRS packet case (new packet type handled, new parsing path, new message-handling branch) must have a corresponding test in `DireControl.Tests`
+- Packet parsing helpers that can be extracted as pure functions belong in `MessageHandlingLogic` (or a similar static helper class) so they can be tested without constructing the full background service
+- Use an in-memory SQLite database (via `SqliteConnection("DataSource=:memory:")` + `DbContextOptionsBuilder.UseSqlite`) for tests that exercise DB-level logic — do not use the EF Core in-memory provider, as it does not enforce SQL translation constraints
+- Run `dotnet test DireControl.Tests/DireControl.Tests.csproj` before committing; all tests must pass
