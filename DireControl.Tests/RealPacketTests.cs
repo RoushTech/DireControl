@@ -369,8 +369,8 @@ public class ParseTnc2HeaderRealPacketTests
     {
         var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
 
-        Assert.Equal(expectedSource,  source);
-        Assert.Equal(expectedTocall,  tocall);
+        Assert.Equal(expectedSource, source);
+        Assert.Equal(expectedTocall, tocall);
         Assert.Equal(expectedRawPath, rawPath);
     }
 }
@@ -431,7 +431,7 @@ public class HopExtractionRealPacketTests
         Assert.Equal(1, hopCount);
         Assert.Single(hops);
         Assert.Equal("K3ODX-10", hops[0].Callsign);
-        Assert.Equal("WIDE1",    hops[0].AliasUsed);
+        Assert.Equal("WIDE1", hops[0].AliasUsed);
     }
 
     /// <summary>
@@ -448,11 +448,11 @@ public class HopExtractionRealPacketTests
         Assert.Equal(5, hopCount);
         Assert.Equal(5, hops.Count);
 
-        Assert.Equal("N8DEU-7",  hops[0].Callsign); Assert.Null(hops[0].AliasUsed);
-        Assert.Equal("W4GGM-1",  hops[1].Callsign); Assert.Null(hops[1].AliasUsed);
-        Assert.Equal("W4DMM-3",  hops[2].Callsign); Assert.Equal("WIDE1", hops[2].AliasUsed);
+        Assert.Equal("N8DEU-7", hops[0].Callsign); Assert.Null(hops[0].AliasUsed);
+        Assert.Equal("W4GGM-1", hops[1].Callsign); Assert.Null(hops[1].AliasUsed);
+        Assert.Equal("W4DMM-3", hops[2].Callsign); Assert.Equal("WIDE1", hops[2].AliasUsed);
         Assert.Equal("KM4BJZ-2", hops[3].Callsign); Assert.Null(hops[3].AliasUsed);
-        Assert.Equal("WE4MB-3",  hops[4].Callsign); Assert.Null(hops[4].AliasUsed);
+        Assert.Equal("WE4MB-3", hops[4].Callsign); Assert.Null(hops[4].AliasUsed);
     }
 }
 
@@ -479,11 +479,11 @@ public class WeatherPayloadTests
         int expectedHumidity,
         double expectedPressureMbar)
     {
-        var aprs   = new Packet(raw);
-        var wx     = Assert.IsAssignableFrom<WeatherInfo>(aprs.InfoField);
+        var aprs = new Packet(raw);
+        var wx = Assert.IsAssignableFrom<WeatherInfo>(aprs.InfoField);
 
-        Assert.Equal(expectedTempF,    wx.Temperature);
-        Assert.Equal(expectedWindDir,  wx.WindDirection);
+        Assert.Equal(expectedTempF, wx.Temperature);
+        Assert.Equal(expectedWindDir, wx.WindDirection);
         Assert.Equal(expectedWindSpeed, wx.WindSpeed);
         Assert.Equal(expectedWindGust, wx.WindGust);
         Assert.Equal(expectedHumidity, wx.Humidity);
@@ -524,13 +524,13 @@ public class PositionPayloadTests
     public void PositionPacket_DecodesCoordinates(string raw, double expectedLat, double expectedLon)
     {
         var aprs = new Packet(raw);
-        var pos  = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
+        var pos = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
 
         var coord = pos.Position!.Coordinates;
-        Assert.False(double.IsNaN(coord.Latitude),  "Latitude was NaN");
+        Assert.False(double.IsNaN(coord.Latitude), "Latitude was NaN");
         Assert.False(double.IsNaN(coord.Longitude), "Longitude was NaN");
-        Assert.InRange(coord.Latitude,  expectedLat  - CoordTolerance, expectedLat  + CoordTolerance);
-        Assert.InRange(coord.Longitude, expectedLon  - CoordTolerance, expectedLon  + CoordTolerance);
+        Assert.InRange(coord.Latitude, expectedLat - CoordTolerance, expectedLat + CoordTolerance);
+        Assert.InRange(coord.Longitude, expectedLon - CoordTolerance, expectedLon + CoordTolerance);
     }
 
     /// <summary>
@@ -571,10 +571,10 @@ public class MessagePayloadTests
         string expectedMessageId)
     {
         var aprs = new Packet(raw);
-        var msg  = Assert.IsAssignableFrom<MessageInfo>(aprs.InfoField);
+        var msg = Assert.IsAssignableFrom<MessageInfo>(aprs.InfoField);
 
         Assert.Equal(expectedAddressee, msg.Addressee?.Trim());
-        Assert.Equal(expectedBody,      msg.Content);
+        Assert.Equal(expectedBody, msg.Content);
         Assert.Equal(expectedMessageId, msg.Id ?? string.Empty);
     }
 
@@ -612,7 +612,7 @@ public class StatusPayloadTests
     [Fact]
     public void StatusPacket_PlainText_ReturnsFullComment()
     {
-        var aprs   = new Packet(RealPacketData.Status_PlainText);
+        var aprs = new Packet(RealPacketData.Status_PlainText);
         var status = Assert.IsAssignableFrom<StatusInfo>(aprs.InfoField);
         Assert.Equal("WIDE 3-# Digi/Igate", status.Comment);
     }
@@ -624,7 +624,7 @@ public class StatusPayloadTests
     [Fact]
     public void StatusPacket_WithGridSquare_CommentContainsDxText()
     {
-        var aprs   = new Packet(RealPacketData.Status_GridSquare_DxInfo);
+        var aprs = new Packet(RealPacketData.Status_GridSquare_DxInfo);
         var status = Assert.IsAssignableFrom<StatusInfo>(aprs.InfoField);
         Assert.NotNull(status.Comment);
         Assert.Contains("AJ4FJ-5", status.Comment);
@@ -636,7 +636,7 @@ public class StatusPayloadTests
     [Fact]
     public void StatusPacket_WithTimestampPrefix_CommentPreservesText()
     {
-        var aprs   = new Packet(RealPacketData.Status_WithTimestamp);
+        var aprs = new Packet(RealPacketData.Status_WithTimestamp);
         var status = Assert.IsAssignableFrom<StatusInfo>(aprs.InfoField);
         Assert.NotNull(status.Comment);
         Assert.Contains("Expect Winter Weather this weekend", status.Comment);
@@ -663,7 +663,7 @@ public class UnparseablePacketTests
     public void IdTocallPacket_TypeIsNullOrUnknown_NotAPositionOrWeather()
     {
         var packet = new Packet(RealPacketData.Unparseable_IdTocall);
-        var type   = packet.InfoField?.Type;
+        var type = packet.InfoField?.Type;
 
         Assert.True(
             type is null or AprsPacketType.Unknown,

@@ -145,13 +145,16 @@ public sealed class MessageSendingService(
 
     /// <summary>
     /// Formats the APRS info field for a message:
-    /// <c>:ADDRESSEE :body{msgid}</c>
+    /// <c>:ADDRESSEE :body{msgid</c> (no closing brace — per APRS spec).
     /// </summary>
     private static string BuildMessageInfo(string toCallsign, string body, string messageId)
     {
         // Addressee field is exactly 9 characters, right-padded with spaces.
         var addressee = toCallsign.ToUpperInvariant().PadRight(9)[..9];
-        return $":{addressee}:{body}{{{messageId}}}";
+        // APRS message-number format is {MSGNO with NO closing brace (APRS101 §14).
+        // A trailing } is non-standard and causes some clients to include it in the
+        // message ID they echo back in the ACK, breaking the MessageId lookup.
+        return $":{addressee}:{body}{{{messageId}";
     }
 
     /// <summary>
