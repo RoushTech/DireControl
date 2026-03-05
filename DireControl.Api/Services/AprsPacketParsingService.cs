@@ -30,6 +30,53 @@ public sealed class AprsPacketParsingService(
     private const int BatchSize = 50;
     private const int PollIntervalMs = 5_000;
 
+    /// <summary>
+    /// Minimum position delta (decimal degrees) treated as meaningful movement.
+    /// ~111 m at the equator; generous enough to absorb GPS jitter.
+    /// </summary>
+    private const double MovementThresholdDeg = 0.001;
+
+    /// <summary>
+    /// A station must have position packets spanning at least this many hours,
+    /// all within <see cref="MovementThresholdDeg"/>, before it is classified Fixed.
+    /// </summary>
+    private const int FixedDetectionWindowHours = 4;
+
+    /// <summary>
+    /// Minimum number of position packets required within the Fixed detection window
+    /// before the classification fires (avoids single-packet false positives).
+    /// </summary>
+    private const int FixedDetectionMinPackets = 3;
+
+    /// <summary>
+    /// Two-character APRS symbol strings (table + code) that unambiguously represent
+    /// a mobile platform.  A match immediately classifies the transmitting station
+    /// as <see cref="StationType.Mobile"/> unless a higher-priority type is already set.
+    /// </summary>
+    private static readonly HashSet<string> MobileSymbols = new(StringComparer.Ordinal)
+    {
+        // ── Primary table (/) ────────────────────────────────────────────────
+        "/'",   // Small aircraft
+        "/<",   // Motorcycle
+        "/>",   // Car
+        "/[",   // Jogger / runner
+        "/^",   // Large aircraft
+        "/b",   // Bicycle
+        "/g",   // Glider
+        "/j",   // Jeep
+        "/k",   // Truck
+        "/s",   // Power boat
+        "/u",   // Bus
+        "/v",   // Van / SUV
+        "/X",   // Helicopter
+        "/Y",   // Sailboat (yacht)
+        // ── Alternate table (\) ──────────────────────────────────────────────
+        "\\>",  // Car
+        "\\j",  // Jeep
+        "\\k",  // Truck
+        "\\u",  // Bus
+    };
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -194,6 +241,12 @@ public sealed class AprsPacketParsingService(
 
         packet.ParsedType = MapPacketType(aprs.InfoField?.Type ?? AprsPacketType.Unknown);
 
+        // AprsSharp 0.4.1 reports a Position-family type enum for @ prefix weather
+        // packets even though InfoField IS a WeatherInfo instance.  Override here so
+        // ParsedType always matches the InfoField class when weather data is present.
+        if (aprs.InfoField is WeatherInfo)
+            packet.ParsedType = OurPacketType.Weather;
+
         // Extract path from the raw TNC2 string.  ParseTnc2Header reads directly
         // from RawPacket so asterisk markers from the AX.25 H-bit are preserved;
         // the returned RawPath already excludes the TOCALL.
@@ -234,6 +287,18 @@ public sealed class AprsPacketParsingService(
             case StatusInfo status:
                 packet.Comment = status.Comment ?? string.Empty;
                 break;
+        }
+
+        // _ prefix weather packets: AprsSharp sets the type enum to WeatherReport but
+        // InfoField is UnsupportedInfo (library limitation), so HandleWeather never fires
+        // and the station is never marked.  Correct that here.
+        if (packet.ParsedType == OurPacketType.Weather && packet.WeatherData == null)
+        {
+            UpdateStation(db, packet.StationCallsign, s =>
+            {
+                s.IsWeatherStation = true;
+                s.StationType = StationType.Weather;
+            });
         }
     }
 
@@ -333,6 +398,48 @@ public sealed class AprsPacketParsingService(
                         : perPacketVias[0];  // most recent packet's classification
                 }
 
+                // ── Fixed station detection ──────────────────────────────────────────
+                // A station is classified Fixed when it has broadcast from the same
+                // location for at least FixedDetectionWindowHours without moving by
+                // more than MovementThresholdDeg.
+                //
+                // Rules:
+                //   • Only Unknown stations are promoted to Fixed.
+                //   • Mobile → Fixed is intentionally blocked; once a station has
+                //     been seen moving it remains Mobile indefinitely.
+                //   • Fixed → Mobile is handled in HandlePosition via movement delta.
+                if (station.StationType == StationType.Unknown)
+                {
+                    var windowStart = now.AddHours(-FixedDetectionWindowHours);
+
+                    var recentPositions = await db.Packets
+                        .Where(p => p.StationCallsign == callsign
+                                 && p.ReceivedAt >= windowStart
+                                 && p.Latitude != null
+                                 && p.Longitude != null)
+                        .Select(p => new { p.Latitude, p.Longitude, p.ReceivedAt })
+                        .ToListAsync(ct);
+
+                    if (recentPositions.Count >= FixedDetectionMinPackets)
+                    {
+                        var firstTime = recentPositions.Min(p => p.ReceivedAt);
+                        var lastTime  = recentPositions.Max(p => p.ReceivedAt);
+
+                        if ((lastTime - firstTime).TotalHours >= FixedDetectionWindowHours)
+                        {
+                            var refLat = recentPositions[0].Latitude!.Value;
+                            var refLon = recentPositions[0].Longitude!.Value;
+
+                            var allWithinThreshold = recentPositions.All(p =>
+                                Math.Abs(p.Latitude!.Value  - refLat) <= MovementThresholdDeg &&
+                                Math.Abs(p.Longitude!.Value - refLon) <= MovementThresholdDeg);
+
+                            if (allWithinThreshold)
+                                station.StationType = StationType.Fixed;
+                        }
+                    }
+                }
+
                 await db.SaveChangesAsync(ct);
             }
             catch (Exception ex)
@@ -363,6 +470,32 @@ public sealed class AprsPacketParsingService(
 
             UpdateStation(db, packet.StationCallsign, station =>
             {
+                // ── Mobile detection ────────────────────────────────────────
+                // Check BEFORE updating LastLat/LastLon so we compare old vs new.
+                //
+                // Two independent signals both upgrade a station to Mobile:
+                //   1. Symbol — the station is transmitting a known vehicle icon.
+                //   2. Movement — the position differs from the last known position
+                //      by more than the GPS-jitter threshold (~111 m).
+                //
+                // Only Unknown and Fixed stations may be promoted to Mobile.
+                // Fixed → Mobile is intentionally allowed (station started moving).
+                // Mobile → Fixed is NOT allowed (handled by time-based detection).
+                // Weather / Digipeater / IGate are never overwritten here.
+                var isMobileSymbol = MobileSymbols.Contains(symbol);
+                var hasMoved = station.LastLat is not null
+                    && station.LastLon is not null
+                    && !double.IsNaN(coord.Latitude)
+                    && !double.IsNaN(coord.Longitude)
+                    && (Math.Abs(coord.Latitude  - station.LastLat.Value) > MovementThresholdDeg
+                     || Math.Abs(coord.Longitude - station.LastLon.Value) > MovementThresholdDeg);
+
+                if ((isMobileSymbol || hasMoved) &&
+                    station.StationType is StationType.Unknown or StationType.Fixed)
+                {
+                    station.StationType = StationType.Mobile;
+                }
+
                 if (!double.IsNaN(coord.Latitude)) station.LastLat = coord.Latitude;
                 if (!double.IsNaN(coord.Longitude)) station.LastLon = coord.Longitude;
                 station.Symbol = symbol;
@@ -511,6 +644,11 @@ public sealed class AprsPacketParsingService(
             var station = db.Stations.Local.FirstOrDefault(s => s.Callsign == hop.Callsign)
                 ?? await db.Stations.FindAsync(new object?[] { hop.Callsign }, ct);
 
+            // Station appears starred in this packet's path — it acted as a digipeater.
+            // Only set when Unknown; never downgrade a more specific type (e.g. IGate).
+            if (station != null && station.StationType == StationType.Unknown)
+                station.StationType = StationType.Digipeater;
+
             if (station?.LastLat != null && station.LastLon != null)
             {
                 hop.Latitude = station.LastLat;
@@ -520,6 +658,32 @@ public sealed class AprsPacketParsingService(
         }
 
         packet.UnknownHopCount = packet.ResolvedPath.Count(e => !e.Known);
+
+        // Detect igate: the callsign immediately after qAR or qAS in the path
+        // is the station that gated this packet from RF to APRS-IS.
+        // IGate takes priority over Digipeater (promote if already marked Digipeater).
+        var pathParts = (packet.Path ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < pathParts.Length - 1; i++)
+        {
+            var token = pathParts[i].TrimEnd('*');
+            if (token.Equals("qAR", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("qAS", StringComparison.OrdinalIgnoreCase))
+            {
+                var igateCs = pathParts[i + 1];
+                if (!AprsPathParser.IsGenericAlias(igateCs))
+                {
+                    var igateStn = db.Stations.Local.FirstOrDefault(s => s.Callsign == igateCs)
+                        ?? await db.Stations.FindAsync(new object?[] { igateCs }, ct);
+                    if (igateStn != null &&
+                        igateStn.StationType is StationType.Unknown or StationType.Digipeater)
+                    {
+                        igateStn.StationType = StationType.IGate;
+                    }
+                }
+                break;
+            }
+        }
 
         // --- Final hop: our own station ---
         var homeEntry = new ResolvedPathEntry
