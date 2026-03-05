@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DireControl\DireControl.csproj" />
+    <ProjectReference Include="..\DireControl.Api\DireControl.Api.csproj" />
   </ItemGroup>
 
 </Project>

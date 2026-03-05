@@ -131,7 +131,7 @@ public sealed class AprsPacketParsingService(
             var effects = new List<MessageEffect>();
             try
             {
-                ParsePacket(packet, db, ourCallsign, effects);
+                await ParsePacketAsync(packet, db, ourCallsign, effects, ct);
                 await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct);
                 await db.SaveChangesAsync(ct);
 
@@ -206,36 +206,33 @@ public sealed class AprsPacketParsingService(
             }
             else if (effect.IsAckReceived && effect.OriginalMsgId is not null)
             {
-                // Mark our sent message as ACK'd
-                var sentMsg = await db.Messages
-                    .FirstOrDefaultAsync(
-                        m => m.MessageId == effect.OriginalMsgId &&
-                             m.FromCallsign.Equals(ourCallsign, StringComparison.OrdinalIgnoreCase) &&
-                             m.ToCallsign.Equals(effect.PeerCallsign, StringComparison.OrdinalIgnoreCase),
-                        ct);
+                // Mark our sent message as ACK'd and broadcast to the UI.
+                var ackedId = await MessageHandlingLogic.TryApplyAckAsync(
+                    effect.PeerCallsign, effect.OriginalMsgId, db, ourCallsign, ct);
 
-                if (sentMsg is not null && !sentMsg.AckSent)
+                if (ackedId is int dbId)
                 {
-                    sentMsg.AckSent = true;
-                    sentMsg.RetryState = RetryState.Acknowledged;
-                    sentMsg.NextRetryAt = null;
-                    await db.SaveChangesAsync(ct);
-
                     await hubContext.Clients.All.SendAsync(
                         PacketHub.MessageAcknowledgedMethod,
-                        new MessageAcknowledgedDto { Id = sentMsg.Id, MessageId = effect.OriginalMsgId },
+                        new MessageAcknowledgedDto { Id = dbId, MessageId = effect.OriginalMsgId },
                         ct);
 
                     await hubContext.Clients.All.SendAsync(
                         PacketHub.MessageAckedMethod,
-                        new MessageAckDto { Id = sentMsg.Id, MessageId = effect.OriginalMsgId },
+                        new MessageAckDto { Id = dbId, MessageId = effect.OriginalMsgId },
                         ct);
                 }
+            }
+            else if (effect.IsDuplicateInboxMessage)
+            {
+                // Remote station retransmitted because our earlier ACK was lost.
+                // Re-send the ACK so it stops retrying; no new inbox entry is created.
+                messageSendingService.SendAck(effect.PeerCallsign, effect.MessageId);
             }
         }
     }
 
-    private void ParsePacket(DbPacket packet, DireControlContext db, string ourCallsign, List<MessageEffect> effects)
+    private async Task ParsePacketAsync(DbPacket packet, DireControlContext db, string ourCallsign, List<MessageEffect> effects, CancellationToken ct)
     {
         var aprs = new AprsSharp.AprsParser.Packet(packet.RawPacket);
 
@@ -281,7 +278,7 @@ public sealed class AprsPacketParsingService(
                 break;
 
             case MessageInfo message:
-                HandleMessage(packet, message, db, ourCallsign, effects);
+                await HandleMessageAsync(packet, message, db, ourCallsign, effects, ct);
                 break;
 
             case StatusInfo status:
@@ -530,12 +527,13 @@ public sealed class AprsPacketParsingService(
         });
     }
 
-    private void HandleMessage(
+    private async Task HandleMessageAsync(
         DbPacket packet,
         MessageInfo info,
         DireControlContext db,
         string ourCallsign,
-        List<MessageEffect> effects)
+        List<MessageEffect> effects,
+        CancellationToken ct)
     {
         var addressee = info.Addressee ?? string.Empty;
         var body = info.Content ?? string.Empty;
@@ -555,9 +553,8 @@ public sealed class AprsPacketParsingService(
             return;
 
         // Detect ACK receipts: body is "ackXXXX" where XXXX is the original message ID.
-        if (body.StartsWith("ack", StringComparison.OrdinalIgnoreCase) && body.Length > 3)
+        if (MessageHandlingLogic.TryParseAck(body, out var originalMsgId))
         {
-            var originalMsgId = body[3..].Trim();
             effects.Add(new MessageEffect(
                 IsNewInboxMessage: false,
                 IsAckReceived: true,
@@ -565,6 +562,26 @@ public sealed class AprsPacketParsingService(
                 MessageId: messageId,
                 OriginalMsgId: originalMsgId));
             return;
+        }
+
+        // Dedup: if we already have a message from this sender with this ID, the
+        // remote station is retransmitting because our ACK never reached it.
+        // Re-queue an ACK but skip adding a duplicate inbox entry.
+        if (!string.IsNullOrWhiteSpace(messageId))
+        {
+            var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
+                packet.StationCallsign, messageId, db, ct);
+
+            if (isDuplicate)
+            {
+                effects.Add(new MessageEffect(
+                    IsNewInboxMessage: false,
+                    IsAckReceived: false,
+                    PeerCallsign: packet.StationCallsign,
+                    MessageId: messageId,
+                    IsDuplicateInboxMessage: true));
+                return;
+            }
         }
 
         // Regular message addressed to us — add to inbox.
@@ -979,4 +996,5 @@ internal sealed record MessageEffect(
     bool IsAckReceived,
     string PeerCallsign,
     string MessageId,
-    string? OriginalMsgId = null);
+    string? OriginalMsgId = null,
+    bool IsDuplicateInboxMessage = false);
