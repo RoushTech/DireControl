@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import type { PacketBroadcastDto } from '@/types/packet'
 import { parsedTypeFromString } from '@/types/packet'
 
-const MAX_DISPLAYED = 500
+const MAX_DISPLAYED = 1000
 
 export const useBeaconStreamStore = defineStore('beaconStream', () => {
   const displayedPackets = ref<PacketBroadcastDto[]>([])

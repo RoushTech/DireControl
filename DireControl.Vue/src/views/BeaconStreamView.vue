@@ -245,34 +245,40 @@ function openPopOut() {
     <v-divider />
 
     <!-- Packet list -->
-    <div class="beacon-list">
-      <div
-        v-for="p in store.filteredPackets"
-        :key="`${p.callsign}-${p.receivedAt}`"
-        class="beacon-row"
-        @click="openInspectDialog(p.id)"
-      >
-        <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatUtc(p.receivedAt)">
-          {{ timeAgo(p.receivedAt) }}
-        </span>
-        <span class="beacon-cell beacon-callsign">
-          <a class="callsign-link" @click.stop.prevent="onCallsignClick(p.callsign)">
-            {{ p.callsign }}
-          </a>
-        </span>
-        <span class="beacon-cell beacon-type">
-          <v-chip :color="typeColor(p.parsedType)" size="x-small" label>
-            {{ typeLabel(p.parsedType) }}
-          </v-chip>
-        </span>
-        <span class="beacon-cell beacon-summary text-body-2 text-truncate" :title="p.summary">
-          {{ p.summary }}
-        </span>
-      </div>
-      <div v-if="store.filteredPackets.length === 0" class="text-center text-medium-emphasis py-8">
-        No packets heard yet — waiting for Direwolf…
-      </div>
+    <div v-if="store.filteredPackets.length === 0" class="text-center text-medium-emphasis py-8">
+      No packets heard yet — waiting for Direwolf…
     </div>
+    <v-virtual-scroll
+      v-else
+      class="beacon-list"
+      :items="store.filteredPackets"
+      :item-height="36"
+    >
+      <template #default="{ item: p }">
+        <div
+          :key="`${p.callsign}-${p.receivedAt}`"
+          class="beacon-row"
+          @click="openInspectDialog(p.id)"
+        >
+          <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatUtc(p.receivedAt)">
+            {{ timeAgo(p.receivedAt) }}
+          </span>
+          <span class="beacon-cell beacon-callsign">
+            <a class="callsign-link" @click.stop.prevent="onCallsignClick(p.callsign)">
+              {{ p.callsign }}
+            </a>
+          </span>
+          <span class="beacon-cell beacon-type">
+            <v-chip :color="typeColor(p.parsedType)" size="x-small" label>
+              {{ typeLabel(p.parsedType) }}
+            </v-chip>
+          </span>
+          <span class="beacon-cell beacon-summary text-body-2 text-truncate" :title="p.summary">
+            {{ p.summary }}
+          </span>
+        </div>
+      </template>
+    </v-virtual-scroll>
 
     <PacketInspectionDialog
       :packet-id="inspectedPacketId"
@@ -328,7 +334,7 @@ function openPopOut() {
 
 .beacon-list {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
 }
 
 .beacon-row {
