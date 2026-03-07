@@ -756,7 +756,7 @@ function buildRadarLayer(framePath: string): L.TileLayer {
   const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
   return L.tileLayer(
     `/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`,
-    { tileSize: 512, opacity: radarOpacity.value, zIndex: 10, pane: 'weatherPane' },
+    { tileSize: 512, opacity: radarOpacity.value, zIndex: 10, pane: 'weatherPane', maxNativeZoom: 12, maxZoom: 19 },
   )
 }
 
@@ -871,7 +871,7 @@ function enableWind() {
   ensureWeatherPane()
   windLayer = L.tileLayer(
     '/api/weather/wind/tile/{z}/{x}/{y}',
-    { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane' },
+    { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane', maxNativeZoom: 18, maxZoom: 19 },
   ).addTo(map.value)
 }
 
@@ -897,7 +897,7 @@ async function toggleWind() {
 function buildLightningLayer(): L.TileLayer {
   return L.tileLayer(
     '/api/weather/lightning/tile/{z}/{x}/{y}',
-    { opacity: lightningOpacity.value, zIndex: 12, pane: 'weatherPane' },
+    { opacity: lightningOpacity.value, zIndex: 12, pane: 'weatherPane', maxNativeZoom: 6, maxZoom: 19 },
   )
 }
 
