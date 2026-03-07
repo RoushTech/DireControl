@@ -11,7 +11,7 @@ import {
 import { getStations, getStationTrack, getStationPackets, getSettings } from '@/api/stationsApi'
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
-import { getWeatherManifest, getWeatherStatus, type WeatherStatus } from '@/api/weatherApi'
+import { getWeatherManifest, getWeatherStatus } from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
 import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
 import type { TileProviderConfig } from '@/types/map'
@@ -277,8 +277,19 @@ let coverageData: CoverageGridSquareDto[] | null = null
 interface RainViewerManifest {
   radar: { past: { time: number; path: string }[] }
 }
+interface WeatherLayerStatus {
+  available: boolean
+  frameCount?: number
+  lastUpdated?: string
+  reason?: string
+}
+interface WeatherStatus {
+  radar: WeatherLayerStatus
+  wind: WeatherLayerStatus
+  lightning: WeatherLayerStatus
+}
 let rainviewerManifest: RainViewerManifest | null = null
-let weatherStatus: WeatherStatus | null = null
+const weatherStatus = shallowRef<WeatherStatus | null>(null)
 let radarFrameLayers: L.TileLayer[] = []
 let currentRadarFrame = 0
 let radarAnimInterval: ReturnType<typeof setInterval> | null = null
@@ -501,8 +512,8 @@ async function ensureSettings(): Promise<SettingsDto | null> {
 
 async function fetchWeatherStatus(): Promise<WeatherStatus | null> {
   try {
-    weatherStatus = await getWeatherStatus()
-    return weatherStatus
+    weatherStatus.value = await getWeatherStatus()
+    return weatherStatus.value
   } catch (err) {
     console.error('Failed to fetch weather status:', err)
     return null
@@ -873,7 +884,7 @@ function disableWind() {
 
 async function toggleWind() {
   showWind.value = !showWind.value
-  if (showWind.value && weatherStatus?.wind.available) {
+  if (showWind.value && weatherStatus.value?.wind.available) {
     enableWind()
   } else {
     showWind.value = false
@@ -916,7 +927,7 @@ function disableLightning() {
 
 async function toggleLightning() {
   showLightning.value = !showLightning.value
-  if (showLightning.value && weatherStatus?.lightning.available) {
+  if (showLightning.value && weatherStatus.value?.lightning.available) {
     enableLightning()
   } else {
     showLightning.value = false
@@ -1900,8 +1911,8 @@ onMounted(async () => {
   // Restore persisted weather overlay states
   await fetchWeatherStatus()
   if (showRadar.value) await enableRadar()
-  if (showWind.value && weatherStatus?.wind.available) enableWind()
-  if (showLightning.value && weatherStatus?.lightning.available) enableLightning()
+  if (showWind.value && weatherStatus.value?.wind.available) enableWind()
+  if (showLightning.value && weatherStatus.value?.lightning.available) enableLightning()
 
   // Handle pending selection (e.g. navigation from BeaconStreamView)
   if (selectionStore.selectedCallsign) {
