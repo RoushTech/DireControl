@@ -11,6 +11,7 @@ import {
 import { getStations, getStationTrack, getStationPackets, getSettings } from '@/api/stationsApi'
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
+import { getWeatherManifest, getWeatherStatus, type WeatherStatus } from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
 import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
 import type { TileProviderConfig } from '@/types/map'
@@ -274,10 +275,10 @@ let coverageData: CoverageGridSquareDto[] | null = null
 
 // Weather overlay state
 interface RainViewerManifest {
-  host: string
   radar: { past: { time: number; path: string }[] }
 }
 let rainviewerManifest: RainViewerManifest | null = null
+let weatherStatus: WeatherStatus | null = null
 let radarFrameLayers: L.TileLayer[] = []
 let currentRadarFrame = 0
 let radarAnimInterval: ReturnType<typeof setInterval> | null = null
@@ -496,6 +497,16 @@ async function ensureSettings(): Promise<SettingsDto | null> {
     }
   }
   return settingsCache
+}
+
+async function fetchWeatherStatus(): Promise<WeatherStatus | null> {
+  try {
+    weatherStatus = await getWeatherStatus()
+    return weatherStatus
+  } catch (err) {
+    console.error('Failed to fetch weather status:', err)
+    return null
+  }
 }
 
 function clearHomeMarker() {
@@ -723,17 +734,17 @@ function ensureWeatherPane() {
 
 async function fetchRainViewerManifest(): Promise<RainViewerManifest | null> {
   try {
-    const res = await fetch('https://api.rainviewer.com/public/weather-maps.json')
-    return (await res.json()) as RainViewerManifest
+    return await getWeatherManifest()
   } catch (err) {
     console.error('Failed to fetch RainViewer manifest:', err)
     return null
   }
 }
 
-function buildRadarLayer(host: string, framePath: string): L.TileLayer {
+function buildRadarLayer(framePath: string): L.TileLayer {
+  const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
   return L.tileLayer(
-    `${host}${framePath}/512/{z}/{x}/{y}/2/1_1.png`,
+    `/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`,
     { tileSize: 512, opacity: radarOpacity.value, zIndex: 10, pane: 'weatherPane' },
   )
 }
@@ -798,7 +809,7 @@ async function enableRadar() {
     rainviewerManifest = await fetchRainViewerManifest()
     if (!rainviewerManifest) { showRadar.value = false; return }
     radarFrameLayers = rainviewerManifest.radar.past.map(f =>
-      buildRadarLayer(rainviewerManifest!.host, f.path),
+      buildRadarLayer(f.path),
     )
     radarFrameCount.value = radarFrameLayers.length
     showRadarFrame(radarFrameLayers.length - 1)
@@ -811,7 +822,7 @@ async function enableRadar() {
       rainviewerManifest = await fetchRainViewerManifest()
       if (!rainviewerManifest) return
       radarFrameLayers = rainviewerManifest.radar.past.map(f =>
-        buildRadarLayer(rainviewerManifest!.host, f.path),
+        buildRadarLayer(f.path),
       )
       radarFrameCount.value = radarFrameLayers.length
       showRadarFrame(radarFrameLayers.length - 1)
@@ -843,12 +854,12 @@ async function toggleRadar() {
 
 // ── Wind (OpenWeatherMap) ──
 
-function enableWind(apiKey: string) {
+function enableWind() {
   if (!map.value) return
   disableWind()
   ensureWeatherPane()
   windLayer = L.tileLayer(
-    `https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${apiKey}`,
+    '/api/weather/wind/tile/{z}/{x}/{y}',
     { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane' },
   ).addTo(map.value)
 }
@@ -862,9 +873,8 @@ function disableWind() {
 
 async function toggleWind() {
   showWind.value = !showWind.value
-  const key = settingsCache?.openWeatherMapApiKey ?? ''
-  if (showWind.value && key) {
-    enableWind(key)
+  if (showWind.value && weatherStatus?.wind.available) {
+    enableWind()
   } else {
     showWind.value = false
     disableWind()
@@ -873,24 +883,23 @@ async function toggleWind() {
 
 // ── Lightning (Tomorrow.io) ──
 
-function buildLightningLayer(apiKey: string): L.TileLayer {
-  const now = Math.floor(Date.now() / 1000)
+function buildLightningLayer(): L.TileLayer {
   return L.tileLayer(
-    `https://api.tomorrow.io/v4/map/tile/{z}/{x}/{y}/lightningStrikeCount/${now}.png?apikey=${apiKey}`,
+    '/api/weather/lightning/tile/{z}/{x}/{y}',
     { opacity: lightningOpacity.value, zIndex: 12, pane: 'weatherPane' },
   )
 }
 
-function enableLightning(apiKey: string) {
+function enableLightning() {
   if (!map.value) return
   disableLightning()
   ensureWeatherPane()
-  lightningLayer = buildLightningLayer(apiKey).addTo(map.value)
-  // Refresh every 5 minutes
+  lightningLayer = buildLightningLayer().addTo(map.value)
+  // Refresh every 5 minutes so Leaflet fetches fresh tiles from the backend cache
   lightningRefreshInterval = setInterval(() => {
     if (!showLightning.value || !map.value) return
     lightningLayer?.remove()
-    lightningLayer = buildLightningLayer(apiKey).addTo(map.value!)
+    lightningLayer = buildLightningLayer().addTo(map.value!)
   }, 5 * 60 * 1000)
 }
 
@@ -907,9 +916,8 @@ function disableLightning() {
 
 async function toggleLightning() {
   showLightning.value = !showLightning.value
-  const key = settingsCache?.tomorrowIoApiKey ?? ''
-  if (showLightning.value && key) {
-    enableLightning(key)
+  if (showLightning.value && weatherStatus?.lightning.available) {
+    enableLightning()
   } else {
     showLightning.value = false
     disableLightning()
@@ -1890,9 +1898,10 @@ onMounted(async () => {
   }
 
   // Restore persisted weather overlay states
+  await fetchWeatherStatus()
   if (showRadar.value) await enableRadar()
-  if (showWind.value && settingsCache?.openWeatherMapApiKey) enableWind(settingsCache.openWeatherMapApiKey)
-  if (showLightning.value && settingsCache?.tomorrowIoApiKey) enableLightning(settingsCache.tomorrowIoApiKey)
+  if (showWind.value && weatherStatus?.wind.available) enableWind()
+  if (showLightning.value && weatherStatus?.lightning.available) enableLightning()
 
   // Handle pending selection (e.g. navigation from BeaconStreamView)
   if (selectionStore.selectedCallsign) {
@@ -2125,8 +2134,8 @@ defineExpose({ TILE_PROVIDERS })
       <!-- Wind toggle -->
       <v-tooltip
         v-if="!mobile"
-        :disabled="!!settingsCache?.openWeatherMapApiKey"
-        text="OpenWeatherMap API key required — configure in Settings."
+        :disabled="weatherStatus?.wind.available ?? false"
+        :text="weatherStatus?.wind.reason ?? 'OpenWeatherMap API key required — configure in Settings.'"
         location="bottom"
       >
         <template #activator="{ props: tp }">
@@ -2136,7 +2145,7 @@ defineExpose({ TILE_PROVIDERS })
                 v-bind="{ ...tp, ...menuProps }"
                 class="wind-toggle-btn"
                 :color="showWind ? 'cyan-darken-1' : 'grey-darken-1'"
-                :disabled="!settingsCache?.openWeatherMapApiKey"
+                :disabled="!(weatherStatus?.wind.available ?? false)"
                 size="small"
                 variant="elevated"
                 @click.left.stop="toggleWind"
@@ -2158,8 +2167,8 @@ defineExpose({ TILE_PROVIDERS })
       <!-- Lightning toggle -->
       <v-tooltip
         v-if="!mobile"
-        :disabled="!!settingsCache?.tomorrowIoApiKey"
-        text="Tomorrow.io API key required — configure in Settings."
+        :disabled="weatherStatus?.lightning.available ?? false"
+        :text="weatherStatus?.lightning.reason ?? 'Tomorrow.io API key required — configure in Settings.'"
         location="bottom"
       >
         <template #activator="{ props: tp }">
@@ -2169,7 +2178,7 @@ defineExpose({ TILE_PROVIDERS })
                 v-bind="{ ...tp, ...menuProps }"
                 class="lightning-toggle-btn"
                 :color="showLightning ? 'yellow-darken-2' : 'grey-darken-1'"
-                :disabled="!settingsCache?.tomorrowIoApiKey"
+                :disabled="!(weatherStatus?.lightning.available ?? false)"
                 size="small"
                 variant="elevated"
                 @click.left.stop="toggleLightning"
@@ -2261,11 +2270,11 @@ defineExpose({ TILE_PROVIDERS })
             <template #prepend><v-icon :color="showRadar ? 'blue-darken-2' : 'grey'">mdi-weather-rainy</v-icon></template>
             <v-list-item-title>{{ showRadar ? 'Hide Radar' : 'Radar' }}</v-list-item-title>
           </v-list-item>
-          <v-list-item :disabled="!settingsCache?.openWeatherMapApiKey" @click="toggleWind">
+          <v-list-item :disabled="!(weatherStatus?.wind.available ?? false)" @click="toggleWind">
             <template #prepend><v-icon :color="showWind ? 'cyan-darken-1' : 'grey'">mdi-weather-windy</v-icon></template>
             <v-list-item-title>{{ showWind ? 'Hide Wind' : 'Wind' }}</v-list-item-title>
           </v-list-item>
-          <v-list-item :disabled="!settingsCache?.tomorrowIoApiKey" @click="toggleLightning">
+          <v-list-item :disabled="!(weatherStatus?.lightning.available ?? false)" @click="toggleLightning">
             <template #prepend><v-icon :color="showLightning ? 'yellow-darken-2' : 'grey'">mdi-weather-lightning</v-icon></template>
             <v-list-item-title>{{ showLightning ? 'Hide Lightning' : 'Lightning' }}</v-list-item-title>
           </v-list-item>

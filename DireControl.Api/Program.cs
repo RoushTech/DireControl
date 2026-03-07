@@ -1,6 +1,7 @@
 using DireControl.Api;
 using DireControl.Api.Hubs;
 using DireControl.Api.Services;
+using DireControl.Api.Services.Weather;
 using DireControl.Data;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
@@ -48,12 +49,34 @@ services
             c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
         })
         .Services
+    .AddHttpClient("RainViewer")
+        .ConfigureHttpClient(c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(15);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
+        })
+        .Services
+    .AddHttpClient("OpenWeatherMap")
+        .ConfigureHttpClient(c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(15);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
+        })
+        .Services
+    .AddHttpClient("TomorrowIo")
+        .ConfigureHttpClient(c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(15);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
+        })
+        .Services
     .AddHostedService<KissTcpService>()
     .AddHostedService<AprsPacketParsingService>()
     .AddHostedService<AprsIsService>()
     .AddHostedService<StationExpiryService>()
     .AddHostedService<AlertingService>()
     .AddHostedService<MessageRetryService>()
+    .AddHostedService<WeatherCacheService>()
     .AddSingleton<KissConnectionHolder>()
     .AddSingleton<AprsIsReconnectTrigger>()
     .AddSingleton<IAprsIsStatusService, AprsIsStatusService>()
@@ -61,7 +84,10 @@ services
     .AddSingleton<MessageSendingService>()
     .AddSingleton<PendingAlertChannel>()
     .AddSingleton<CallsignLookupService>()
-    .AddSingleton<StatisticsService>();
+    .AddSingleton<StatisticsService>()
+    .AddSingleton<RadarCache>()
+    .AddSingleton<WindTileCache>()
+    .AddSingleton<LightningCache>();
 
 var app = builder.Build();
 

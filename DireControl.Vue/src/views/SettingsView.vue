@@ -6,6 +6,7 @@ import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
 import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys } from '@/api/stationsApi'
+import { getWeatherStatus } from '@/api/weatherApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 
@@ -232,6 +233,8 @@ function saveApiKeys() {
 // ─── Weather overlay API keys ─────────────────────────────────────────────────
 const owmApiKey = ref('')
 const tomorrowIoApiKey = ref('')
+const owmKeyConfigured = ref(false)
+const tomorrowKeyConfigured = ref(false)
 const weatherKeysSaving = ref(false)
 const weatherKeysSaveError = ref('')
 const weatherKeysSaveSuccess = ref(false)
@@ -242,12 +245,19 @@ async function saveWeatherApiKeys() {
   weatherKeysSaving.value = true
   weatherKeysSaveError.value = ''
   weatherKeysSaveSuccess.value = false
+  const owmValue = owmApiKey.value.trim() || null
+  const tomorrowValue = tomorrowIoApiKey.value.trim() || null
   try {
-    await updateWeatherApiKeys(
-      owmApiKey.value.trim() || null,
-      tomorrowIoApiKey.value.trim() || null,
-    )
+    await updateWeatherApiKeys(owmValue, tomorrowValue)
     weatherKeysSaveSuccess.value = true
+    // Update configured flags based on what was saved
+    if (owmValue !== null) owmKeyConfigured.value = true
+    if (tomorrowValue !== null) tomorrowKeyConfigured.value = true
+    if (owmValue === null) owmKeyConfigured.value = false
+    if (tomorrowValue === null) tomorrowKeyConfigured.value = false
+    // Clear the fields after saving — values are secrets
+    owmApiKey.value = ''
+    tomorrowIoApiKey.value = ''
     setTimeout(() => { weatherKeysSaveSuccess.value = false }, 3000)
   } catch {
     weatherKeysSaveError.value = 'Failed to save weather API keys.'
@@ -295,8 +305,11 @@ onMounted(async () => {
     aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
     aprsIsFilter.value = s.aprsIsFilter
     deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
-    owmApiKey.value = s.openWeatherMapApiKey ?? ''
-    tomorrowIoApiKey.value = s.tomorrowIoApiKey ?? ''
+  } catch { /* ignore */ }
+  try {
+    const status = await getWeatherStatus()
+    owmKeyConfigured.value = status.wind.available
+    tomorrowKeyConfigured.value = status.lightning.available
   } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
@@ -677,9 +690,10 @@ async function confirmDelete() {
         density="compact"
         :type="showOwmKey ? 'text' : 'password'"
         :append-inner-icon="showOwmKey ? 'mdi-eye-off' : 'mdi-eye'"
+        :placeholder="owmKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
         class="mb-1"
-        :prepend-inner-icon="owmApiKey.trim() ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
-        :color="owmApiKey.trim() ? 'success' : 'warning'"
+        :prepend-inner-icon="(owmApiKey.trim() || owmKeyConfigured) ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
+        :color="(owmApiKey.trim() || owmKeyConfigured) ? 'success' : 'warning'"
         @click:append-inner="showOwmKey = !showOwmKey"
       />
       <div class="text-caption text-medium-emphasis mb-4">
@@ -695,9 +709,10 @@ async function confirmDelete() {
         density="compact"
         :type="showTomorrowKey ? 'text' : 'password'"
         :append-inner-icon="showTomorrowKey ? 'mdi-eye-off' : 'mdi-eye'"
+        :placeholder="tomorrowKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
         class="mb-1"
-        :prepend-inner-icon="tomorrowIoApiKey.trim() ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
-        :color="tomorrowIoApiKey.trim() ? 'success' : 'warning'"
+        :prepend-inner-icon="(tomorrowIoApiKey.trim() || tomorrowKeyConfigured) ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
+        :color="(tomorrowIoApiKey.trim() || tomorrowKeyConfigured) ? 'success' : 'warning'"
         @click:append-inner="showTomorrowKey = !showTomorrowKey"
       />
       <div class="text-caption text-medium-emphasis mb-4">

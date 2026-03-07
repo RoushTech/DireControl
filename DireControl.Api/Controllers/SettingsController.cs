@@ -63,8 +63,6 @@ public class SettingsController(
             AprsIsPasscodeComputed = computedPasscode,
             AprsIsFilter = userSetting.AprsIsFilter,
             DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
-            OpenWeatherMapApiKey = userSetting.OpenWeatherMapApiKey,
-            TomorrowIoApiKey = userSetting.TomorrowIoApiKey,
         });
     }
 
