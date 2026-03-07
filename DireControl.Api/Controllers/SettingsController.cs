@@ -63,6 +63,8 @@ public class SettingsController(
             AprsIsPasscodeComputed = computedPasscode,
             AprsIsFilter = userSetting.AprsIsFilter,
             DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
+            OpenWeatherMapApiKey = userSetting.OpenWeatherMapApiKey,
+            TomorrowIoApiKey = userSetting.TomorrowIoApiKey,
         });
     }
 
@@ -124,6 +126,29 @@ public class SettingsController(
         // Signal AprsIsService to drop and re-establish connection with new settings.
         reconnectTrigger.Trigger();
 
+        return NoContent();
+    }
+
+    [HttpPut("weather-keys")]
+    public async Task<ActionResult> UpdateWeatherApiKeys(
+        [FromBody] UpdateWeatherApiKeysRequest request,
+        CancellationToken ct)
+    {
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        setting.OpenWeatherMapApiKey = string.IsNullOrWhiteSpace(request.OpenWeatherMapApiKey)
+            ? null
+            : request.OpenWeatherMapApiKey.Trim();
+        setting.TomorrowIoApiKey = string.IsNullOrWhiteSpace(request.TomorrowIoApiKey)
+            ? null
+            : request.TomorrowIoApiKey.Trim();
+
+        await db.SaveChangesAsync(ct);
         return NoContent();
     }
 }

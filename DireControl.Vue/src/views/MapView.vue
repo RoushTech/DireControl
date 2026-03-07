@@ -146,6 +146,12 @@ const {
   coverage: showCoverage,
   rangeRings: showRings,
   ringPanelOpen,
+  radar: showRadar,
+  wind: showWind,
+  lightning: showLightning,
+  radarOpacity,
+  windOpacity,
+  lightningOpacity,
 } = useMapPrefs()
 
 const mapContainer = ref<HTMLDivElement>()
@@ -265,6 +271,29 @@ let heatmapPositions: [number, number][] | null = null
 const coverageLoading = ref(false)
 let coverageLayerGroup: L.LayerGroup | null = null
 let coverageData: CoverageGridSquareDto[] | null = null
+
+// Weather overlay state
+interface RainViewerManifest {
+  host: string
+  radar: { past: { time: number; path: string }[] }
+}
+let rainviewerManifest: RainViewerManifest | null = null
+let radarFrameLayers: L.TileLayer[] = []
+let currentRadarFrame = 0
+let radarAnimInterval: ReturnType<typeof setInterval> | null = null
+let radarRefreshInterval: ReturnType<typeof setInterval> | null = null
+const radarPlaying = ref(false)
+const radarTimestamp = ref('')
+const radarFrameCount = ref(0)
+const radarCurrentIdx = ref(0)
+const radarLoading = ref(false)
+let windLayer: L.TileLayer | null = null
+let lightningLayer: L.TileLayer | null = null
+let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
+// Per-layer opacity menu refs (attached to toggle buttons)
+const radarOpacityMenuOpen = ref(false)
+const windOpacityMenuOpen = ref(false)
+const lightningOpacityMenuOpen = ref(false)
 
 let connection: HubConnection | null = null
 
@@ -676,6 +705,214 @@ async function toggleCoverage() {
     showCoverage.value = false
   } finally {
     coverageLoading.value = false
+  }
+}
+
+// --- Weather Overlays ---
+
+function ensureWeatherPane() {
+  if (!map.value) return
+  if (!map.value.getPane('weatherPane')) {
+    const pane = map.value.createPane('weatherPane')
+    pane.style.zIndex = '620'
+    pane.style.pointerEvents = 'none'
+  }
+}
+
+// ── RainViewer ──
+
+async function fetchRainViewerManifest(): Promise<RainViewerManifest | null> {
+  try {
+    const res = await fetch('https://api.rainviewer.com/public/weather-maps.json')
+    return (await res.json()) as RainViewerManifest
+  } catch (err) {
+    console.error('Failed to fetch RainViewer manifest:', err)
+    return null
+  }
+}
+
+function buildRadarLayer(host: string, framePath: string): L.TileLayer {
+  return L.tileLayer(
+    `${host}${framePath}/512/{z}/{x}/{y}/2/1_1.png`,
+    { tileSize: 512, opacity: radarOpacity.value, zIndex: 10, pane: 'weatherPane' },
+  )
+}
+
+function formatRadarTime(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' local'
+}
+
+function showRadarFrame(idx: number) {
+  if (!map.value || radarFrameLayers.length === 0) return
+  const clampedIdx = Math.max(0, Math.min(idx, radarFrameLayers.length - 1))
+  radarFrameLayers.forEach((layer, i) => {
+    if (map.value!.hasLayer(layer)) map.value!.removeLayer(layer)
+    if (i === clampedIdx) layer.addTo(map.value!)
+  })
+  currentRadarFrame = clampedIdx
+  radarCurrentIdx.value = clampedIdx
+  if (rainviewerManifest) {
+    radarTimestamp.value = formatRadarTime(rainviewerManifest.radar.past[clampedIdx]!.time)
+  }
+}
+
+function playRadar() {
+  if (radarAnimInterval) return
+  radarPlaying.value = true
+  radarAnimInterval = setInterval(() => {
+    const next = (currentRadarFrame + 1) % radarFrameLayers.length
+    showRadarFrame(next)
+  }, 500)
+}
+
+function pauseRadar() {
+  radarPlaying.value = false
+  if (radarAnimInterval) {
+    clearInterval(radarAnimInterval)
+    radarAnimInterval = null
+  }
+}
+
+function stepRadarFrame(delta: -1 | 1) {
+  pauseRadar()
+  const next = (currentRadarFrame + delta + radarFrameLayers.length) % radarFrameLayers.length
+  showRadarFrame(next)
+}
+
+function clearRadarLayers() {
+  pauseRadar()
+  for (const layer of radarFrameLayers) {
+    if (map.value?.hasLayer(layer)) map.value.removeLayer(layer)
+  }
+  radarFrameLayers = []
+  radarFrameCount.value = 0
+  radarTimestamp.value = ''
+  radarCurrentIdx.value = 0
+}
+
+async function enableRadar() {
+  if (!map.value) return
+  radarLoading.value = true
+  ensureWeatherPane()
+  try {
+    rainviewerManifest = await fetchRainViewerManifest()
+    if (!rainviewerManifest) { showRadar.value = false; return }
+    radarFrameLayers = rainviewerManifest.radar.past.map(f =>
+      buildRadarLayer(rainviewerManifest!.host, f.path),
+    )
+    radarFrameCount.value = radarFrameLayers.length
+    showRadarFrame(radarFrameLayers.length - 1)
+    // Refresh manifest every 5 minutes
+    radarRefreshInterval = setInterval(async () => {
+      if (!showRadar.value) return
+      const wasPlaying = radarPlaying.value
+      pauseRadar()
+      clearRadarLayers()
+      rainviewerManifest = await fetchRainViewerManifest()
+      if (!rainviewerManifest) return
+      radarFrameLayers = rainviewerManifest.radar.past.map(f =>
+        buildRadarLayer(rainviewerManifest!.host, f.path),
+      )
+      radarFrameCount.value = radarFrameLayers.length
+      showRadarFrame(radarFrameLayers.length - 1)
+      if (wasPlaying) playRadar()
+    }, 5 * 60 * 1000)
+  } finally {
+    radarLoading.value = false
+  }
+}
+
+function disableRadar() {
+  pauseRadar()
+  clearRadarLayers()
+  if (radarRefreshInterval) {
+    clearInterval(radarRefreshInterval)
+    radarRefreshInterval = null
+  }
+  rainviewerManifest = null
+}
+
+async function toggleRadar() {
+  showRadar.value = !showRadar.value
+  if (showRadar.value) {
+    await enableRadar()
+  } else {
+    disableRadar()
+  }
+}
+
+// ── Wind (OpenWeatherMap) ──
+
+function enableWind(apiKey: string) {
+  if (!map.value) return
+  disableWind()
+  ensureWeatherPane()
+  windLayer = L.tileLayer(
+    `https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${apiKey}`,
+    { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane' },
+  ).addTo(map.value)
+}
+
+function disableWind() {
+  if (windLayer) {
+    windLayer.remove()
+    windLayer = null
+  }
+}
+
+async function toggleWind() {
+  showWind.value = !showWind.value
+  const key = settingsCache?.openWeatherMapApiKey ?? ''
+  if (showWind.value && key) {
+    enableWind(key)
+  } else {
+    showWind.value = false
+    disableWind()
+  }
+}
+
+// ── Lightning (Tomorrow.io) ──
+
+function buildLightningLayer(apiKey: string): L.TileLayer {
+  const now = Math.floor(Date.now() / 1000)
+  return L.tileLayer(
+    `https://api.tomorrow.io/v4/map/tile/{z}/{x}/{y}/lightningStrikeCount/${now}.png?apikey=${apiKey}`,
+    { opacity: lightningOpacity.value, zIndex: 12, pane: 'weatherPane' },
+  )
+}
+
+function enableLightning(apiKey: string) {
+  if (!map.value) return
+  disableLightning()
+  ensureWeatherPane()
+  lightningLayer = buildLightningLayer(apiKey).addTo(map.value)
+  // Refresh every 5 minutes
+  lightningRefreshInterval = setInterval(() => {
+    if (!showLightning.value || !map.value) return
+    lightningLayer?.remove()
+    lightningLayer = buildLightningLayer(apiKey).addTo(map.value!)
+  }, 5 * 60 * 1000)
+}
+
+function disableLightning() {
+  if (lightningLayer) {
+    lightningLayer.remove()
+    lightningLayer = null
+  }
+  if (lightningRefreshInterval) {
+    clearInterval(lightningRefreshInterval)
+    lightningRefreshInterval = null
+  }
+}
+
+async function toggleLightning() {
+  showLightning.value = !showLightning.value
+  const key = settingsCache?.tomorrowIoApiKey ?? ''
+  if (showLightning.value && key) {
+    enableLightning(key)
+  } else {
+    showLightning.value = false
+    disableLightning()
   }
 }
 
@@ -1518,6 +1755,11 @@ watch(() => theme.global.current.value.dark, (dark) => {
   }
 })
 
+// Watch: weather overlay opacity — apply immediately to live layers
+watch(radarOpacity, (v) => radarFrameLayers.forEach(l => l.setOpacity(v)))
+watch(windOpacity, (v) => windLayer?.setOpacity(v))
+watch(lightningOpacity, (v) => lightningLayer?.setOpacity(v))
+
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
   console.log('[Select] selectedCallsign watch fired — callsign:', callsign, '| prev:', prev)
@@ -1647,6 +1889,11 @@ onMounted(async () => {
     }
   }
 
+  // Restore persisted weather overlay states
+  if (showRadar.value) await enableRadar()
+  if (showWind.value && settingsCache?.openWeatherMapApiKey) enableWind(settingsCache.openWeatherMapApiKey)
+  if (showLightning.value && settingsCache?.tomorrowIoApiKey) enableLightning(settingsCache.tomorrowIoApiKey)
+
   // Handle pending selection (e.g. navigation from BeaconStreamView)
   if (selectionStore.selectedCallsign) {
     const s = stationCache.get(selectionStore.selectedCallsign)
@@ -1697,6 +1944,9 @@ onUnmounted(async () => {
   }
   clearHeatmap()
   clearCoverage()
+  disableRadar()
+  disableWind()
+  disableLightning()
   heatmapPositions = null
   coverageData = null
   if (highlightTimeout) clearTimeout(highlightTimeout)
@@ -1848,6 +2098,110 @@ defineExpose({ TILE_PROVIDERS })
         {{ showCoverage ? 'Hide Grid' : 'Coverage' }}
       </v-btn>
 
+      <!-- Radar toggle -->
+      <v-menu v-if="!mobile" v-model="radarOpacityMenuOpen" :close-on-content-click="false" location="bottom">
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            class="radar-toggle-btn"
+            :color="showRadar ? 'blue-darken-2' : 'grey-darken-1'"
+            :loading="radarLoading"
+            size="small"
+            variant="elevated"
+            @click.left.stop="toggleRadar"
+            @contextmenu.prevent="radarOpacityMenuOpen = !radarOpacityMenuOpen"
+          >
+            <v-icon start>mdi-weather-rainy</v-icon>
+            {{ showRadar ? 'Hide Radar' : 'Radar' }}
+          </v-btn>
+        </template>
+        <v-card min-width="200" class="pa-3">
+          <div class="text-caption mb-1">Radar opacity</div>
+          <v-slider v-model="radarOpacity" min="0.1" max="1" step="0.05" density="compact" hide-details />
+          <div class="text-caption text-right">{{ Math.round(radarOpacity * 100) }}%</div>
+        </v-card>
+      </v-menu>
+
+      <!-- Wind toggle -->
+      <v-tooltip
+        v-if="!mobile"
+        :disabled="!!settingsCache?.openWeatherMapApiKey"
+        text="OpenWeatherMap API key required — configure in Settings."
+        location="bottom"
+      >
+        <template #activator="{ props: tp }">
+          <v-menu v-model="windOpacityMenuOpen" :close-on-content-click="false" location="bottom">
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="{ ...tp, ...menuProps }"
+                class="wind-toggle-btn"
+                :color="showWind ? 'cyan-darken-1' : 'grey-darken-1'"
+                :disabled="!settingsCache?.openWeatherMapApiKey"
+                size="small"
+                variant="elevated"
+                @click.left.stop="toggleWind"
+                @contextmenu.prevent="windOpacityMenuOpen = !windOpacityMenuOpen"
+              >
+                <v-icon start>mdi-weather-windy</v-icon>
+                {{ showWind ? 'Hide Wind' : 'Wind' }}
+              </v-btn>
+            </template>
+            <v-card min-width="200" class="pa-3">
+              <div class="text-caption mb-1">Wind opacity</div>
+              <v-slider v-model="windOpacity" min="0.1" max="1" step="0.05" density="compact" hide-details />
+              <div class="text-caption text-right">{{ Math.round(windOpacity * 100) }}%</div>
+            </v-card>
+          </v-menu>
+        </template>
+      </v-tooltip>
+
+      <!-- Lightning toggle -->
+      <v-tooltip
+        v-if="!mobile"
+        :disabled="!!settingsCache?.tomorrowIoApiKey"
+        text="Tomorrow.io API key required — configure in Settings."
+        location="bottom"
+      >
+        <template #activator="{ props: tp }">
+          <v-menu v-model="lightningOpacityMenuOpen" :close-on-content-click="false" location="bottom">
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="{ ...tp, ...menuProps }"
+                class="lightning-toggle-btn"
+                :color="showLightning ? 'yellow-darken-2' : 'grey-darken-1'"
+                :disabled="!settingsCache?.tomorrowIoApiKey"
+                size="small"
+                variant="elevated"
+                @click.left.stop="toggleLightning"
+                @contextmenu.prevent="lightningOpacityMenuOpen = !lightningOpacityMenuOpen"
+              >
+                <v-icon start>mdi-weather-lightning</v-icon>
+                {{ showLightning ? 'Hide Lightning' : 'Lightning' }}
+              </v-btn>
+            </template>
+            <v-card min-width="200" class="pa-3">
+              <div class="text-caption mb-1">Lightning opacity</div>
+              <v-slider v-model="lightningOpacity" min="0.1" max="1" step="0.05" density="compact" hide-details />
+              <div class="text-caption text-right">{{ Math.round(lightningOpacity * 100) }}%</div>
+            </v-card>
+          </v-menu>
+        </template>
+      </v-tooltip>
+
+      <!-- Radar animation bar (shown when radar is active, desktop only) -->
+      <div v-if="showRadar && !mobile && radarFrameCount > 0" class="radar-animation-bar">
+        <v-btn icon="mdi-skip-previous" size="x-small" variant="text" @click="stepRadarFrame(-1)" />
+        <v-btn
+          :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
+          size="x-small"
+          variant="text"
+          @click="radarPlaying ? pauseRadar() : playRadar()"
+        />
+        <v-btn icon="mdi-skip-next" size="x-small" variant="text" @click="stepRadarFrame(1)" />
+        <span class="radar-timestamp">{{ radarTimestamp }}</span>
+        <span class="radar-frame-dots">{{ radarCurrentIdx + 1 }}&nbsp;/&nbsp;{{ radarFrameCount }}</span>
+      </div>
+
       <!-- Pop-out button -->
       <v-btn
         class="popout-btn"
@@ -1901,6 +2255,19 @@ defineExpose({ TILE_PROVIDERS })
           <v-list-item @click="showRings = !showRings">
             <template #prepend><v-icon :color="showRings ? 'blue-darken-1' : 'grey'">mdi-circle-double</v-icon></template>
             <v-list-item-title>{{ showRings ? 'Hide Range Rings' : 'Show Range Rings' }}</v-list-item-title>
+          </v-list-item>
+          <v-divider class="my-1" />
+          <v-list-item @click="toggleRadar">
+            <template #prepend><v-icon :color="showRadar ? 'blue-darken-2' : 'grey'">mdi-weather-rainy</v-icon></template>
+            <v-list-item-title>{{ showRadar ? 'Hide Radar' : 'Radar' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item :disabled="!settingsCache?.openWeatherMapApiKey" @click="toggleWind">
+            <template #prepend><v-icon :color="showWind ? 'cyan-darken-1' : 'grey'">mdi-weather-windy</v-icon></template>
+            <v-list-item-title>{{ showWind ? 'Hide Wind' : 'Wind' }}</v-list-item-title>
+          </v-list-item>
+          <v-list-item :disabled="!settingsCache?.tomorrowIoApiKey" @click="toggleLightning">
+            <template #prepend><v-icon :color="showLightning ? 'yellow-darken-2' : 'grey'">mdi-weather-lightning</v-icon></template>
+            <v-list-item-title>{{ showLightning ? 'Hide Lightning' : 'Lightning' }}</v-list-item-title>
           </v-list-item>
         </v-list>
       </v-menu>
@@ -2112,6 +2479,27 @@ defineExpose({ TILE_PROVIDERS })
   z-index: 1000;
 }
 
+.radar-toggle-btn {
+  position: absolute;
+  top: 10px;
+  left: 850px;
+  z-index: 1000;
+}
+
+.wind-toggle-btn {
+  position: absolute;
+  top: 10px;
+  left: 975px;
+  z-index: 1000;
+}
+
+.lightning-toggle-btn {
+  position: absolute;
+  top: 10px;
+  left: 1100px;
+  z-index: 1000;
+}
+
 .popout-btn {
   position: absolute;
   top: 10px;
@@ -2140,6 +2528,34 @@ defineExpose({ TILE_PROVIDERS })
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
+}
+
+.radar-animation-bar {
+  position: absolute;
+  top: 50px;
+  left: 850px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(var(--v-theme-surface), 0.92);
+  border-radius: 6px;
+  padding: 2px 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.radar-timestamp {
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 6px;
+  opacity: 0.9;
+}
+
+.radar-frame-dots {
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 4px;
+  opacity: 0.7;
 }
 </style>
 

@@ -18,5 +18,11 @@ export function useMapPrefs() {
     rangeRings: pref('rangeRings', false),
     ringDistance: pref('ringDistance', 25),
     ringPanelOpen: pref('ringPanelOpen', false),
+    radar: pref('radar', false),
+    wind: pref('wind', false),
+    lightning: pref('lightning', false),
+    radarOpacity: pref('radarOpacity', 0.6),
+    windOpacity: pref('windOpacity', 0.7),
+    lightningOpacity: pref('lightningOpacity', 0.8),
   }
 }

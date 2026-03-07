@@ -5,7 +5,7 @@ import { getGeofences, createGeofence, deleteGeofence, getProximityRules, create
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
-import { getSettings, updateOutboundPath, updateAprsIsSettings } from '@/api/stationsApi'
+import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys } from '@/api/stationsApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 
@@ -229,6 +229,33 @@ function saveApiKeys() {
   setTimeout(() => { apiKeySaved.value = false }, 2500)
 }
 
+// ─── Weather overlay API keys ─────────────────────────────────────────────────
+const owmApiKey = ref('')
+const tomorrowIoApiKey = ref('')
+const weatherKeysSaving = ref(false)
+const weatherKeysSaveError = ref('')
+const weatherKeysSaveSuccess = ref(false)
+const showOwmKey = ref(false)
+const showTomorrowKey = ref(false)
+
+async function saveWeatherApiKeys() {
+  weatherKeysSaving.value = true
+  weatherKeysSaveError.value = ''
+  weatherKeysSaveSuccess.value = false
+  try {
+    await updateWeatherApiKeys(
+      owmApiKey.value.trim() || null,
+      tomorrowIoApiKey.value.trim() || null,
+    )
+    weatherKeysSaveSuccess.value = true
+    setTimeout(() => { weatherKeysSaveSuccess.value = false }, 3000)
+  } catch {
+    weatherKeysSaveError.value = 'Failed to save weather API keys.'
+  } finally {
+    weatherKeysSaving.value = false
+  }
+}
+
 // ---- Geofences ----
 const geofences = ref<GeofenceDto[]>([])
 const showAddGeofence = ref(false)
@@ -268,6 +295,8 @@ onMounted(async () => {
     aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
     aprsIsFilter.value = s.aprsIsFilter
     deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
+    owmApiKey.value = s.openWeatherMapApiKey ?? ''
+    tomorrowIoApiKey.value = s.tomorrowIoApiKey ?? ''
   } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
@@ -616,6 +645,82 @@ async function confirmDelete() {
         </v-btn>
         <v-fade-transition>
           <span v-if="apiKeySaved" class="text-caption text-success">
+            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+          </span>
+        </v-fade-transition>
+      </div>
+    </v-card>
+
+    <!-- ================================================================ -->
+    <!-- Weather Overlays -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2">
+      <span class="text-h6">Weather Overlays</span>
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <!-- Rainfall Radar — no key needed -->
+      <div class="d-flex align-center mb-4">
+        <v-icon color="success" class="mr-2">mdi-check-circle</v-icon>
+        <span class="text-body-2">
+          <strong>Rainfall Radar</strong> — Provided by RainViewer. No API key required.
+        </span>
+      </div>
+
+      <v-divider class="mb-4" />
+
+      <!-- OpenWeatherMap wind key -->
+      <div class="text-body-2 font-weight-medium mb-2">Wind Layer (OpenWeatherMap)</div>
+      <v-text-field
+        v-model="owmApiKey"
+        label="OpenWeatherMap API Key"
+        density="compact"
+        :type="showOwmKey ? 'text' : 'password'"
+        :append-inner-icon="showOwmKey ? 'mdi-eye-off' : 'mdi-eye'"
+        class="mb-1"
+        :prepend-inner-icon="owmApiKey.trim() ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
+        :color="owmApiKey.trim() ? 'success' : 'warning'"
+        @click:append-inner="showOwmKey = !showOwmKey"
+      />
+      <div class="text-caption text-medium-emphasis mb-4">
+        Get a free key at
+        <a href="https://openweathermap.org/api" target="_blank" rel="noopener">openweathermap.org</a>
+      </div>
+
+      <!-- Tomorrow.io lightning key -->
+      <div class="text-body-2 font-weight-medium mb-2">Lightning (Tomorrow.io)</div>
+      <v-text-field
+        v-model="tomorrowIoApiKey"
+        label="Tomorrow.io API Key"
+        density="compact"
+        :type="showTomorrowKey ? 'text' : 'password'"
+        :append-inner-icon="showTomorrowKey ? 'mdi-eye-off' : 'mdi-eye'"
+        class="mb-1"
+        :prepend-inner-icon="tomorrowIoApiKey.trim() ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
+        :color="tomorrowIoApiKey.trim() ? 'success' : 'warning'"
+        @click:append-inner="showTomorrowKey = !showTomorrowKey"
+      />
+      <div class="text-caption text-medium-emphasis mb-4">
+        Get a free key at
+        <a href="https://www.tomorrow.io" target="_blank" rel="noopener">tomorrow.io</a>
+      </div>
+
+      <v-alert v-if="weatherKeysSaveError" type="error" density="compact" class="mb-3">
+        {{ weatherKeysSaveError }}
+      </v-alert>
+
+      <div class="d-flex align-center ga-3">
+        <v-btn
+          size="small"
+          color="primary"
+          prepend-icon="mdi-content-save"
+          :loading="weatherKeysSaving"
+          @click="saveWeatherApiKeys"
+        >
+          Save Keys
+        </v-btn>
+        <v-fade-transition>
+          <span v-if="weatherKeysSaveSuccess" class="text-caption text-success">
             <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
           </span>
         </v-fade-transition>

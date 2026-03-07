@@ -92,6 +92,8 @@ export interface SettingsDto {
   aprsIsPasscodeComputed: number;
   aprsIsFilter: string;
   deduplicationWindowSeconds: number;
+  openWeatherMapApiKey: string | null;
+  tomorrowIoApiKey: string | null;
 }
 
 export interface CallsignCountDto {

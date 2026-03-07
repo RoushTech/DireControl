@@ -117,3 +117,10 @@ export async function updateAprsIsSettings(payload: {
 }): Promise<void> {
   await http.put('/api/v0/settings/aprs-is', payload)
 }
+
+export async function updateWeatherApiKeys(
+  openWeatherMapApiKey: string | null,
+  tomorrowIoApiKey: string | null,
+): Promise<void> {
+  await http.put('/api/v0/settings/weather-keys', { openWeatherMapApiKey, tomorrowIoApiKey })
+}

@@ -117,6 +117,10 @@ public sealed class SettingsDto
     public int AprsIsPasscodeComputed { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
+
+    // ─── Weather overlay API keys ─────────────────────────────────────────────
+    public string? OpenWeatherMapApiKey { get; init; }
+    public string? TomorrowIoApiKey { get; init; }
 }
 
 public sealed class UpdateAprsIsSettingsRequest
@@ -127,6 +131,12 @@ public sealed class UpdateAprsIsSettingsRequest
     public int? AprsIsPasscodeOverride { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
+}
+
+public sealed class UpdateWeatherApiKeysRequest
+{
+    public string? OpenWeatherMapApiKey { get; init; }
+    public string? TomorrowIoApiKey { get; init; }
 }
 
 public sealed class TrackPointDto

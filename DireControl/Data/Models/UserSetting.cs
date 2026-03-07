@@ -41,6 +41,14 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// </summary>
     public int DeduplicationWindowSeconds { get; set; } = 60;
 
+    // ─── Weather overlay API keys ─────────────────────────────────────────────
+
+    /// <summary>OpenWeatherMap API key used for the wind tile overlay.</summary>
+    public string? OpenWeatherMapApiKey { get; set; }
+
+    /// <summary>Tomorrow.io API key used for the lightning tile overlay.</summary>
+    public string? TomorrowIoApiKey { get; set; }
+
     public void Configure(EntityTypeBuilder<UserSetting> builder)
     {
         builder.HasData(new UserSetting { Id = 1 });
