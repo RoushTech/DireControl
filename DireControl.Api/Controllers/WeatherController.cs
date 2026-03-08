@@ -44,6 +44,9 @@ public class WeatherController(
         });
     }
 
+    // RainViewer free tier only provides tiles up to zoom 6.
+    private const int RadarMaxNativeZoom = 6;
+
     // Route: /api/weather/radar/tile/{z}/{x}/{y}/{**framePath}
     // framePath captures the RainViewer frame path (e.g. "v2/radar/1620046800")
     // with the leading slash already stripped by the route pattern.
@@ -52,6 +55,15 @@ public class WeatherController(
     {
         if (string.IsNullOrWhiteSpace(framePath))
             return BadRequest("framePath is required.");
+
+        // Cap zoom to the free-tier maximum; shift x/y to the containing tile at that zoom.
+        if (z > RadarMaxNativeZoom)
+        {
+            var shift = z - RadarMaxNativeZoom;
+            x >>= shift;
+            y >>= shift;
+            z = RadarMaxNativeZoom;
+        }
 
         byte[]? data;
         try

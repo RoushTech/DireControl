@@ -275,7 +275,7 @@ let coverageData: CoverageGridSquareDto[] | null = null
 
 // Weather overlay state
 interface RainViewerManifest {
-  radar: { past: { time: number; path: string }[] }
+  radar: { past: { time: number; path: string }[]; nowcast?: { time: number; path: string }[] }
 }
 interface WeatherLayerStatus {
   available: boolean
@@ -291,8 +291,10 @@ interface WeatherStatus {
 let rainviewerManifest: RainViewerManifest | null = null
 const weatherStatus = shallowRef<WeatherStatus | null>(null)
 let radarFrameLayers: L.TileLayer[] = []
+let radarFrameMeta: { time: number }[] = []
+let radarFrameReady: boolean[] = []
 let currentRadarFrame = 0
-let radarAnimInterval: ReturnType<typeof setInterval> | null = null
+let radarAnimTimeout: ReturnType<typeof setTimeout> | null = null
 let radarRefreshInterval: ReturnType<typeof setInterval> | null = null
 const radarPlaying = ref(false)
 const radarTimestamp = ref('')
@@ -756,7 +758,7 @@ function buildRadarLayer(framePath: string): L.TileLayer {
   const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
   return L.tileLayer(
     `/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`,
-    { opacity: radarOpacity.value, zIndex: 10, pane: 'weatherPane', maxNativeZoom: 9, maxZoom: 19 },
+    { opacity: 0, tileSize: 512, zIndex: 10, pane: 'weatherPane', maxNativeZoom: 6, maxZoom: 19 },
   )
 }
 
@@ -768,30 +770,45 @@ function showRadarFrame(idx: number) {
   if (!map.value || radarFrameLayers.length === 0) return
   const clampedIdx = Math.max(0, Math.min(idx, radarFrameLayers.length - 1))
   radarFrameLayers.forEach((layer, i) => {
-    if (map.value!.hasLayer(layer)) map.value!.removeLayer(layer)
-    if (i === clampedIdx) layer.addTo(map.value!)
+    layer.setOpacity(i === clampedIdx ? radarOpacity.value : 0)
   })
   currentRadarFrame = clampedIdx
   radarCurrentIdx.value = clampedIdx
-  if (rainviewerManifest) {
-    radarTimestamp.value = formatRadarTime(rainviewerManifest.radar.past[clampedIdx]!.time)
+  if (radarFrameMeta[clampedIdx]) {
+    radarTimestamp.value = formatRadarTime(radarFrameMeta[clampedIdx]!.time)
   }
 }
 
-function playRadar() {
-  if (radarAnimInterval) return
+async function playRadar() {
+  if (radarPlaying.value) return
   radarPlaying.value = true
-  radarAnimInterval = setInterval(() => {
+
+  const advance = async () => {
+    if (!radarPlaying.value || radarFrameLayers.length === 0) return
     const next = (currentRadarFrame + 1) % radarFrameLayers.length
+    const layer = radarFrameLayers[next]
+    // Wait for tiles to finish loading before showing the frame (up to 3 s timeout)
+    if (layer && !radarFrameReady[next]) {
+      await new Promise<void>(resolve => {
+        let loadTimeout: ReturnType<typeof setTimeout>
+        const done = () => { radarFrameReady[next] = true; clearTimeout(loadTimeout); resolve() }
+        layer.once('load', done)
+        loadTimeout = setTimeout(() => { layer.off('load', done); resolve() }, 3000)
+      })
+    }
+    if (!radarPlaying.value) return
     showRadarFrame(next)
-  }, 500)
+    radarAnimTimeout = setTimeout(advance, 500)
+  }
+
+  radarAnimTimeout = setTimeout(advance, 500)
 }
 
 function pauseRadar() {
   radarPlaying.value = false
-  if (radarAnimInterval) {
-    clearInterval(radarAnimInterval)
-    radarAnimInterval = null
+  if (radarAnimTimeout) {
+    clearTimeout(radarAnimTimeout)
+    radarAnimTimeout = null
   }
 }
 
@@ -804,9 +821,11 @@ function stepRadarFrame(delta: -1 | 1) {
 function clearRadarLayers() {
   pauseRadar()
   for (const layer of radarFrameLayers) {
-    if (map.value?.hasLayer(layer)) map.value.removeLayer(layer)
+    layer.remove()
   }
   radarFrameLayers = []
+  radarFrameMeta = []
+  radarFrameReady = []
   radarFrameCount.value = 0
   radarTimestamp.value = ''
   radarCurrentIdx.value = 0
@@ -819,11 +838,21 @@ async function enableRadar() {
   try {
     rainviewerManifest = await fetchRainViewerManifest()
     if (!rainviewerManifest) { showRadar.value = false; return }
-    radarFrameLayers = rainviewerManifest.radar.past.map(f =>
-      buildRadarLayer(f.path),
-    )
+    const allFrames = [
+      ...rainviewerManifest.radar.past,
+      ...(rainviewerManifest.radar.nowcast ?? []),
+    ]
+    radarFrameMeta = allFrames.map(f => ({ time: f.time }))
+    radarFrameReady = new Array(allFrames.length).fill(false)
+    radarFrameLayers = allFrames.map((f, i) => {
+      const layer = buildRadarLayer(f.path)
+      layer.once('load', () => { radarFrameReady[i] = true })
+      layer.addTo(map.value!)
+      return layer
+    })
     radarFrameCount.value = radarFrameLayers.length
-    showRadarFrame(radarFrameLayers.length - 1)
+    // Start on the last historical frame so we see the most recent real data first
+    showRadarFrame(rainviewerManifest.radar.past.length - 1)
     // Refresh manifest every 5 minutes
     radarRefreshInterval = setInterval(async () => {
       if (!showRadar.value) return
@@ -832,11 +861,20 @@ async function enableRadar() {
       clearRadarLayers()
       rainviewerManifest = await fetchRainViewerManifest()
       if (!rainviewerManifest) return
-      radarFrameLayers = rainviewerManifest.radar.past.map(f =>
-        buildRadarLayer(f.path),
-      )
+      const refreshedFrames = [
+        ...rainviewerManifest.radar.past,
+        ...(rainviewerManifest.radar.nowcast ?? []),
+      ]
+      radarFrameMeta = refreshedFrames.map(f => ({ time: f.time }))
+      radarFrameReady = new Array(refreshedFrames.length).fill(false)
+      radarFrameLayers = refreshedFrames.map((f, i) => {
+        const layer = buildRadarLayer(f.path)
+        layer.once('load', () => { radarFrameReady[i] = true })
+        layer.addTo(map.value!)
+        return layer
+      })
       radarFrameCount.value = radarFrameLayers.length
-      showRadarFrame(radarFrameLayers.length - 1)
+      showRadarFrame(rainviewerManifest.radar.past.length - 1)
       if (wasPlaying) playRadar()
     }, 5 * 60 * 1000)
   } finally {
@@ -1775,7 +1813,7 @@ watch(() => theme.global.current.value.dark, (dark) => {
 })
 
 // Watch: weather overlay opacity — apply immediately to live layers
-watch(radarOpacity, (v) => radarFrameLayers.forEach(l => l.setOpacity(v)))
+watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
 watch(windOpacity, (v) => windLayer?.setOpacity(v))
 watch(lightningOpacity, (v) => lightningLayer?.setOpacity(v))
 

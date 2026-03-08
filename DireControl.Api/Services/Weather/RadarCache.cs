@@ -79,7 +79,7 @@ public sealed class RadarCache(IHttpClientFactory httpClientFactory, ILogger<Rad
             return cached.Data;
 
         // Reconstruct actual RainViewer URL; framePath from the route has no leading slash.
-        var url = $"{_manifest.Host}/{framePath}/256/{z}/{x}/{y}/2/1_1.png";
+        var url = $"{_manifest.Host}/{framePath}/512/{z}/{x}/{y}/2/1_1.png";
         var http = httpClientFactory.CreateClient("RainViewer");
         var data = await http.GetByteArrayAsync(url, ct);
         _tiles[key] = (data, DateTime.UtcNow);
