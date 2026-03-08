@@ -770,7 +770,12 @@ function showRadarFrame(idx: number) {
   if (!map.value || radarFrameLayers.length === 0) return
   const clampedIdx = Math.max(0, Math.min(idx, radarFrameLayers.length - 1))
   radarFrameLayers.forEach((layer, i) => {
-    layer.setOpacity(i === clampedIdx ? radarOpacity.value : 0)
+    if (i === clampedIdx) {
+      if (!map.value!.hasLayer(layer)) layer.addTo(map.value!)
+      layer.setOpacity(radarOpacity.value)
+    } else {
+      layer.remove()
+    }
   })
   currentRadarFrame = clampedIdx
   radarCurrentIdx.value = clampedIdx
@@ -786,9 +791,14 @@ async function playRadar() {
   const advance = async () => {
     if (!radarPlaying.value || radarFrameLayers.length === 0) return
     const next = (currentRadarFrame + 1) % radarFrameLayers.length
-    const layer = radarFrameLayers[next]
-    // Wait for tiles to finish loading before showing the frame (up to 3 s timeout)
-    if (layer && !radarFrameReady[next]) {
+    const layer = radarFrameLayers[next]!
+    // Add the next frame to the map invisibly so its tiles start loading
+    if (!map.value!.hasLayer(layer)) {
+      layer.addTo(map.value!)
+      layer.setOpacity(0)
+    }
+    // Wait for all visible tiles on that frame to finish loading (up to 3 s)
+    if (!radarFrameReady[next]) {
       await new Promise<void>(resolve => {
         let loadTimeout: ReturnType<typeof setTimeout>
         const done = () => { radarFrameReady[next] = true; clearTimeout(loadTimeout); resolve() }
@@ -844,12 +854,7 @@ async function enableRadar() {
     ]
     radarFrameMeta = allFrames.map(f => ({ time: f.time }))
     radarFrameReady = new Array(allFrames.length).fill(false)
-    radarFrameLayers = allFrames.map((f, i) => {
-      const layer = buildRadarLayer(f.path)
-      layer.once('load', () => { radarFrameReady[i] = true })
-      layer.addTo(map.value!)
-      return layer
-    })
+    radarFrameLayers = allFrames.map(f => buildRadarLayer(f.path))
     radarFrameCount.value = radarFrameLayers.length
     // Start on the last historical frame so we see the most recent real data first
     showRadarFrame(rainviewerManifest.radar.past.length - 1)
@@ -867,12 +872,7 @@ async function enableRadar() {
       ]
       radarFrameMeta = refreshedFrames.map(f => ({ time: f.time }))
       radarFrameReady = new Array(refreshedFrames.length).fill(false)
-      radarFrameLayers = refreshedFrames.map((f, i) => {
-        const layer = buildRadarLayer(f.path)
-        layer.once('load', () => { radarFrameReady[i] = true })
-        layer.addTo(map.value!)
-        return layer
-      })
+      radarFrameLayers = refreshedFrames.map(f => buildRadarLayer(f.path))
       radarFrameCount.value = radarFrameLayers.length
       showRadarFrame(rainviewerManifest.radar.past.length - 1)
       if (wasPlaying) playRadar()
