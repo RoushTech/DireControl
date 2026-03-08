@@ -738,7 +738,7 @@ function ensureWeatherPane() {
   if (!map.value) return
   if (!map.value.getPane('weatherPane')) {
     const pane = map.value.createPane('weatherPane')
-    pane.style.zIndex = '620'
+    pane.style.zIndex = '450'  // above overlayPane (400), below markerPane (600)
     pane.style.pointerEvents = 'none'
   }
 }
@@ -804,7 +804,13 @@ async function playRadar() {
     // Wait for all visible tiles on that frame to finish loading (up to 3 s)
     if (!radarFrameReady[next]) {
       await new Promise<void>(resolve => {
-        const done = () => { radarFrameReady[next] = true; clearTimeout(loadTimeout); resolve() }
+        const done = () => {
+          radarFrameReady[next] = true
+          clearTimeout(loadTimeout)
+          // Wait for Leaflet's per-tile opacity fade-in (200 ms) to complete before
+          // revealing the frame, otherwise tiles appear partially transparent on first play.
+          setTimeout(resolve, 250)
+        }
         layer.once('load', done)
         const loadTimeout = setTimeout(() => { layer.off('load', done); resolve() }, 3000)
       })
