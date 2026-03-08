@@ -758,7 +758,7 @@ function buildRadarLayer(framePath: string): L.TileLayer {
   const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
   return L.tileLayer(
     `/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`,
-    { opacity: 0, tileSize: 512, zIndex: 10, pane: 'weatherPane', maxNativeZoom: 6, maxZoom: 19 },
+    { opacity: 0, tileSize: 512, zoomOffset: -1, zIndex: 10, pane: 'weatherPane', maxNativeZoom: 6, maxZoom: 19 },
   )
 }
 
