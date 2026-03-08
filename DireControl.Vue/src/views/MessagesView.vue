@@ -6,9 +6,11 @@ import {
   type HubConnection,
 } from '@microsoft/signalr'
 import { useMessagesStore } from '@/stores/messagesStore'
+import { getAllMessages } from '@/api/messagesApi'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
 import type {
+  AllMessagePacketDto,
   InboxMessageDto,
   MessageAcknowledgedDto,
   MessageAckDto,
@@ -38,21 +40,42 @@ function stationTypeName(t: StationType): string {
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 const activeTab = ref<'inbox' | 'all' | 'outbox'>('inbox')
 
-// ─── All-messages filters ────────────────────────────────────────────────────
+// ─── All-messages state ──────────────────────────────────────────────────────
 const filterSender = ref('')
 const filterAddressee = ref('')
 const filterText = ref('')
+const allItems = ref<AllMessagePacketDto[]>([])
+const allPage = ref(1)
+const allPageSize = ref(50)
+const allTotalCount = ref(0)
+const allLoading = ref(false)
 
-const filteredAllMessages = computed(() => {
-  return store.allMessages.filter((m) => {
-    if (filterSender.value && !m.fromCallsign.toLowerCase().includes(filterSender.value.toLowerCase()))
-      return false
-    if (filterAddressee.value && !m.toCallsign.toLowerCase().includes(filterAddressee.value.toLowerCase()))
-      return false
-    if (filterText.value && !m.body.toLowerCase().includes(filterText.value.toLowerCase()))
-      return false
-    return true
-  })
+const allTotalPages = computed(() => Math.max(1, Math.ceil(allTotalCount.value / allPageSize.value)))
+
+async function fetchAllMessages() {
+  allLoading.value = true
+  try {
+    const result = await getAllMessages({
+      page: allPage.value,
+      pageSize: allPageSize.value,
+      sender: filterSender.value || undefined,
+      addressee: filterAddressee.value || undefined,
+      text: filterText.value || undefined,
+    })
+    allItems.value = result.items
+    allTotalCount.value = result.totalCount
+  } finally {
+    allLoading.value = false
+  }
+}
+
+let filterDebounce: ReturnType<typeof setTimeout> | null = null
+watch([filterSender, filterAddressee, filterText], () => {
+  if (filterDebounce) clearTimeout(filterDebounce)
+  filterDebounce = setTimeout(() => {
+    allPage.value = 1
+    void fetchAllMessages()
+  }, 400)
 })
 
 // ─── Inbox / Outbox ──────────────────────────────────────────────────────────
@@ -307,7 +330,7 @@ onMounted(async () => {
     allStations.value = stations
   } catch { /* ignore */ }
 
-  await Promise.all([store.fetchInbox(), store.fetchAll()])
+  await Promise.all([store.fetchInbox(), fetchAllMessages()])
   await connectSignalR()
 })
 
@@ -567,29 +590,50 @@ function replyTo(message: InboxMessageDto) {
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="msg in filteredAllMessages"
-              :key="msg.packetId"
-              :class="{
-                'bg-blue-lighten-5': msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
-              }"
-            >
-              <td>{{ msg.fromCallsign }}</td>
-              <td>{{ msg.toCallsign || '—' }}</td>
-              <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
-                {{ msg.body }}
-              </td>
-              <td class="text-no-wrap">
-                <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
-              </td>
-            </tr>
-            <tr v-if="filteredAllMessages.length === 0">
+            <tr v-if="allLoading">
               <td colspan="4" class="text-center text-medium-emphasis py-6">
-                No messages match the filter.
+                Loading…
               </td>
             </tr>
+            <template v-else>
+              <tr
+                v-for="msg in allItems"
+                :key="msg.packetId"
+                :class="{
+                  'bg-blue-lighten-5': msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
+                }"
+              >
+                <td>{{ msg.fromCallsign }}</td>
+                <td>{{ msg.toCallsign || '—' }}</td>
+                <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+                  {{ msg.body }}
+                </td>
+                <td class="text-no-wrap">
+                  <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
+                </td>
+              </tr>
+              <tr v-if="allItems.length === 0">
+                <td colspan="4" class="text-center text-medium-emphasis py-6">
+                  No messages match the filter.
+                </td>
+              </tr>
+            </template>
           </tbody>
         </v-table>
+
+        <div class="d-flex align-center justify-space-between mt-2">
+          <span class="text-caption text-medium-emphasis">
+            {{ allTotalCount }} total
+          </span>
+          <v-pagination
+            v-if="allTotalPages > 1"
+            v-model="allPage"
+            :length="allTotalPages"
+            :total-visible="7"
+            density="compact"
+            @update:model-value="fetchAllMessages"
+          />
+        </div>
       </v-window-item>
     </v-window>
 

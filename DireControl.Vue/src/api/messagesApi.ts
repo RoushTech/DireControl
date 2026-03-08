@@ -2,6 +2,7 @@ import http from './axios'
 import type {
   AllMessagePacketDto,
   InboxMessageDto,
+  PaginatedResponse,
   SendMessageRequest,
 } from '@/types/message'
 
@@ -10,8 +11,16 @@ export async function getInboxMessages(): Promise<InboxMessageDto[]> {
   return data
 }
 
-export async function getAllMessages(): Promise<AllMessagePacketDto[]> {
-  const { data } = await http.get<AllMessagePacketDto[]>('/api/v0/messages/all')
+export interface GetAllMessagesParams {
+  page?: number
+  pageSize?: number
+  sender?: string
+  addressee?: string
+  text?: string
+}
+
+export async function getAllMessages(params: GetAllMessagesParams = {}): Promise<PaginatedResponse<AllMessagePacketDto>> {
+  const { data } = await http.get<PaginatedResponse<AllMessagePacketDto>>('/api/v0/messages/all', { params })
   return data
 }
 

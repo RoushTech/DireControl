@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
   cancelMessage,
-  getAllMessages,
   getInboxMessages,
   markMessageRead,
   resetMessage,
@@ -10,7 +9,6 @@ import {
   sendMessage,
 } from '@/api/messagesApi'
 import type {
-  AllMessagePacketDto,
   InboxMessageDto,
   MessageAcknowledgedDto,
   MessageAckDto,
@@ -22,7 +20,6 @@ import { RetryState } from '@/types/message'
 
 export const useMessagesStore = defineStore('messages', () => {
   const inboxMessages = ref<InboxMessageDto[]>([])
-  const allMessages = ref<AllMessagePacketDto[]>([])
   const loading = ref(false)
 
   const unreadCount = computed(
@@ -36,10 +33,6 @@ export const useMessagesStore = defineStore('messages', () => {
     } finally {
       loading.value = false
     }
-  }
-
-  async function fetchAll() {
-    allMessages.value = await getAllMessages()
   }
 
   async function markRead(id: number) {
@@ -127,11 +120,9 @@ export const useMessagesStore = defineStore('messages', () => {
 
   return {
     inboxMessages,
-    allMessages,
     loading,
     unreadCount,
     fetchInbox,
-    fetchAll,
     markRead,
     send,
     retryNow,

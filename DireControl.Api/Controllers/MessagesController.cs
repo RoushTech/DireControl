@@ -54,12 +54,36 @@ public class MessagesController(
     }
 
     [HttpGet("all")]
-    public async Task<ActionResult<IReadOnlyList<AllMessagePacketDto>>> GetAllMessages(CancellationToken ct)
+    public async Task<ActionResult<PaginatedResponse<AllMessagePacketDto>>> GetAllMessages(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? sender = null,
+        [FromQuery] string? addressee = null,
+        [FromQuery] string? text = null,
+        CancellationToken ct = default)
     {
-        var messages = await db.Packets
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
+        var query = db.Packets
             .AsNoTracking()
-            .Where(p => p.ParsedType == PacketType.Message)
+            .Where(p => p.ParsedType == PacketType.Message);
+
+        if (!string.IsNullOrWhiteSpace(sender))
+            query = query.Where(p => p.StationCallsign.Contains(sender));
+
+        if (!string.IsNullOrWhiteSpace(addressee))
+            query = query.Where(p => p.MessageData != null && p.MessageData.Addressee.Contains(addressee));
+
+        if (!string.IsNullOrWhiteSpace(text))
+            query = query.Where(p => p.MessageData != null && p.MessageData.Text.Contains(text));
+
+        var totalCount = await query.CountAsync(ct);
+
+        var items = await query
             .OrderByDescending(p => p.ReceivedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(p => new AllMessagePacketDto
             {
                 PacketId = p.Id,
@@ -72,7 +96,13 @@ public class MessagesController(
             })
             .ToListAsync(ct);
 
-        return Ok(messages);
+        return Ok(new PaginatedResponse<AllMessagePacketDto>
+        {
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = totalCount,
+            Items = items,
+        });
     }
 
     [HttpPut("{id:int}/read")]
@@ -169,11 +199,11 @@ public class MessagesController(
             PacketHub.MessageRetriedMethod,
             new MessageRetriedDto
             {
-                Id          = msg.Id,
-                RetryCount  = msg.RetryCount,
-                MaxRetries  = msg.MaxRetries,
+                Id = msg.Id,
+                RetryCount = msg.RetryCount,
+                MaxRetries = msg.MaxRetries,
                 NextRetryAt = msg.NextRetryAt,
-                LastSentAt  = msg.LastSentAt,
+                LastSentAt = msg.LastSentAt,
             },
             ct);
 
@@ -191,8 +221,8 @@ public class MessagesController(
         if (msg is null)
             return NotFound();
 
-        msg.RetryCount  = 0;
-        msg.RetryState  = RetryState.Retrying;
+        msg.RetryCount = 0;
+        msg.RetryState = RetryState.Retrying;
         msg.NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds);
         await db.SaveChangesAsync(ct);
 
@@ -210,7 +240,7 @@ public class MessagesController(
         if (msg is null)
             return NotFound();
 
-        msg.RetryState  = RetryState.Cancelled;
+        msg.RetryState = RetryState.Cancelled;
         msg.NextRetryAt = null;
         await db.SaveChangesAsync(ct);
 
@@ -221,20 +251,20 @@ public class MessagesController(
 
     private static InboxMessageDto ToInboxDto(Message m) => new()
     {
-        Id          = m.Id,
+        Id = m.Id,
         FromCallsign = m.FromCallsign,
-        ToCallsign   = m.ToCallsign,
-        Body        = m.Body,
-        MessageId   = m.MessageId,
-        PathUsed    = m.PathUsed,
-        ReceivedAt  = m.ReceivedAt,
-        IsRead      = m.IsRead,
-        AckSent     = m.AckSent,
-        ReplySent   = m.ReplySent,
-        RetryCount  = m.RetryCount,
-        MaxRetries  = m.MaxRetries,
+        ToCallsign = m.ToCallsign,
+        Body = m.Body,
+        MessageId = m.MessageId,
+        PathUsed = m.PathUsed,
+        ReceivedAt = m.ReceivedAt,
+        IsRead = m.IsRead,
+        AckSent = m.AckSent,
+        ReplySent = m.ReplySent,
+        RetryCount = m.RetryCount,
+        MaxRetries = m.MaxRetries,
         NextRetryAt = m.NextRetryAt,
-        RetryState  = m.RetryState,
-        LastSentAt  = m.LastSentAt,
+        RetryState = m.RetryState,
+        LastSentAt = m.LastSentAt,
     };
 }

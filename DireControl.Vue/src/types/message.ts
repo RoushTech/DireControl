@@ -34,6 +34,13 @@ export interface AllMessagePacketDto {
   rawPacket: string
 }
 
+export interface PaginatedResponse<T> {
+  page: number
+  pageSize: number
+  totalCount: number
+  items: T[]
+}
+
 export interface SendMessageRequest {
   toCallsign: string
   body: string
