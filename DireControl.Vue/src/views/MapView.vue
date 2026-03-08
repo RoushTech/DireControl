@@ -298,6 +298,13 @@ const radarTimestamp = ref('')
 const radarFrameCount = ref(0)
 const radarCurrentIdx = ref(0)
 const radarLoading = ref(false)
+const radarFrameInterval = ref(500)  // ms between frames
+const radarControlsVisible = ref(false)
+const windControlsVisible = ref(false)
+const lightningControlsVisible = ref(false)
+let radarControlsHideTimer: ReturnType<typeof setTimeout> | null = null
+let windControlsHideTimer: ReturnType<typeof setTimeout> | null = null
+let lightningControlsHideTimer: ReturnType<typeof setTimeout> | null = null
 let windLayer: L.TileLayer | null = null
 let lightningLayer: L.TileLayer | null = null
 let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
@@ -767,8 +774,10 @@ function showRadarFrame(idx: number) {
     if (i === clampedIdx) {
       if (!map.value!.hasLayer(layer)) layer.addTo(map.value!)
       layer.setOpacity(radarOpacity.value)
-    } else {
-      layer.remove()
+    } else if (map.value!.hasLayer(layer)) {
+      // Fade to transparent rather than removing — prevents the blank-frame flicker
+      // caused by Leaflet's per-tile CSS fade-in when re-adding a layer.
+      layer.setOpacity(0)
     }
   })
   currentRadarFrame = clampedIdx
@@ -781,6 +790,7 @@ function showRadarFrame(idx: number) {
 async function playRadar() {
   if (radarPlaying.value) return
   radarPlaying.value = true
+  keepRadarControlsVisible()
 
   const advance = async () => {
     if (!radarPlaying.value || radarFrameLayers.length === 0) return
@@ -801,10 +811,10 @@ async function playRadar() {
     }
     if (!radarPlaying.value) return
     showRadarFrame(next)
-    radarAnimTimeout = setTimeout(advance, 500)
+    radarAnimTimeout = setTimeout(advance, radarFrameInterval.value)
   }
 
-  radarAnimTimeout = setTimeout(advance, 500)
+  radarAnimTimeout = setTimeout(advance, radarFrameInterval.value)
 }
 
 function pauseRadar() {
@@ -819,6 +829,30 @@ function stepRadarFrame(delta: -1 | 1) {
   pauseRadar()
   const next = (currentRadarFrame + delta + radarFrameLayers.length) % radarFrameLayers.length
   showRadarFrame(next)
+  keepRadarControlsVisible()
+}
+
+// ── Weather controls auto-hide ─────────────────────────────────────────────
+
+function keepRadarControlsVisible() {
+  if (!showRadar.value) return
+  radarControlsVisible.value = true
+  if (radarControlsHideTimer) clearTimeout(radarControlsHideTimer)
+  radarControlsHideTimer = setTimeout(() => { radarControlsVisible.value = false }, 5000)
+}
+
+function keepWindControlsVisible() {
+  if (!showWind.value) return
+  windControlsVisible.value = true
+  if (windControlsHideTimer) clearTimeout(windControlsHideTimer)
+  windControlsHideTimer = setTimeout(() => { windControlsVisible.value = false }, 5000)
+}
+
+function keepLightningControlsVisible() {
+  if (!showLightning.value) return
+  lightningControlsVisible.value = true
+  if (lightningControlsHideTimer) clearTimeout(lightningControlsHideTimer)
+  lightningControlsHideTimer = setTimeout(() => { lightningControlsVisible.value = false }, 5000)
 }
 
 function clearRadarLayers() {
@@ -851,7 +885,7 @@ async function enableRadar() {
     radarFrameCount.value = radarFrameLayers.length
     // Start on the last historical frame so we see the most recent real data first
     showRadarFrame(radarManifest.radar.past.length - 1)
-    // Refresh manifest every 5 minutes
+    keepRadarControlsVisible()
     radarRefreshInterval = setInterval(async () => {
       if (!showRadar.value) return
       const wasPlaying = radarPlaying.value
@@ -883,6 +917,8 @@ function disableRadar() {
     radarRefreshInterval = null
   }
   radarManifest = null
+  radarControlsVisible.value = false
+  if (radarControlsHideTimer) { clearTimeout(radarControlsHideTimer); radarControlsHideTimer = null }
 }
 
 async function toggleRadar() {
@@ -904,6 +940,7 @@ function enableWind() {
     '/api/weather/wind/tile/{z}/{x}/{y}',
     { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane', maxNativeZoom: 18, maxZoom: 19 },
   ).addTo(map.value)
+  keepWindControlsVisible()
 }
 
 function disableWind() {
@@ -911,6 +948,8 @@ function disableWind() {
     windLayer.remove()
     windLayer = null
   }
+  windControlsVisible.value = false
+  if (windControlsHideTimer) { clearTimeout(windControlsHideTimer); windControlsHideTimer = null }
 }
 
 async function toggleWind() {
@@ -937,6 +976,7 @@ function enableLightning() {
   disableLightning()
   ensureWeatherPane()
   lightningLayer = buildLightningLayer().addTo(map.value)
+  keepLightningControlsVisible()
   // Refresh every 5 minutes so Leaflet fetches fresh tiles from the backend cache
   lightningRefreshInterval = setInterval(() => {
     if (!showLightning.value || !map.value) return
@@ -954,6 +994,8 @@ function disableLightning() {
     clearInterval(lightningRefreshInterval)
     lightningRefreshInterval = null
   }
+  lightningControlsVisible.value = false
+  if (lightningControlsHideTimer) { clearTimeout(lightningControlsHideTimer); lightningControlsHideTimer = null }
 }
 
 async function toggleLightning() {
@@ -1998,6 +2040,9 @@ onUnmounted(async () => {
   disableRadar()
   disableWind()
   disableLightning()
+  if (radarControlsHideTimer) clearTimeout(radarControlsHideTimer)
+  if (windControlsHideTimer) clearTimeout(windControlsHideTimer)
+  if (lightningControlsHideTimer) clearTimeout(lightningControlsHideTimer)
   heatmapPositions = null
   coverageData = null
   if (highlightTimeout) clearTimeout(highlightTimeout)
@@ -2209,8 +2254,12 @@ defineExpose({ TILE_PROVIDERS })
         </template>
       </v-tooltip>
 
-      <!-- Radar animation bar (shown when radar is active, desktop only) -->
-      <div v-if="showRadar && !mobile && radarFrameCount > 0" class="radar-animation-bar">
+      <!-- Radar animation bar (shown when radar is active and controls are visible, desktop only) -->
+      <div
+        v-if="showRadar && !mobile && radarFrameCount > 0 && radarControlsVisible"
+        class="radar-animation-bar"
+        @mouseenter="keepRadarControlsVisible"
+      >
         <v-btn icon="mdi-skip-previous" size="x-small" variant="text" @click="stepRadarFrame(-1)" />
         <v-btn
           :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
@@ -2222,22 +2271,47 @@ defineExpose({ TILE_PROVIDERS })
         <span class="radar-timestamp">{{ radarTimestamp }}</span>
         <span class="radar-frame-dots">{{ radarCurrentIdx + 1 }}&nbsp;/&nbsp;{{ radarFrameCount }}</span>
         <span class="radar-bar-divider" />
+        <v-select
+          v-model="radarFrameInterval"
+          :items="[
+            { title: '¼×', value: 2000 },
+            { title: '½×', value: 1000 },
+            { title: '1×', value: 500 },
+            { title: '2×', value: 250 },
+            { title: '4×', value: 125 },
+          ]"
+          item-title="title"
+          item-value="value"
+          density="compact"
+          hide-details
+          class="radar-speed-select"
+          @update:model-value="keepRadarControlsVisible"
+        />
+        <span class="radar-bar-divider" />
         <span class="radar-opacity-label">Opacity</span>
-        <v-slider v-model="radarOpacity" class="radar-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details />
+        <v-slider v-model="radarOpacity" class="radar-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details @update:model-value="keepRadarControlsVisible" />
         <span class="radar-opacity-pct">{{ Math.round(radarOpacity * 100) }}%</span>
       </div>
 
-      <!-- Wind opacity row (shown when wind layer is active, desktop only) -->
-      <div v-if="showWind && !mobile" class="wind-opacity-row">
+      <!-- Wind opacity row (shown when wind layer is active and controls visible, desktop only) -->
+      <div
+        v-if="showWind && !mobile && windControlsVisible"
+        class="wind-opacity-row"
+        @mouseenter="keepWindControlsVisible"
+      >
         <span class="layer-opacity-label">Wind opacity</span>
-        <v-slider v-model="windOpacity" class="layer-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details />
+        <v-slider v-model="windOpacity" class="layer-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details @update:model-value="keepWindControlsVisible" />
         <span class="layer-opacity-pct">{{ Math.round(windOpacity * 100) }}%</span>
       </div>
 
-      <!-- Lightning opacity row (shown when lightning layer is active, desktop only) -->
-      <div v-if="showLightning && !mobile" class="lightning-opacity-row">
+      <!-- Lightning opacity row (shown when lightning layer is active and controls visible, desktop only) -->
+      <div
+        v-if="showLightning && !mobile && lightningControlsVisible"
+        class="lightning-opacity-row"
+        @mouseenter="keepLightningControlsVisible"
+      >
         <span class="layer-opacity-label">Lightning opacity</span>
-        <v-slider v-model="lightningOpacity" class="layer-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details />
+        <v-slider v-model="lightningOpacity" class="layer-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details @update:model-value="keepLightningControlsVisible" />
         <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
       </div>
 
@@ -2615,6 +2689,11 @@ defineExpose({ TILE_PROVIDERS })
 
 .radar-opacity-slider {
   width: 120px;
+  flex-shrink: 0;
+}
+
+.radar-speed-select {
+  width: 72px;
   flex-shrink: 0;
 }
 
