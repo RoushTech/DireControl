@@ -15,6 +15,11 @@ public class WeatherController(
     DireControlContext db,
     ILogger<WeatherController> logger) : ControllerBase
 {
+    // 1×1 fully-transparent PNG returned when an upstream tile provider rejects a
+    // zoom level, so Leaflet renders nothing rather than a broken-image tile.
+    private static readonly byte[] TransparentTile = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=");
+
     // ── Radar (RainViewer) ──────────────────────────────────────────────────
 
     [HttpGet("radar/manifest")]
@@ -52,6 +57,12 @@ public class WeatherController(
         try
         {
             data = await radarCache.GetTileAsync(framePath, z, x, y, ct);
+        }
+        catch (HttpRequestException)
+        {
+            // Upstream rejected the tile (e.g. zoom level not supported by RainViewer).
+            // Return a transparent tile so Leaflet renders nothing here.
+            return File(TransparentTile, "image/png");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
