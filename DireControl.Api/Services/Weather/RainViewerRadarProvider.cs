@@ -36,9 +36,11 @@ internal sealed class RainViewerFrame
     public string Path { get; set; } = "";
 }
 
-// ── Cache ──────────────────────────────────────────────────────────────────
+// ── Provider ───────────────────────────────────────────────────────────────
 
-public sealed class RadarCache(IHttpClientFactory httpClientFactory, ILogger<RadarCache> logger)
+public sealed class RainViewerRadarProvider(
+    IHttpClientFactory httpClientFactory,
+    ILogger<RainViewerRadarProvider> logger) : IRadarProvider
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -64,10 +66,25 @@ public sealed class RadarCache(IHttpClientFactory httpClientFactory, ILogger<Rad
         logger.LogDebug("RainViewer manifest refreshed: {Count} past frames", manifest.Radar.Past.Count);
     }
 
-    internal (RainViewerManifest? Manifest, DateTime FetchedAt) GetManifest() =>
-        (_manifest, _manifestFetchedAt);
+    public (NormalizedRadarManifest? Manifest, DateTime FetchedAt) GetManifest()
+    {
+        if (_manifest is null)
+            return (null, _manifestFetchedAt);
 
-    public async Task<byte[]?> GetTileAsync(string framePath, int z, int x, int y, CancellationToken ct)
+        var norm = new NormalizedRadarManifest
+        {
+            Generated = _manifest.Generated,
+            Past = _manifest.Radar.Past
+                .Select(f => new NormalizedRadarFrame { Time = f.Time, Path = f.Path.TrimStart('/') })
+                .ToList(),
+            Nowcast = _manifest.Radar.Nowcast
+                .Select(f => new NormalizedRadarFrame { Time = f.Time, Path = f.Path.TrimStart('/') })
+                .ToList(),
+        };
+        return (norm, _manifestFetchedAt);
+    }
+
+    public async Task<byte[]?> GetTileAsync(string framePath, int z, int x, int y, string? apiKey, CancellationToken ct)
     {
         if (_manifest is null)
             return null;
@@ -78,8 +95,16 @@ public sealed class RadarCache(IHttpClientFactory httpClientFactory, ILogger<Rad
             DateTime.UtcNow - cached.FetchedAt < TimeSpan.FromMinutes(30))
             return cached.Data;
 
-        // Reconstruct actual RainViewer URL; framePath from the route has no leading slash.
-        var url = $"{_manifest.Host}/{framePath}/512/{z}/{x}/{y}/2/1_1.png";
+        // Pro tiles use a different colour scheme and append the API key.
+        // NOTE: The exact RainViewer Pro tile URL format should be confirmed against the
+        // RainViewer Pro documentation — this is based on the known free URL pattern plus
+        // the apikey query parameter. The colour scheme index (4) may also differ.
+        string url;
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            url = $"{_manifest.Host}/{framePath}/512/{z}/{x}/{y}/4/1_1.png?apikey={apiKey}";
+        else
+            url = $"{_manifest.Host}/{framePath}/512/{z}/{x}/{y}/2/1_1.png";
+
         var http = httpClientFactory.CreateClient("RainViewer");
         var data = await http.GetByteArrayAsync(url, ct);
         _tiles[key] = (data, DateTime.UtcNow);

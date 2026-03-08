@@ -70,6 +70,13 @@ services
             c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
         })
         .Services
+    .AddHttpClient("IEM")
+        .ConfigureHttpClient(c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(15);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
+        })
+        .Services
     .AddHostedService<KissTcpService>()
     .AddHostedService<AprsPacketParsingService>()
     .AddHostedService<AprsIsService>()
@@ -85,7 +92,8 @@ services
     .AddSingleton<PendingAlertChannel>()
     .AddSingleton<CallsignLookupService>()
     .AddSingleton<StatisticsService>()
-    .AddSingleton<RadarCache>()
+    .AddSingleton<RainViewerRadarProvider>()
+    .AddSingleton<IemRadarProvider>()
     .AddSingleton<WindTileCache>()
     .AddSingleton<LightningCache>();
 

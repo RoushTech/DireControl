@@ -133,6 +133,8 @@ public sealed class UpdateWeatherApiKeysRequest
 {
     public string? OpenWeatherMapApiKey { get; init; }
     public string? TomorrowIoApiKey { get; init; }
+    public RadarProvider? RadarProvider { get; init; }
+    public string? RainViewerProApiKey { get; init; }
 }
 
 // ─── Weather proxy DTOs ────────────────────────────────────────────────────
@@ -140,6 +142,8 @@ public sealed class UpdateWeatherApiKeysRequest
 public sealed class WeatherManifestDto
 {
     public long Generated { get; init; }
+    public int MaxNativeZoom { get; init; }
+    public int TileSize { get; init; }
     public required WeatherRadarManifestDto Radar { get; init; }
 }
 
@@ -160,6 +164,8 @@ public sealed class WeatherStatusDto
     public required WeatherLayerStatusDto Radar { get; init; }
     public required WeatherLayerStatusDto Wind { get; init; }
     public required WeatherLayerStatusDto Lightning { get; init; }
+    public RadarProvider RadarProvider { get; init; }
+    public bool RainViewerProKeyConfigured { get; init; }
 }
 
 public sealed class WeatherLayerStatusDto

@@ -5,7 +5,7 @@ import { getGeofences, createGeofence, deleteGeofence, getProximityRules, create
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
-import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys } from '@/api/stationsApi'
+import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys, RadarProvider } from '@/api/stationsApi'
 import { getWeatherStatus } from '@/api/weatherApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
@@ -240,6 +240,10 @@ const weatherKeysSaveError = ref('')
 const weatherKeysSaveSuccess = ref(false)
 const showOwmKey = ref(false)
 const showTomorrowKey = ref(false)
+const selectedRadarProvider = ref<number>(RadarProvider.IemNexrad)
+const rainViewerProApiKey = ref('')
+const rvProKeyConfigured = ref(false)
+const showRainViewerProKey = ref(false)
 
 async function saveWeatherApiKeys() {
   weatherKeysSaving.value = true
@@ -247,17 +251,22 @@ async function saveWeatherApiKeys() {
   weatherKeysSaveSuccess.value = false
   const owmValue = owmApiKey.value.trim() || null
   const tomorrowValue = tomorrowIoApiKey.value.trim() || null
+  const rvProValue = rainViewerProApiKey.value.trim() || null
   try {
-    await updateWeatherApiKeys(owmValue, tomorrowValue)
+    await updateWeatherApiKeys(owmValue, tomorrowValue, selectedRadarProvider.value, rvProValue)
     weatherKeysSaveSuccess.value = true
     // Update configured flags based on what was saved
     if (owmValue !== null) owmKeyConfigured.value = true
     if (tomorrowValue !== null) tomorrowKeyConfigured.value = true
     if (owmValue === null) owmKeyConfigured.value = false
     if (tomorrowValue === null) tomorrowKeyConfigured.value = false
+    rvProKeyConfigured.value = selectedRadarProvider.value === RadarProvider.RainViewerPro
+      ? (rvProValue !== null ? true : rvProKeyConfigured.value)
+      : false
     // Clear the fields after saving — values are secrets
     owmApiKey.value = ''
     tomorrowIoApiKey.value = ''
+    rainViewerProApiKey.value = ''
     setTimeout(() => { weatherKeysSaveSuccess.value = false }, 3000)
   } catch {
     weatherKeysSaveError.value = 'Failed to save weather API keys.'
@@ -310,6 +319,8 @@ onMounted(async () => {
     const status = await getWeatherStatus()
     owmKeyConfigured.value = status.wind.available
     tomorrowKeyConfigured.value = status.lightning.available
+    selectedRadarProvider.value = status.radarProvider
+    rvProKeyConfigured.value = status.rainViewerProKeyConfigured
   } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])
 })
@@ -672,13 +683,40 @@ async function confirmDelete() {
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
-      <!-- Rainfall Radar — no key needed -->
-      <div class="d-flex align-center mb-4">
-        <v-icon color="success" class="mr-2">mdi-check-circle</v-icon>
-        <span class="text-body-2">
-          <strong>Rainfall Radar</strong> — Provided by RainViewer. No API key required.
-        </span>
-      </div>
+      <!-- Radar provider selector -->
+      <div class="text-body-2 font-weight-medium mb-2">Rainfall Radar Provider</div>
+      <v-select
+        v-model="selectedRadarProvider"
+        :items="[
+          { title: 'IEM NEXRAD — Free · US · zoom 8 · 5-min updates', value: 0 },
+          { title: 'RainViewer — Free · Global · zoom 7 · 10-min updates', value: 1 },
+          { title: 'RainViewer Pro — $40/yr · Global · zoom 12 · 10-min updates', value: 2 },
+        ]"
+        item-title="title"
+        item-value="value"
+        density="compact"
+        class="mb-3"
+      />
+
+      <!-- RainViewer Pro API key — shown only when Pro is selected -->
+      <template v-if="selectedRadarProvider === 2">
+        <div class="text-body-2 font-weight-medium mb-2">RainViewer Pro API Key</div>
+        <v-text-field
+          v-model="rainViewerProApiKey"
+          label="RainViewer Pro API Key"
+          density="compact"
+          :type="showRainViewerProKey ? 'text' : 'password'"
+          :append-inner-icon="showRainViewerProKey ? 'mdi-eye-off' : 'mdi-eye'"
+          :placeholder="rvProKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
+          class="mb-1"
+          :prepend-inner-icon="(rainViewerProApiKey.trim() || rvProKeyConfigured) ? 'mdi-check-circle' : 'mdi-alert-circle-outline'"
+          :color="(rainViewerProApiKey.trim() || rvProKeyConfigured) ? 'success' : 'warning'"
+          @click:append-inner="showRainViewerProKey = !showRainViewerProKey"
+        />
+        <div class="text-caption text-medium-emphasis mb-4">
+          Get a key at <a href="https://www.rainviewer.com" target="_blank" rel="noopener">rainviewer.com</a>
+        </div>
+      </template>
 
       <v-divider class="mb-4" />
 

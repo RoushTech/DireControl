@@ -3,6 +3,7 @@ using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -145,6 +146,10 @@ public class SettingsController(
         setting.TomorrowIoApiKey = string.IsNullOrWhiteSpace(request.TomorrowIoApiKey)
             ? null
             : request.TomorrowIoApiKey.Trim();
+        setting.RadarProvider = request.RadarProvider ?? RadarProvider.IemNexrad;
+        setting.RainViewerProApiKey = string.IsNullOrWhiteSpace(request.RainViewerProApiKey)
+            ? null
+            : request.RainViewerProApiKey.Trim();
 
         await db.SaveChangesAsync(ct);
         return NoContent();

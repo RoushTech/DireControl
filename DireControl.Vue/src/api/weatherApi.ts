@@ -11,6 +11,8 @@ export interface WeatherStatus {
   radar: WeatherLayerStatus;
   wind: WeatherLayerStatus;
   lightning: WeatherLayerStatus;
+  radarProvider: number;
+  rainViewerProKeyConfigured: boolean;
 }
 
 export interface WeatherFrame {
@@ -20,6 +22,8 @@ export interface WeatherFrame {
 
 export interface WeatherManifest {
   generated: number;
+  maxNativeZoom: number;
+  tileSize: number;
   radar: {
     past: WeatherFrame[];
     nowcast: WeatherFrame[];

@@ -1,7 +1,8 @@
 namespace DireControl.Api.Services.Weather;
 
 public sealed class WeatherCacheService(
-    RadarCache radarCache,
+    RainViewerRadarProvider rainViewerProvider,
+    IemRadarProvider iemProvider,
     WindTileCache windTileCache,
     LightningCache lightningCache,
     ILogger<WeatherCacheService> logger) : BackgroundService
@@ -16,7 +17,7 @@ public sealed class WeatherCacheService(
         while (!stoppingToken.IsCancellationRequested)
         {
             await Task.WhenAll(
-                RefreshRadarAsync(stoppingToken),
+                RefreshRadarProvidersAsync(stoppingToken),
                 RefreshLightningAsync(stoppingToken));
 
             windTileCache.EvictStale();
@@ -25,11 +26,16 @@ public sealed class WeatherCacheService(
         }
     }
 
-    private async Task RefreshRadarAsync(CancellationToken ct)
+    private async Task RefreshRadarProvidersAsync(CancellationToken ct)
     {
         try
         {
-            await radarCache.RefreshAsync(ct);
+            // Both providers are refreshed regardless of which is currently active so that
+            // switching providers in Settings takes effect immediately without a cold-start
+            // delay. IemRadarProvider.RefreshAsync is a no-op, so the cost is negligible.
+            await Task.WhenAll(
+                rainViewerProvider.RefreshAsync(ct),
+                iemProvider.RefreshAsync(ct));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -37,7 +43,7 @@ public sealed class WeatherCacheService(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to refresh RainViewer radar manifest");
+            logger.LogWarning(ex, "Failed to refresh radar providers");
         }
     }
 

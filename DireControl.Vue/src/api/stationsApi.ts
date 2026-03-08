@@ -118,9 +118,18 @@ export async function updateAprsIsSettings(payload: {
   await http.put('/api/v0/settings/aprs-is', payload)
 }
 
+export const RadarProvider = {
+  IemNexrad: 0,
+  RainViewer: 1,
+  RainViewerPro: 2,
+} as const
+export type RadarProvider = typeof RadarProvider[keyof typeof RadarProvider]
+
 export async function updateWeatherApiKeys(
   openWeatherMapApiKey: string | null,
   tomorrowIoApiKey: string | null,
+  radarProvider: RadarProvider,
+  rainViewerProApiKey: string | null,
 ): Promise<void> {
-  await http.put('/api/v0/settings/weather-keys', { openWeatherMapApiKey, tomorrowIoApiKey })
+  await http.put('/api/v0/settings/weather-keys', { openWeatherMapApiKey, tomorrowIoApiKey, radarProvider, rainViewerProApiKey })
 }

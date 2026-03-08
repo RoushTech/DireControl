@@ -1,3 +1,4 @@
+using DireControl.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -48,6 +49,12 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
 
     /// <summary>Tomorrow.io API key used for the lightning tile overlay.</summary>
     public string? TomorrowIoApiKey { get; set; }
+
+    /// <summary>Radar tile provider. Defaults to IEM NEXRAD (free, US coverage).</summary>
+    public RadarProvider RadarProvider { get; set; } = RadarProvider.IemNexrad;
+
+    /// <summary>RainViewer Pro API key. Only used when RadarProvider is RainViewerPro.</summary>
+    public string? RainViewerProApiKey { get; set; }
 
     public void Configure(EntityTypeBuilder<UserSetting> builder)
     {
