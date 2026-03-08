@@ -240,7 +240,7 @@ const weatherKeysSaveError = ref('')
 const weatherKeysSaveSuccess = ref(false)
 const showOwmKey = ref(false)
 const showTomorrowKey = ref(false)
-const selectedRadarProvider = ref<number>(RadarProvider.IemNexrad)
+const selectedRadarProvider = ref<RadarProvider>(RadarProvider.IemNexrad)
 const rainViewerProApiKey = ref('')
 const rvProKeyConfigured = ref(false)
 const showRainViewerProKey = ref(false)
@@ -319,7 +319,7 @@ onMounted(async () => {
     const status = await getWeatherStatus()
     owmKeyConfigured.value = status.wind.available
     tomorrowKeyConfigured.value = status.lightning.available
-    selectedRadarProvider.value = status.radarProvider
+    selectedRadarProvider.value = status.radarProvider as RadarProvider
     rvProKeyConfigured.value = status.rainViewerProKeyConfigured
   } catch { /* ignore */ }
   await Promise.all([loadRadios(), loadGeofences(), loadRules()])

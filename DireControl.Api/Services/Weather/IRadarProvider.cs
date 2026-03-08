@@ -43,14 +43,14 @@ internal static class RadarProviderConfig
     public static int MaxNativeZoom(RadarProvider p) => p switch
     {
         RadarProvider.RainViewerPro => 12,
-        RadarProvider.RainViewer    => 7,
-        _                           => 8,   // IemNexrad
+        RadarProvider.RainViewer => 7,
+        _ => 8,   // IemNexrad
     };
 
     /// <summary>Tile size in pixels served by this provider.</summary>
     public static int TileSize(RadarProvider p) => p switch
     {
         RadarProvider.IemNexrad => 256,
-        _                       => 512,
+        _ => 512,
     };
 }
