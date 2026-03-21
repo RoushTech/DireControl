@@ -11,7 +11,7 @@ export function useMapPrefs() {
   return {
     tracks: pref('tracks', true),
     estPos: pref('estPos', true),
-    stale: pref('stale', true),
+    stale: pref('stale', false),
     zones: pref('zones', false),
     heatmap: pref('heatmap', false),
     coverage: pref('coverage', false),
