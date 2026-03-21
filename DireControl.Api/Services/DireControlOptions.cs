@@ -21,6 +21,7 @@ public class DireControlOptions
         ["Weather"] = 360,
         ["Digipeater"] = 240,
         ["IGate"] = 240,
+        ["Gateway"] = 240,
     };
 
     /// <summary>Maximum number of retransmission attempts for unacknowledged outbound messages.</summary>

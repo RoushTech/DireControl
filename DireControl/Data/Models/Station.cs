@@ -24,6 +24,12 @@ public class Station : IEntityTypeConfiguration<Station>
     public string? GridSquare { get; set; }
     public HeardVia HeardVia { get; set; } = HeardVia.Unknown;
 
+    /// <summary>Last detected operating mode (e.g. "D-Star", "DMR", "FM").</summary>
+    public string? LastMode { get; set; }
+
+    /// <summary>Last advertised transmit frequency in MHz (e.g. "144.96000").</summary>
+    public string? LastFrequencyMhz { get; set; }
+
     /// <summary>Last time a packet from this station was received via RF (Direwolf KISS).</summary>
     public DateTime? LastHeardRf { get; set; }
 

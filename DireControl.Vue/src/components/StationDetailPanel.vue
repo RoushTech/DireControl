@@ -390,6 +390,7 @@ const stationTypeLabel = computed(() => {
     [StationType.Digipeater]: 'Digipeater',
     [StationType.IGate]: 'IGate',
     [StationType.Unknown]: 'Unknown',
+    [StationType.Gateway]: 'Gateway',
   }
   return labels[station.value.stationType] ?? 'Unknown'
 })
@@ -403,6 +404,7 @@ const stationTypeColor = computed(() => {
     [StationType.Digipeater]: 'orange',
     [StationType.IGate]: 'purple',
     [StationType.Unknown]: 'grey',
+    [StationType.Gateway]: 'deep-purple',
   }
   return colors[station.value.stationType] ?? 'grey'
 })
@@ -760,6 +762,16 @@ watch(tab, (newTab) => {
           <template v-if="station.gridSquare">
             <div class="info-label">Grid Square</div>
             <div class="info-value">{{ station.gridSquare }}</div>
+          </template>
+
+          <template v-if="station.lastMode">
+            <div class="info-label">Mode</div>
+            <div class="info-value">{{ station.lastMode }}</div>
+          </template>
+
+          <template v-if="station.lastFrequencyMhz">
+            <div class="info-label">Frequency</div>
+            <div class="info-value">{{ station.lastFrequencyMhz }} MHz</div>
           </template>
         </div>
 

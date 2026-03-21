@@ -1,4 +1,5 @@
 using AprsSharp.AprsParser;
+using DireControl.Api.Services;
 using DireControl.PathParsing;
 using Xunit;
 using AprsPacketType = AprsSharp.AprsParser.PacketType;
@@ -143,6 +144,16 @@ public static class RealPacketData
     public const string MicE_Old_PeetBros =
         "KG4LKY-5>SWPU0Q,KG4LKY-2*,AC4AG-4*,WE4MB-3*,WIDE3*:'oSl _/]PEET BROS ULTIMETER 2100 TM-D710=";
 
+    // ── Gateway / digital voice ──────────────────────────────────────────────
+
+    // D-Star gateway: TOCALL APDG02, overlay 'D', & gateway symbol, frequency + mode in comment
+    public const string Position_DStarGateway =
+        "N4UUJ-C>APDG02,TCPIP*,qAC,N4UUJ-CS:!3521.92ND08539.79W&RNG0001/A=000010 2m Voice (D-Star) 144.96000MHz +0.0000MHz";
+
+    // DMR gateway: TOCALL APDMR (hypothetical but plausible), frequency in comment
+    public const string Position_DmrGateway =
+        "W4DMR-1>APDMR1,TCPIP*,qAC,T2BC:!3520.00N/08530.00W&DMR Repeater 442.55000MHz +5.0000MHz";
+
     // ── Unparseable / unusual ─────────────────────────────────────────────────
 
     // TOCALL is "ID" (not a standard APRS TOCALL); info starts with 'W' (no APRS type byte)
@@ -179,6 +190,7 @@ public static class RealPacketData
         { Position_SlashPrefix_TimestampZ,       35.0727, -85.1900 },
         { Position_AtPrefix_TimestampZ_AltTable, 34.5197, -84.3433 },
         { Position_SlashPrefix_TimestampH,       36.0242, -86.4860 },
+        { Position_DStarGateway,                 35.3653, -85.6632 },
     };
 
     /// <summary>
@@ -722,5 +734,126 @@ public class UnparseablePacketTests
     {
         var ex = Record.Exception(() => AprsPathParser.ParseTnc2Header(raw));
         Assert.Null(ex);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mode / frequency / gateway detection
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Validates the pure helpers for extracting mode, frequency, and gateway
+/// classification from TOCALL prefixes and packet comments.
+/// </summary>
+public class ModeFrequencyDetectionTests
+{
+    // ── DetectMode ────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("APDG02", null, "D-Star")]
+    [InlineData("APDMR1", null, "DMR")]
+    [InlineData("APYSF1", null, "YSF")]
+    [InlineData("APWIR0", null, "WIRES-X")]
+    [InlineData("APBM1A", null, "DMR")]
+    public void DetectMode_FromTocall_ReturnsExpectedMode(string tocall, string? comment, string expected)
+    {
+        var mode = AprsPacketParsingService.DetectMode(tocall, comment);
+        Assert.Equal(expected, mode);
+    }
+
+    [Theory]
+    [InlineData("APRS", "2m Voice (D-Star) 144.96000MHz", "D-Star")]
+    [InlineData("APRS", "DMR Repeater 442.55000MHz", "DMR")]
+    [InlineData("APRS", "YSF Gateway on 446.500MHz", "YSF")]
+    [InlineData("APRS", "WIRES-X node active", "WIRES-X")]
+    [InlineData("APRS", "AllStar Node 510139", "AllStar")]
+    [InlineData("APRS", "EchoLink Node active", "AllStar")]
+    public void DetectMode_FromComment_ReturnsExpectedMode(string tocall, string comment, string expected)
+    {
+        var mode = AprsPacketParsingService.DetectMode(tocall, comment);
+        Assert.Equal(expected, mode);
+    }
+
+    [Fact]
+    public void DetectMode_UnknownTocall_NoModeKeywords_ReturnsNull()
+    {
+        var mode = AprsPacketParsingService.DetectMode("APRS", "SKYWARN SE TN DIGI");
+        Assert.Null(mode);
+    }
+
+    [Fact]
+    public void DetectMode_NullInputs_ReturnsNull()
+    {
+        Assert.Null(AprsPacketParsingService.DetectMode(null, null));
+        Assert.Null(AprsPacketParsingService.DetectMode(null, ""));
+        Assert.Null(AprsPacketParsingService.DetectMode("", null));
+    }
+
+    // ── ParseFrequency ───────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("RNG0001/A=000010 2m Voice (D-Star) 144.96000MHz +0.0000MHz", "144.96000")]
+    [InlineData("147.060MHz T141 -060", "147.060")]
+    [InlineData("PHG6760/146.715 67.0 tone", null)]  // no "MHz" suffix
+    [InlineData("DMR Repeater 442.55000MHz +5.0000MHz", "442.55000")]
+    public void ParseFrequency_ExtractsFirstFrequencyWithMhzSuffix(string comment, string? expected)
+    {
+        var freq = AprsPacketParsingService.ParseFrequency(comment);
+        Assert.Equal(expected, freq);
+    }
+
+    [Fact]
+    public void ParseFrequency_NullOrEmpty_ReturnsNull()
+    {
+        Assert.Null(AprsPacketParsingService.ParseFrequency(null));
+        Assert.Null(AprsPacketParsingService.ParseFrequency(""));
+    }
+
+    // ── IsGatewayTocall ──────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("APDG02", true)]
+    [InlineData("APDMR1", true)]
+    [InlineData("APYSF1", true)]
+    [InlineData("APBM1A", true)]
+    [InlineData("APRS", false)]
+    [InlineData("APNX16", false)]   // AllStar node — not a digital voice gateway
+    [InlineData("APU25N", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsGatewayTocall_ClassifiesCorrectly(string? tocall, bool expected)
+    {
+        Assert.Equal(expected, AprsPacketParsingService.IsGatewayTocall(tocall));
+    }
+
+    // ── Full packet round-trip ───────────────────────────────────────────────
+
+    [Fact]
+    public void DStarGatewayPacket_ParsesPositionAndComment()
+    {
+        var aprs = new Packet(RealPacketData.Position_DStarGateway);
+        var pos = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
+
+        Assert.NotNull(pos.Position);
+        Assert.InRange(pos.Position!.Coordinates.Latitude, 35.36, 35.37);
+        Assert.InRange(pos.Position.Coordinates.Longitude, -85.67, -85.66);
+        Assert.Equal('D', pos.Position.SymbolTableIdentifier);
+        Assert.Equal('&', pos.Position.SymbolCode);
+        Assert.Contains("144.96000MHz", pos.Comment);
+    }
+
+    [Fact]
+    public void DStarGatewayPacket_DetectsModeAndFrequency()
+    {
+        var (_, tocall, _) = AprsPathParser.ParseTnc2Header(RealPacketData.Position_DStarGateway);
+        var aprs = new Packet(RealPacketData.Position_DStarGateway);
+        var pos = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
+
+        var mode = AprsPacketParsingService.DetectMode(tocall, pos.Comment);
+        var freq = AprsPacketParsingService.ParseFrequency(pos.Comment);
+
+        Assert.Equal("D-Star", mode);
+        Assert.Equal("144.96000", freq);
+        Assert.True(AprsPacketParsingService.IsGatewayTocall(tocall));
     }
 }

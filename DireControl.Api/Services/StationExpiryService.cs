@@ -53,6 +53,7 @@ public class StationExpiryService(
         var digiCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Digipeater));
         var igateCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.IGate));
         var unknownCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Unknown));
+        var gatewayCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Gateway));
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
@@ -65,7 +66,8 @@ public class StationExpiryService(
                 (s.StationType == StationType.Weather && s.LastSeen < weatherCutoff) ||
                 (s.StationType == StationType.Digipeater && s.LastSeen < digiCutoff) ||
                 (s.StationType == StationType.IGate && s.LastSeen < igateCutoff) ||
-                (s.StationType == StationType.Unknown && s.LastSeen < unknownCutoff))
+                (s.StationType == StationType.Unknown && s.LastSeen < unknownCutoff) ||
+                (s.StationType == StationType.Gateway && s.LastSeen < gatewayCutoff))
             .Select(s => s.Callsign)
             .ToListAsync(ct);
 

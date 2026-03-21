@@ -5,6 +5,7 @@ export enum StationType {
   Digipeater = 3,
   IGate = 4,
   Unknown = 5,
+  Gateway = 6,
 }
 
 export enum HeardVia {
@@ -68,6 +69,8 @@ export interface StationDto {
   heardVia: HeardVia;
   lastHeardRf: string | null;
   lastHeardAprsIs: string | null;
+  lastMode: string | null;
+  lastFrequencyMhz: string | null;
 }
 
 export interface HomePositionDto {
@@ -116,6 +119,14 @@ export interface StatisticsDto {
   busiestStations: CallsignCountDto[];
   recentlyFirstHeard: RecentlyHeardDto[];
   gridSquares: string[];
+}
+
+export interface StationFrequencyDto {
+  callsign: string;
+  frequencyMhz: string;
+  mode: string | null;
+  stationType: StationType;
+  lastSeen: string;
 }
 
 export interface DigipeaterAnalysisEntry {

@@ -7,5 +7,6 @@ public enum StationType
     Weather,
     Digipeater,
     IGate,
-    Unknown
+    Unknown,
+    Gateway
 }

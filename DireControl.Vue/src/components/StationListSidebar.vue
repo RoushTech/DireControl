@@ -41,6 +41,7 @@ const stationTypeOptions = [
   { label: 'Weather', value: StationType.Weather },
   { label: 'Digipeater', value: StationType.Digipeater },
   { label: 'IGate', value: StationType.IGate },
+  { label: 'Gateway', value: StationType.Gateway },
   { label: 'Unknown', value: StationType.Unknown },
 ]
 
@@ -50,6 +51,7 @@ const stationTypeLabel: Record<StationType, string> = {
   [StationType.Weather]: 'Weather',
   [StationType.Digipeater]: 'Digi',
   [StationType.IGate]: 'IGate',
+  [StationType.Gateway]: 'GW',
   [StationType.Unknown]: 'Unknown',
 }
 
@@ -59,6 +61,7 @@ const stationTypeColor: Record<StationType, string> = {
   [StationType.Weather]: 'teal',
   [StationType.Digipeater]: 'orange',
   [StationType.IGate]: 'purple',
+  [StationType.Gateway]: 'deep-purple',
   [StationType.Unknown]: 'grey',
 }
 

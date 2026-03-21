@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AprsSharp.AprsParser;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
@@ -295,6 +296,29 @@ public sealed class AprsPacketParsingService(
             {
                 s.IsWeatherStation = true;
                 s.StationType = StationType.Weather;
+            });
+        }
+
+        // ── Mode / frequency / gateway detection ────────────────────────────────
+        // Extract operating mode from TOCALL prefix and frequency from the comment.
+        // Gateway station type is set when the TOCALL indicates a digital voice
+        // gateway (D-Star, DMR, etc.) — this takes priority over Unknown/Fixed but
+        // never overwrites Weather, Digipeater, or IGate.
+        var mode = DetectMode(tocall, packet.Comment);
+        var freq = ParseFrequency(packet.Comment);
+
+        if (mode != null || freq != null)
+        {
+            UpdateStation(db, packet.StationCallsign, s =>
+            {
+                if (mode != null) s.LastMode = mode;
+                if (freq != null) s.LastFrequencyMhz = freq;
+
+                if (IsGatewayTocall(tocall) &&
+                    s.StationType is StationType.Unknown or StationType.Fixed)
+                {
+                    s.StationType = StationType.Gateway;
+                }
             });
         }
 
@@ -1020,6 +1044,91 @@ public sealed class AprsPacketParsingService(
 
         logger.LogDebug("Recorded digi confirmation for {Callsign} via {Digi} (+{Secs}s).",
             radio.FullCallsign, digiCallsign, secondsAfter);
+    }
+
+    // ─── Mode / frequency helpers ─────────────────────────────────────────────
+
+    private static readonly Regex FrequencyRegex = new(
+        @"(\d{2,3}\.\d{3,5})\s*MHz",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Known TOCALL prefixes for digital voice gateway software.
+    /// Each entry is matched as a prefix of the TOCALL field.
+    /// </summary>
+    private static readonly (string Prefix, string Mode)[] GatewayTocallPrefixes =
+    [
+        ("APDG",  "D-Star"),   // D-Star gateways (ircDDB Gateway, …)
+        ("APDS",  "D-Star"),   // D-Star (dstar.is)
+        ("APDP",  "D-Star"),   // D-PRS (D-Star position reporting)
+        ("APDMR", "DMR"),      // DMR gateways
+        ("APBM",  "DMR"),      // BrandMeister DMR
+        ("APRX",  "DMR"),      // DMR repeaters (various)
+        ("APYSF", "YSF"),      // Yaesu System Fusion
+        ("APWIR", "WIRES-X"),  // Yaesu WIRES-X
+    ];
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="tocall"/> matches
+    /// a known digital voice gateway TOCALL prefix.
+    /// </summary>
+    internal static bool IsGatewayTocall(string? tocall)
+    {
+        if (string.IsNullOrEmpty(tocall)) return false;
+        foreach (var (prefix, _) in GatewayTocallPrefixes)
+        {
+            if (tocall.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Detects the operating mode from the TOCALL prefix and/or comment text.
+    /// Returns null when mode cannot be determined.
+    /// </summary>
+    internal static string? DetectMode(string? tocall, string? comment)
+    {
+        // 1. Check TOCALL prefix first — most reliable signal.
+        if (!string.IsNullOrEmpty(tocall))
+        {
+            foreach (var (prefix, mode) in GatewayTocallPrefixes)
+            {
+                if (tocall.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return mode;
+            }
+        }
+
+        // 2. Fall back to comment text keywords.
+        if (!string.IsNullOrEmpty(comment))
+        {
+            if (comment.Contains("D-Star", StringComparison.OrdinalIgnoreCase) ||
+                comment.Contains("DStar", StringComparison.OrdinalIgnoreCase))
+                return "D-Star";
+            if (comment.Contains("DMR", StringComparison.OrdinalIgnoreCase))
+                return "DMR";
+            if (comment.Contains("YSF", StringComparison.OrdinalIgnoreCase) ||
+                comment.Contains("System Fusion", StringComparison.OrdinalIgnoreCase))
+                return "YSF";
+            if (comment.Contains("WIRES", StringComparison.OrdinalIgnoreCase))
+                return "WIRES-X";
+            if (comment.Contains("AllStar", StringComparison.OrdinalIgnoreCase) ||
+                comment.Contains("EchoLink", StringComparison.OrdinalIgnoreCase))
+                return "AllStar";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts the first frequency (in MHz) from a packet comment.
+    /// Returns the numeric string (e.g. "144.96000") or null.
+    /// </summary>
+    internal static string? ParseFrequency(string? comment)
+    {
+        if (string.IsNullOrEmpty(comment)) return null;
+        var match = FrequencyRegex.Match(comment);
+        return match.Success ? match.Groups[1].Value : null;
     }
 }
 

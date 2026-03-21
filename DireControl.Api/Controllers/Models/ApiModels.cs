@@ -28,6 +28,8 @@ public sealed class StationDto
     public HeardVia HeardVia { get; init; }
     public DateTime? LastHeardRf { get; init; }
     public DateTime? LastHeardAprsIs { get; init; }
+    public string? LastMode { get; init; }
+    public string? LastFrequencyMhz { get; init; }
 }
 
 public sealed class PacketDto
@@ -394,6 +396,15 @@ public sealed class DigipeaterAnalysisEntryDto
     public int TotalPacketsForwarded { get; init; }
     public int Last24h { get; init; }
     public double AverageHopsFromUs { get; init; }
+}
+
+public sealed class StationFrequencyDto
+{
+    public required string Callsign { get; init; }
+    public required string FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
+    public StationType StationType { get; init; }
+    public DateTime LastSeen { get; init; }
 }
 
 public sealed class PacketPositionDto

@@ -33,6 +33,7 @@ public class StationsController(
             var digiCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Digipeater));
             var igateCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.IGate));
             var unknownCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Unknown));
+            var gatewayCutoff = now.AddMinutes(-opts.GetExpiryMinutes(StationType.Gateway));
 
             query = query.Where(s =>
                 (s.StationType == StationType.Mobile && s.LastSeen >= mobileCutoff) ||
@@ -40,7 +41,8 @@ public class StationsController(
                 (s.StationType == StationType.Weather && s.LastSeen >= weatherCutoff) ||
                 (s.StationType == StationType.Digipeater && s.LastSeen >= digiCutoff) ||
                 (s.StationType == StationType.IGate && s.LastSeen >= igateCutoff) ||
-                (s.StationType == StationType.Unknown && s.LastSeen >= unknownCutoff));
+                (s.StationType == StationType.Unknown && s.LastSeen >= unknownCutoff) ||
+                (s.StationType == StationType.Gateway && s.LastSeen >= gatewayCutoff));
         }
 
         var stations = await query
@@ -246,6 +248,26 @@ public class StationsController(
         return (int)Math.Round(mean < 0 ? mean + 360.0 : mean);
     }
 
+    [HttpGet("frequencies")]
+    public async Task<ActionResult<IReadOnlyList<StationFrequencyDto>>> GetFrequencies(CancellationToken ct)
+    {
+        var frequencies = await db.Stations
+            .AsNoTracking()
+            .Where(s => s.LastFrequencyMhz != null)
+            .OrderBy(s => s.LastFrequencyMhz)
+            .Select(s => new StationFrequencyDto
+            {
+                Callsign = s.Callsign,
+                FrequencyMhz = s.LastFrequencyMhz!,
+                Mode = s.LastMode,
+                StationType = s.StationType,
+                LastSeen = s.LastSeen,
+            })
+            .ToListAsync(ct);
+
+        return Ok(frequencies);
+    }
+
     [HttpGet("watchlist")]
     public async Task<ActionResult<IReadOnlyList<StationDto>>> GetWatchList(CancellationToken ct)
     {
@@ -379,6 +401,8 @@ public class StationsController(
         HeardVia = s.HeardVia,
         LastHeardRf = s.LastHeardRf,
         LastHeardAprsIs = s.LastHeardAprsIs,
+        LastMode = s.LastMode,
+        LastFrequencyMhz = s.LastFrequencyMhz,
     };
 
     private static System.Linq.Expressions.Expression<Func<DireControl.Data.Models.Packet, PacketDto>> ToPacketDto() => p => new PacketDto

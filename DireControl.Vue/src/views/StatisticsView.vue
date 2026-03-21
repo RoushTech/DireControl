@@ -11,14 +11,15 @@ import {
 } from 'chart.js'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { getStatistics, getDigipeaterAnalysis } from '@/api/statisticsApi'
-import { StationType, type StatisticsDto, type DigipeaterAnalysisEntry } from '@/types/station'
+import { getStatistics, getDigipeaterAnalysis, getStationFrequencies } from '@/api/statisticsApi'
+import { StationType, type StatisticsDto, type DigipeaterAnalysisEntry, type StationFrequencyDto } from '@/types/station'
 import { timeAgo } from '@/utils/time'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ChartTooltip, Legend)
 
 const stats = ref<StatisticsDto | null>(null)
 const digiAnalysis = ref<DigipeaterAnalysisEntry[]>([])
+const frequencies = ref<StationFrequencyDto[]>([])
 const loading = ref(false)
 const error = ref(false)
 
@@ -32,12 +33,14 @@ async function load() {
   loading.value = true
   error.value = false
   try {
-    const [statsResult, digiResult] = await Promise.all([
+    const [statsResult, digiResult, freqResult] = await Promise.all([
       getStatistics(),
       getDigipeaterAnalysis(),
+      getStationFrequencies(),
     ])
     stats.value = statsResult
     digiAnalysis.value = digiResult
+    frequencies.value = freqResult
   } catch {
     error.value = true
   } finally {
@@ -97,6 +100,7 @@ const typeLabel: Record<StationType, string> = {
   [StationType.Digipeater]: 'Digipeater',
   [StationType.IGate]: 'IGate',
   [StationType.Unknown]: 'Unknown',
+  [StationType.Gateway]: 'Gateway',
 }
 const typeColor: Record<StationType, string> = {
   [StationType.Fixed]: 'blue',
@@ -105,6 +109,7 @@ const typeColor: Record<StationType, string> = {
   [StationType.Digipeater]: 'orange',
   [StationType.IGate]: 'purple',
   [StationType.Unknown]: 'grey',
+  [StationType.Gateway]: 'deep-purple',
 }
 
 // ---- Maidenhead grid → lat/lon bounds ----
@@ -335,6 +340,45 @@ onUnmounted(() => {
         </v-card>
       </v-col>
     </v-row>
+
+    <!-- Last-seen frequencies -->
+    <v-card v-if="frequencies.length > 0" variant="outlined" class="mb-4">
+      <v-card-title class="text-body-2 font-weight-medium pa-3 pb-1">
+        Last-seen frequencies
+        <v-chip size="x-small" color="deep-purple" class="ml-2">
+          {{ frequencies.length }}
+        </v-chip>
+      </v-card-title>
+      <v-card-text class="pa-0">
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th class="text-caption">Frequency</th>
+              <th class="text-caption">Callsign</th>
+              <th class="text-caption">Mode</th>
+              <th class="text-caption">Type</th>
+              <th class="text-caption text-right">Last Seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="f in frequencies" :key="f.callsign">
+              <td class="text-body-2 font-weight-medium">{{ f.frequencyMhz }} MHz</td>
+              <td class="text-body-2">{{ f.callsign }}</td>
+              <td class="text-body-2">
+                <v-chip v-if="f.mode" size="x-small" color="deep-purple" variant="tonal">{{ f.mode }}</v-chip>
+                <span v-else class="text-medium-emphasis">—</span>
+              </td>
+              <td>
+                <v-chip :color="typeColor[f.stationType]" size="x-small" label>
+                  {{ typeLabel[f.stationType] }}
+                </v-chip>
+              </td>
+              <td class="text-body-2 text-right text-medium-emphasis">{{ timeAgo(f.lastSeen) }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card-text>
+    </v-card>
 
     <v-row class="mb-4">
       <!-- Recently first-heard stations -->
