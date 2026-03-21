@@ -80,6 +80,13 @@ public sealed class AprsIsService(
         logger.LogInformation("AprsIsService stopped.");
     }
 
+    /// <summary>
+    /// APRS-IS servers send keepalive comments every ~20 s.  If we receive
+    /// nothing for this long the TCP session is almost certainly dead (silent
+    /// drop — no FIN/RST), so we force a reconnect.
+    /// </summary>
+    private static readonly TimeSpan InactivityTimeout = TimeSpan.FromSeconds(90);
+
     private async Task ConnectAndReceiveAsync(UserSetting settings, CancellationToken ct)
     {
         var passcode = settings.AprsIsPasscode
@@ -90,6 +97,11 @@ public sealed class AprsIsService(
         var authFailed = false;
         var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
         using var client = new AprsSharp.AprsIsClient.AprsIsClient();
+
+        // Inactivity watchdog: cancelled and reset on every received message.
+        // When it fires it forces the client to disconnect so the receive loop
+        // exits and the outer retry logic kicks in.
+        using var inactivityCts = new CancellationTokenSource();
 
         client.ReceivedTcpMessage += raw => channel.Writer.TryWrite(raw);
 
@@ -111,6 +123,15 @@ public sealed class AprsIsService(
 
         ct.Register(client.Disconnect);
 
+        // When the inactivity timer fires, force-disconnect the client so that
+        // receiveTask completes and the channel drains.
+        inactivityCts.Token.Register(() =>
+        {
+            logger.LogWarning("No data from APRS-IS for {Timeout} — forcing reconnect", InactivityTimeout);
+            client.Disconnect();
+        });
+        inactivityCts.CancelAfter(InactivityTimeout);
+
         var receiveTask = client.Receive(
             options.Value.OurCallsign,
             passcode.ToString(),
@@ -125,6 +146,9 @@ public sealed class AprsIsService(
         {
             await foreach (var raw in channel.Reader.ReadAllAsync(ct))
             {
+                // Reset the inactivity watchdog — we got data.
+                inactivityCts.CancelAfter(InactivityTimeout);
+
                 if (raw.StartsWith('#'))
                 {
                     if (raw.Contains("unverified", StringComparison.OrdinalIgnoreCase))
