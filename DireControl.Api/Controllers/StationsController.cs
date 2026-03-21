@@ -103,15 +103,20 @@ public class StationsController(
     [HttpGet("{callsign}/track")]
     public async Task<ActionResult<IReadOnlyList<TrackPointDto>>> GetStationTrack(
         string callsign,
-        CancellationToken ct)
+        [FromQuery] int durationMinutes = 60,
+        CancellationToken ct = default)
     {
         var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
         if (!stationExists)
             return NotFound();
 
+        var cutoff = DateTime.UtcNow.AddMinutes(-Math.Clamp(durationMinutes, 1, 43200));
+
         var points = await db.Packets
             .AsNoTracking()
-            .Where(p => p.StationCallsign == callsign && p.Latitude != null && p.Longitude != null)
+            .Where(p => p.StationCallsign == callsign
+                     && p.Latitude != null && p.Longitude != null
+                     && p.ReceivedAt >= cutoff)
             .OrderBy(p => p.ReceivedAt)
             .Select(p => new TrackPointDto
             {

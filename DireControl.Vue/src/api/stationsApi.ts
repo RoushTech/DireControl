@@ -16,9 +16,10 @@ export async function getStation(callsign: string): Promise<StationDto> {
   return data;
 }
 
-export async function getStationTrack(callsign: string): Promise<TrackPointDto[]> {
+export async function getStationTrack(callsign: string, durationMinutes = 60): Promise<TrackPointDto[]> {
   const { data } = await http.get<TrackPointDto[]>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/track`,
+    { params: { durationMinutes } },
   );
   return data;
 }
