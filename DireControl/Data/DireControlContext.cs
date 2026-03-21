@@ -16,6 +16,8 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<OwnBeacon> OwnBeacons => Set<OwnBeacon>();
     public DbSet<DigiConfirmation> DigiConfirmations => Set<DigiConfirmation>();
     public DbSet<UserSetting> UserSettings => Set<UserSetting>();
+    public DbSet<DigipeaterStatistic> DigipeaterStatistics => Set<DigipeaterStatistic>();
+    public DbSet<CoverageGridStatistic> CoverageGridStatistics => Set<CoverageGridStatistic>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

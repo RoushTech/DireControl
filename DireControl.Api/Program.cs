@@ -84,6 +84,7 @@ services
     .AddHostedService<AlertingService>()
     .AddHostedService<MessageRetryService>()
     .AddHostedService<WeatherCacheService>()
+    .AddHostedService<StatisticsAggregationService>()
     .AddSingleton<KissConnectionHolder>()
     .AddSingleton<AprsIsReconnectTrigger>()
     .AddSingleton<IAprsIsStatusService, AprsIsStatusService>()

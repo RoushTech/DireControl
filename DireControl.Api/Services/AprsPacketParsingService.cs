@@ -347,33 +347,39 @@ public sealed class AprsPacketParsingService(
                 if (station is null)
                     continue;
 
-                // Load all packet timestamps for this station (only ReceivedAt needed)
-                var allTimes = await db.Packets
+                // Use lightweight COUNT queries instead of loading all timestamps.
+                var totalPackets = await db.Packets
+                    .CountAsync(p => p.StationCallsign == callsign, ct);
+
+                if (totalPackets == 0)
+                    continue;
+
+                var packetsToday = await db.Packets
+                    .CountAsync(p => p.StationCallsign == callsign && p.ReceivedAt >= todayStart, ct);
+
+                var ageHours = Math.Max(1.0, (now - station.FirstSeen).TotalHours);
+                var averagePerHour = totalPackets / ageHours;
+
+                // Incrementally maintain longest gap: compare the gap between the two
+                // most recent packets against the stored maximum.
+                var existing = await db.StationStatistics
+                    .FirstOrDefaultAsync(ss => ss.Callsign == callsign, ct);
+
+                var longestGapMinutes = existing?.LongestGapMinutes ?? 0;
+
+                var lastTwoTimes = await db.Packets
                     .Where(p => p.StationCallsign == callsign)
-                    .OrderBy(p => p.ReceivedAt)
+                    .OrderByDescending(p => p.ReceivedAt)
+                    .Take(2)
                     .Select(p => p.ReceivedAt)
                     .ToListAsync(ct);
 
-                if (allTimes.Count == 0)
-                    continue;
-
-                var packetsToday = allTimes.Count(t => t >= todayStart);
-
-                // Average packets per hour based on lifetime age vs total count
-                var ageHours = Math.Max(1.0, (now - station.FirstSeen).TotalHours);
-                var averagePerHour = allTimes.Count / ageHours;
-
-                // Longest gap between consecutive packets
-                var longestGapMinutes = 0;
-                for (var i = 1; i < allTimes.Count; i++)
+                if (lastTwoTimes.Count >= 2)
                 {
-                    var gapMin = (int)(allTimes[i] - allTimes[i - 1]).TotalMinutes;
-                    if (gapMin > longestGapMinutes)
-                        longestGapMinutes = gapMin;
+                    var latestGap = (int)(lastTwoTimes[0] - lastTwoTimes[1]).TotalMinutes;
+                    if (latestGap > longestGapMinutes)
+                        longestGapMinutes = latestGap;
                 }
-
-                var existing = await db.StationStatistics
-                    .FirstOrDefaultAsync(ss => ss.Callsign == callsign, ct);
 
                 if (existing is null)
                 {

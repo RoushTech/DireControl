@@ -327,21 +327,21 @@ public class StationsController(
         var totalPackets = await db.Packets
             .CountAsync(p => p.StationCallsign == callsign, ct);
 
-        // Build hourly histogram for last 24h
+        // Build hourly histogram using grouped counts instead of loading all timestamps.
         var now = DateTime.UtcNow;
         var h24Start = now.AddHours(-24);
 
-        var recentTimes = await db.Packets
+        var hourBuckets = await db.Packets
             .Where(p => p.StationCallsign == callsign && p.ReceivedAt >= h24Start)
-            .Select(p => p.ReceivedAt)
+            .GroupBy(p => (int)((now.Ticks - p.ReceivedAt.Ticks) / TimeSpan.TicksPerHour))
+            .Select(g => new { HoursAgo = g.Key, Count = g.Count() })
             .ToListAsync(ct);
 
         var packetsPerHour = new int[24];
-        foreach (var ts in recentTimes)
+        foreach (var bucket in hourBuckets)
         {
-            var hoursAgo = (int)(now - ts).TotalHours;
-            if (hoursAgo >= 0 && hoursAgo < 24)
-                packetsPerHour[23 - hoursAgo]++;
+            if (bucket.HoursAgo >= 0 && bucket.HoursAgo < 24)
+                packetsPerHour[23 - bucket.HoursAgo] = bucket.Count;
         }
 
         return Ok(new StationStatisticDto

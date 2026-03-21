@@ -9,9 +9,9 @@ namespace DireControl.Api.Controllers;
 public class StatisticsController(StatisticsService statisticsService) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<StatisticsDto>> GetStatistics(CancellationToken ct)
+    public ActionResult<StatisticsDto> GetStatistics()
     {
-        var stats = await statisticsService.GetStatisticsAsync(ct);
+        var stats = statisticsService.GetStatistics();
         return Ok(stats);
     }
 }
