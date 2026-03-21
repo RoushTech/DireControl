@@ -46,17 +46,13 @@ public static class PathResolver
     {
         var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
 
-        // Build the full path list with TOCALL at [0] so ExtractViaHops can skip it.
-        List<string> fullPathList = string.IsNullOrEmpty(tocall)
-            ? []
-            : string.IsNullOrEmpty(rawPath)
-                ? [tocall]
-                : rawPath
-                    .Split(',', System.StringSplitOptions.RemoveEmptyEntries)
-                    .Prepend(tocall)
-                    .ToList();
+        List<string> pathList = new List<string> { tocall };
+        if (!string.IsNullOrEmpty(rawPath))
+        {
+            pathList.AddRange(rawPath.Split(',', System.StringSplitOptions.RemoveEmptyEntries));
+        }
 
-        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(fullPathList);
+        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(pathList);
 
         // Classify using the raw via entries (with * intact).
         var pathEntries = string.IsNullOrEmpty(rawPath)

@@ -9,7 +9,6 @@ using DireControl.PathParsing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using AprsPacketType = AprsSharp.AprsParser.PacketType;
 using OurPacketType = DireControl.Enums.PacketType;
 using DbPacket = DireControl.Data.Models.Packet;
 
@@ -237,13 +236,7 @@ public sealed class AprsPacketParsingService(
     {
         var aprs = new AprsSharp.AprsParser.Packet(packet.RawPacket);
 
-        packet.ParsedType = MapPacketType(aprs.InfoField?.Type ?? AprsPacketType.Unknown);
-
-        // AprsSharp 0.4.1 reports a Position-family type enum for @ prefix weather
-        // packets even though InfoField IS a WeatherInfo instance.  Override here so
-        // ParsedType always matches the InfoField class when weather data is present.
-        if (aprs.InfoField is WeatherInfo)
-            packet.ParsedType = OurPacketType.Weather;
+        packet.ParsedType = MapPacketType(aprs.InfoField);
 
         // Extract path from the raw TNC2 string.  ParseTnc2Header reads directly
         // from RawPacket so asterisk markers from the AX.25 H-bit are preserved;
@@ -252,19 +245,14 @@ public sealed class AprsPacketParsingService(
 
         packet.Path = rawPath;   // e.g. "WE4MB-3*,WIDE2" — TOCALL absent, asterisks intact
 
-        // ExtractViaHops expects the full path list with TOCALL at index [0] so it
-        // can unconditionally skip it.  Reconstruct that list here.
-        List<string> fullPathList = string.IsNullOrEmpty(tocall)
-            ? []
-            : string.IsNullOrEmpty(rawPath)
-                ? [tocall]
-                : rawPath
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Prepend(tocall)
-                    .ToList();
+        List<string> pathList = new List<string> { tocall };
+        if (!string.IsNullOrEmpty(rawPath))
+        {
+            pathList.AddRange(rawPath.Split(',', StringSplitOptions.RemoveEmptyEntries));
+        }
 
         // Full ResolvedPath (with source + home + coordinates) is built in ResolvePathCoordinatesAsync.
-        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(fullPathList);
+        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(pathList);
         packet.HopCount = hopCount;
         packet.ResolvedPath = viaHops;
 
@@ -272,6 +260,22 @@ public sealed class AprsPacketParsingService(
         {
             case WeatherInfo weather:
                 HandleWeather(packet, weather, db);
+                break;
+
+            case PositionlessWeatherInfo plWx:
+                HandlePositionlessWeather(packet, plWx, db);
+                break;
+
+            case MicEInfo micE:
+                HandleMicE(packet, micE, db);
+                break;
+
+            case ObjectInfo obj:
+                HandleObject(packet, obj, db);
+                break;
+
+            case ItemInfo item:
+                HandleItem(packet, item, db);
                 break;
 
             case PositionInfo position:
@@ -285,25 +289,13 @@ public sealed class AprsPacketParsingService(
             case StatusInfo status:
                 packet.Comment = status.Comment ?? string.Empty;
                 break;
-        }
 
-        // _ prefix weather packets: AprsSharp sets the type enum to WeatherReport but
-        // InfoField is UnsupportedInfo (library limitation), so HandleWeather never fires
-        // and the station is never marked.  Correct that here.
-        if (packet.ParsedType == OurPacketType.Weather && packet.WeatherData == null)
-        {
-            UpdateStation(db, packet.StationCallsign, s =>
-            {
-                s.IsWeatherStation = true;
-                s.StationType = StationType.Weather;
-            });
+            case ThirdPartyTrafficInfo thirdParty:
+                await HandleThirdPartyAsync(packet, thirdParty, db, ourCallsign, effects, ct);
+                break;
         }
 
         // ── Mode / frequency / gateway detection ────────────────────────────────
-        // Extract operating mode from TOCALL prefix and frequency from the comment.
-        // Gateway station type is set when the TOCALL indicates a digital voice
-        // gateway (D-Star, DMR, etc.) — this takes priority over Unknown/Fixed but
-        // never overwrites Weather, Digipeater, or IGate.
         var mode = DetectMode(tocall, packet.Comment);
         var freq = ParseFrequency(packet.Comment);
 
@@ -320,34 +312,6 @@ public sealed class AprsPacketParsingService(
                     s.StationType = StationType.Gateway;
                 }
             });
-        }
-
-        // Third-party packets (info field starts with '}'): the outer source is the
-        // igate that forwarded the packet; the actual sender and payload live in the
-        // inner TNC2 string.  AprsSharp 0.4.1 provides no structured
-        // ThirdPartyTrafficInfo class, so we extract the inner string manually and
-        // re-parse it.  Only message packets inside third-party frames are handled;
-        // other inner types are left as Unparseable.
-        if (aprs.InfoField?.Type == AprsPacketType.ThirdPartyTraffic)
-        {
-            if (MessageHandlingLogic.TryExtractThirdPartyInner(
-                    packet.RawPacket, out var innerRaw, out var innerSender))
-            {
-                try
-                {
-                    var innerAprs = new AprsSharp.AprsParser.Packet(innerRaw);
-                    if (innerAprs.InfoField is MessageInfo innerMsg)
-                    {
-                        packet.ParsedType = OurPacketType.Message;
-                        await HandleMessageAsync(packet, innerMsg, db, ourCallsign, effects, ct,
-                            senderCallsignOverride: innerSender);
-                    }
-                }
-                catch
-                {
-                    // inner packet unparseable — leave ParsedType as Unparseable
-                }
-            }
         }
     }
 
@@ -585,6 +549,117 @@ public sealed class AprsPacketParsingService(
         });
     }
 
+    private void HandlePositionlessWeather(DbPacket packet, PositionlessWeatherInfo info, DireControlContext db)
+    {
+        logger.LogDebug("APRSSharp positionless weather pressure={Pressure} for packet {Raw}", info.BarometricPressure, packet.RawPacket);
+        packet.Comment = info.Comment ?? string.Empty;
+        packet.WeatherData = new WeatherData
+        {
+            TemperatureF = (double?)info.Temperature,
+            WindSpeedMph = (double?)info.WindSpeed,
+            WindDirectionDeg = info.WindDirection,
+            WindGustMph = (double?)info.WindGust,
+            HumidityPercent = info.Humidity,
+            PressureMbar = (double?)info.BarometricPressure / 10.0,
+            RainfallLastHourIn = info.Rainfall1Hour.HasValue ? info.Rainfall1Hour.Value / 100.0 : null,
+            RainfallLast24hIn = info.Rainfall24Hour.HasValue ? info.Rainfall24Hour.Value / 100.0 : null,
+            RainfallSinceMidnightIn = info.RainfallSinceMidnight.HasValue ? info.RainfallSinceMidnight.Value / 100.0 : null,
+        };
+
+        UpdateStation(db, packet.StationCallsign, s =>
+        {
+            s.IsWeatherStation = true;
+            s.StationType = StationType.Weather;
+        });
+    }
+
+    private void HandleMicE(DbPacket packet, MicEInfo info, DireControlContext db)
+    {
+        packet.Comment = info.Comment ?? string.Empty;
+
+        if (info.Position is { } pos)
+        {
+            var coord = pos.Coordinates;
+            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
+            {
+                packet.Latitude = coord.Latitude;
+                packet.Longitude = coord.Longitude;
+            }
+
+            var symbol = $"{pos.SymbolTableIdentifier}{pos.SymbolCode}";
+
+            UpdateStation(db, packet.StationCallsign, station =>
+            {
+                var isMobileSymbol = MobileSymbols.Contains(symbol);
+                var hasMoved = station.LastLat is not null
+                    && station.LastLon is not null
+                    && !double.IsNaN(coord.Latitude)
+                    && !double.IsNaN(coord.Longitude)
+                    && (Math.Abs(coord.Latitude  - station.LastLat.Value) > MovementThresholdDeg
+                     || Math.Abs(coord.Longitude - station.LastLon.Value) > MovementThresholdDeg);
+
+                if ((isMobileSymbol || hasMoved) &&
+                    station.StationType is StationType.Unknown or StationType.Fixed)
+                {
+                    station.StationType = StationType.Mobile;
+                }
+
+                if (!double.IsNaN(coord.Latitude)) station.LastLat = coord.Latitude;
+                if (!double.IsNaN(coord.Longitude)) station.LastLon = coord.Longitude;
+                if (info.Course is { } heading) station.LastHeading = heading;
+                if (info.Speed is { } speed) station.LastSpeed = speed * 1.15078; // knots → mph
+                station.Symbol = symbol;
+            });
+        }
+    }
+
+    private void HandleObject(DbPacket packet, ObjectInfo info, DireControlContext db)
+    {
+        packet.Comment = info.Comment ?? string.Empty;
+
+        if (info.Position is { } pos)
+        {
+            var coord = pos.Coordinates;
+            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
+            {
+                packet.Latitude = coord.Latitude;
+                packet.Longitude = coord.Longitude;
+            }
+        }
+    }
+
+    private void HandleItem(DbPacket packet, ItemInfo info, DireControlContext db)
+    {
+        packet.Comment = info.Comment ?? string.Empty;
+
+        if (info.Position is { } pos)
+        {
+            var coord = pos.Coordinates;
+            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
+            {
+                packet.Latitude = coord.Latitude;
+                packet.Longitude = coord.Longitude;
+            }
+        }
+    }
+
+    private async Task HandleThirdPartyAsync(
+        DbPacket packet,
+        ThirdPartyTrafficInfo info,
+        DireControlContext db,
+        string ourCallsign,
+        List<MessageEffect> effects,
+        CancellationToken ct)
+    {
+        if (info.InnerPacket?.InfoField is MessageInfo innerMsg)
+        {
+            packet.ParsedType = OurPacketType.Message;
+            var innerSender = info.InnerPacket.Sender ?? packet.StationCallsign;
+            await HandleMessageAsync(packet, innerMsg, db, ourCallsign, effects, ct,
+                senderCallsignOverride: innerSender);
+        }
+    }
+
     private async Task HandleMessageAsync(
         DbPacket packet,
         MessageInfo info,
@@ -802,31 +877,18 @@ public sealed class AprsPacketParsingService(
             update(station);
     }
 
-    private static OurPacketType MapPacketType(AprsPacketType type) => type switch
+    private static OurPacketType MapPacketType(AprsSharp.AprsParser.InfoField? infoField) => infoField switch
     {
-        AprsPacketType.PositionWithoutTimestampNoMessaging or
-        AprsPacketType.PositionWithTimestampNoMessaging or
-        AprsPacketType.PositionWithoutTimestampWithMessaging or
-        AprsPacketType.PositionWithTimestampWithMessaging or
-        AprsPacketType.CurrentMicEData or
-        AprsPacketType.OldMicEData or
-        AprsPacketType.OldMicEDataCurrentTMD700 or
-        AprsPacketType.CurrentMicEDataNotTMD700 or
-        AprsPacketType.MaidenheadGridLocatorBeacon => OurPacketType.Position,
-
-        AprsPacketType.Message => OurPacketType.Message,
-
-        AprsPacketType.WeatherReport or
-        AprsPacketType.PeetBrosUIIWeatherStation => OurPacketType.Weather,
-
-        AprsPacketType.TelemetryData => OurPacketType.Telemetry,
-
-        AprsPacketType.Object => OurPacketType.Object,
-
-        AprsPacketType.Item => OurPacketType.Item,
-
-        AprsPacketType.Status => OurPacketType.Status,
-
+        WeatherInfo => OurPacketType.Weather,
+        PositionlessWeatherInfo => OurPacketType.Weather,
+        MicEInfo => OurPacketType.Position,
+        PositionInfo => OurPacketType.Position,
+        ObjectInfo => OurPacketType.Object,
+        ItemInfo => OurPacketType.Item,
+        MessageInfo => OurPacketType.Message,
+        StatusInfo => OurPacketType.Status,
+        TelemetryInfo => OurPacketType.Telemetry,
+        ThirdPartyTrafficInfo => OurPacketType.Unparseable, // overridden if inner packet is a message
         _ => OurPacketType.Unparseable,
     };
 

@@ -161,7 +161,8 @@ public static class AprsPathParser
     /// </para>
     /// </summary>
     /// <param name="aprsPath">
-    ///   The path list whose first element is the TOCALL.
+    ///   The full APRS path array, where index 0 is the TOCALL (destination).
+    ///   The TOCALL is unconditionally skipped — only via-path entries (index 1+) are processed.
     /// </param>
     /// <returns>
     ///   The intermediate hop entries (HopIndex 1…N) and the count of real RF digipeater hops.
@@ -169,17 +170,16 @@ public static class AprsPathParser
     public static (List<ResolvedPathEntry> Hops, int HopCount) ExtractViaHops(
         IList<string>? aprsPath)
     {
-        var allEntries = aprsPath?.ToList() ?? [];
-
-        // allEntries[0] is the TOCALL — always skip it, no conditions.
-        var viaEntries = allEntries.Count > 0 ? allEntries.Skip(1).ToList() : [];
+        var viaEntries = aprsPath?.ToList() ?? [];
 
         var hops = new List<ResolvedPathEntry>();
 
         bool internetSectionStarted = false;
         bool prevWasQCode = false;
 
-        for (int i = 0; i < viaEntries.Count; i++)
+        // Skip index 0 — that is always the TOCALL (destination field),
+        // never a digipeater hop.
+        for (int i = 1; i < viaEntries.Count; i++)
         {
             var raw      = viaEntries[i];
             var callsign = raw.TrimEnd('*').Trim();

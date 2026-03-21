@@ -14,9 +14,9 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="AprsSharp.AprsIsClient" Version="0.4.1" />
-    <PackageReference Include="AprsSharp.AprsParser" Version="0.4.1" />
-    <PackageReference Include="AprsSharp.KissTnc" Version="0.4.1" />
+    <PackageReference Include="RoushTech.APRSsharp.AprsIsClient" Version="0.5.1-rc.1" />
+    <PackageReference Include="RoushTech.APRSsharp.AprsParser" Version="0.5.1-rc.1" />
+    <PackageReference Include="RoushTech.APRSsharp.KissTnc" Version="0.5.1-rc.1" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.3">
       <PrivateAssets>all</PrivateAssets>

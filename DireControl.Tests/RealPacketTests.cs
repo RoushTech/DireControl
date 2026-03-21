@@ -709,15 +709,14 @@ public class UnparseablePacketTests
     }
 
     /// <summary>
-    /// BLN* bulletin message addresses cause AprsSharp 0.4.1 to throw ArgumentException.
-    /// The parsing service catches this and marks the packet Unparseable.
+    /// BLN* bulletin message addresses previously caused AprsSharp to throw ArgumentException.
+    /// Now the parser gracefully falls back to UnsupportedInfo instead of throwing.
     /// </summary>
     [Fact]
-    public void BulletinBln_PacketConstruction_Throws()
+    public void BulletinBln_PacketConstruction_DoesNotThrow()
     {
         var ex = Record.Exception(() => new Packet(RealPacketData.Message_BulletinBln));
-        Assert.NotNull(ex);
-        Assert.IsType<ArgumentException>(ex);
+        Assert.Null(ex);
     }
 
     /// <summary>
