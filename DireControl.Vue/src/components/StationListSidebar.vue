@@ -127,6 +127,27 @@ const filteredStale = computed(() => {
 })
 
 const staleCount = computed(() => props.staleStations?.length ?? 0)
+
+type VirtualItem =
+  | { kind: 'station'; station: StationDto; stale: false }
+  | { kind: 'divider' }
+  | { kind: 'station'; station: StationDto; stale: true }
+
+const virtualItems = computed<VirtualItem[]>(() => {
+  const items: VirtualItem[] = filteredAndSorted.value.map((s) => ({
+    kind: 'station' as const,
+    station: s,
+    stale: false as const,
+  }))
+  const stale = filteredStale.value
+  if (stale.length > 0) {
+    items.push({ kind: 'divider' })
+    for (const s of stale) {
+      items.push({ kind: 'station', station: s, stale: true })
+    }
+  }
+  return items
+})
 </script>
 
 <template>
@@ -179,6 +200,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
           variant="outlined"
           hide-details
           class="flex-1"
+          :menu-props="{ minWidth: 160 }"
         />
         <v-select
           v-model="sortKey"
@@ -194,75 +216,60 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
           variant="outlined"
           hide-details
           class="flex-1"
+          :menu-props="{ minWidth: 140 }"
         />
       </div>
     </div>
 
     <v-divider />
 
-    <div class="station-list">
-      <div
-        v-for="s in filteredAndSorted"
-        :key="s.callsign"
-        class="station-row"
-        :class="{ 'station-row--selected': s.callsign === selectedCallsign }"
-        @click="emit('selectStation', s.callsign)"
-      >
-        <div :style="symbolStyle(s)" class="station-icon flex-shrink-0" />
-        <div class="station-info">
-          <div class="d-flex align-center ga-1">
-            <span class="text-body-2 font-weight-medium">{{ s.callsign }}</span>
-            <v-chip :color="stationTypeColor[s.stationType]" size="x-small" label>
-              {{ stationTypeLabel[s.stationType] }}
-            </v-chip>
-            <v-chip
-              v-if="heardViaLabel[s.heardVia]"
-              :color="heardViaColor[s.heardVia]"
-              size="x-small"
-              label
-            >
-              {{ heardViaLabel[s.heardVia] }}
-            </v-chip>
-          </div>
-          <div class="d-flex align-center ga-2 text-caption text-medium-emphasis">
-            <span>{{ timeAgo(s.lastSeen, now) }}</span>
-            <span v-if="packetCounts[s.callsign]">
-              <v-icon size="10">mdi-radio-tower</v-icon> {{ packetCounts[s.callsign] }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Stale stations section -->
-      <template v-if="filteredStale.length > 0">
-        <div class="stale-divider text-caption text-medium-emphasis px-3 py-1">
+    <v-virtual-scroll
+      v-if="virtualItems.length > 0"
+      :items="virtualItems"
+      item-height="50"
+      class="station-list"
+    >
+      <template #default="{ item }">
+        <div v-if="item.kind === 'divider'" class="stale-divider text-caption text-medium-emphasis px-3 py-1">
           <v-icon size="12" class="mr-1">mdi-clock-alert-outline</v-icon>Stale
         </div>
         <div
-          v-for="s in filteredStale"
-          :key="s.callsign"
-          class="station-row station-row--stale"
-          :class="{ 'station-row--selected': s.callsign === selectedCallsign }"
-          @click="emit('selectStation', s.callsign)"
+          v-else
+          class="station-row"
+          :class="{
+            'station-row--selected': item.station.callsign === selectedCallsign,
+            'station-row--stale': item.stale,
+          }"
+          @click="emit('selectStation', item.station.callsign)"
         >
-          <div :style="symbolStyle(s)" class="station-icon flex-shrink-0 stale-icon" />
+          <div :style="symbolStyle(item.station)" class="station-icon flex-shrink-0" :class="{ 'stale-icon': item.stale }" />
           <div class="station-info">
             <div class="d-flex align-center ga-1">
-              <span class="text-body-2 font-weight-medium text-medium-emphasis">{{ s.callsign }}</span>
-              <v-chip color="grey" size="x-small" label>
-                {{ stationTypeLabel[s.stationType] }}
+              <span class="text-body-2 font-weight-medium" :class="{ 'text-medium-emphasis': item.stale }">{{ item.station.callsign }}</span>
+              <v-chip :color="item.stale ? 'grey' : stationTypeColor[item.station.stationType]" size="x-small" label>
+                {{ stationTypeLabel[item.station.stationType] }}
+              </v-chip>
+              <v-chip
+                v-if="!item.stale && heardViaLabel[item.station.heardVia]"
+                :color="heardViaColor[item.station.heardVia]"
+                size="x-small"
+                label
+              >
+                {{ heardViaLabel[item.station.heardVia] }}
               </v-chip>
             </div>
-            <div class="d-flex align-center ga-2 text-caption text-disabled">
-              <span>{{ timeAgo(s.lastSeen, now) }}</span>
+            <div class="d-flex align-center ga-2 text-caption" :class="item.stale ? 'text-disabled' : 'text-medium-emphasis'">
+              <span>{{ timeAgo(item.station.lastSeen, now) }}</span>
+              <span v-if="!item.stale && packetCounts[item.station.callsign]">
+                <v-icon size="10">mdi-radio-tower</v-icon> {{ packetCounts[item.station.callsign] }}
+              </span>
             </div>
           </div>
         </div>
       </template>
-
-      <div v-if="filteredAndSorted.length === 0 && filteredStale.length === 0" class="text-center text-medium-emphasis py-6 text-caption">
-        No stations
-      </div>
+    </v-virtual-scroll>
+    <div v-else class="text-center text-medium-emphasis py-6 text-caption">
+      No stations
     </div>
   </div>
 </template>
@@ -272,6 +279,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   overflow: hidden;
   background: rgb(var(--v-theme-surface));
   border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
@@ -290,7 +298,7 @@ const staleCount = computed(() => props.staleStations?.length ?? 0)
 
 .station-list {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
 }
 
 .station-icon {

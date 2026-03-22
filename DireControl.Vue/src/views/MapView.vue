@@ -2498,6 +2498,7 @@ defineExpose({ TILE_PROVIDERS })
   flex-shrink: 0;
   overflow: hidden;
   transition: width 0.3s ease;
+  min-height: 0;
 }
 
 .sidebar-left.sidebar-open {
