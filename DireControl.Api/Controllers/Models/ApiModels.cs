@@ -490,6 +490,7 @@ public sealed class LastBeaconDto
     public double? Longitude { get; init; }
     public string? PathUsed { get; init; }
     public string? Comment { get; init; }
+    public bool Heard { get; init; }
     public IReadOnlyList<DigiConfirmationDto> Confirmations { get; init; } = [];
 }
 
@@ -501,6 +502,7 @@ public sealed class OwnBeaconHistoryItemDto
     public double? Longitude { get; init; }
     public string? PathUsed { get; init; }
     public int HopCount { get; init; }
+    public bool Heard { get; init; }
     public IReadOnlyList<DigiConfirmationDto> Confirmations { get; init; } = [];
 }
 
@@ -513,6 +515,13 @@ public sealed class OwnBeaconBroadcastDto
     public double? Lat { get; init; }
     public double? Lon { get; init; }
     public string? PathUsed { get; init; }
+    public bool Heard { get; init; }
+}
+
+public sealed class BeaconConfirmedHeardDto
+{
+    public required string RadioId { get; init; }
+    public int BeaconId { get; init; }
 }
 
 public sealed class DigiConfirmationBroadcastDto

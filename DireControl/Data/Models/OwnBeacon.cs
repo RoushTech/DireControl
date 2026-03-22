@@ -15,6 +15,7 @@ public class OwnBeacon : IEntityTypeConfiguration<OwnBeacon>
     public string? Comment { get; set; }
     public string? PathUsed { get; set; }
     public int HopCount { get; set; }
+    public bool Heard { get; set; }
 
     public Radio Radio { get; set; } = null!;
     public ICollection<DigiConfirmation> Confirmations { get; set; } = [];
@@ -27,6 +28,7 @@ public class OwnBeacon : IEntityTypeConfiguration<OwnBeacon>
                .WithMany(r => r.Beacons)
                .HasForeignKey(b => b.RadioId)
                .OnDelete(DeleteBehavior.Cascade);
+        builder.Property(b => b.Heard).HasDefaultValue(true);
         builder.HasIndex(b => new { b.RadioId, b.BeaconedAt });
     }
 }

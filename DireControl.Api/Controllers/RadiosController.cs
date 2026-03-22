@@ -241,6 +241,7 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
             Longitude = beacon?.Longitude,
             PathUsed = beacon?.PathUsed,
             Comment = beacon?.Comment,
+            Heard = beacon?.Heard ?? true,
             Confirmations = beacon?.Confirmations
                 .OrderBy(c => c.SecondsAfterBeacon)
                 .Select(c => new DigiConfirmationDto
@@ -285,6 +286,7 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
             Longitude = b.Longitude,
             PathUsed = b.PathUsed,
             HopCount = b.HopCount,
+            Heard = b.Heard,
             Confirmations = b.Confirmations
                 .OrderBy(c => c.SecondsAfterBeacon)
                 .Select(c => new DigiConfirmationDto

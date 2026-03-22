@@ -52,8 +52,10 @@ function formatSecondsAgo(secs: number | null): string {
 }
 
 function dotColor(radioId: string, expectedIntervalSeconds: number): string {
+  const lb = radiosStore.getLastBeaconForRadio(radioId)
   const secs = secondsAgo(radioId)
   if (secs === null) return 'grey'
+  if (lb && !lb.heard) return 'yellow'
   if (secs <= expectedIntervalSeconds) return 'green'
   if (secs <= expectedIntervalSeconds * 1.5) return 'amber'
   return 'red'
@@ -82,6 +84,12 @@ function recentConfirmations(radioId: string) {
       </div>
       <div class="text-caption mt-1">
         Last beacon: {{ formatSecondsAgo(secondsAgo(radio.id)) }}
+        <span
+          v-if="radiosStore.getLastBeaconForRadio(radio.id) && !radiosStore.getLastBeaconForRadio(radio.id)!.heard"
+          class="text-yellow font-weight-medium"
+        >
+          — awaiting confirmation
+        </span>
       </div>
       <div v-if="recentConfirmations(radio.id).length > 0" class="d-flex flex-wrap ga-1 mt-1">
         <span

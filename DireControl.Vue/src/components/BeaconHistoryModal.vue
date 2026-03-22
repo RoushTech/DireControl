@@ -45,10 +45,19 @@ function toggleExpand(id: number) {
   else expanded.value.splice(idx, 1)
 }
 
-function hopLabel(hopCount: number): string {
-  if (hopCount === -1) return 'Placeholder'
-  if (hopCount === 0) return 'Direct'
-  return `${hopCount} hop${hopCount > 1 ? 's' : ''}`
+function hopLabel(beacon: OwnBeaconHistoryItemDto): string {
+  if (beacon.hopCount === -2) return 'Sent'
+  if (beacon.hopCount === -1) return 'Placeholder'
+  if (!beacon.heard) return 'Unconfirmed'
+  if (beacon.hopCount === 0) return 'Direct'
+  return `${beacon.hopCount} hop${beacon.hopCount > 1 ? 's' : ''}`
+}
+
+function hopColor(beacon: OwnBeaconHistoryItemDto): string {
+  if (!beacon.heard) return 'yellow'
+  if (beacon.hopCount === -1) return 'grey'
+  if (beacon.hopCount === 0) return 'blue'
+  return 'orange'
 }
 </script>
 
@@ -98,10 +107,10 @@ function hopLabel(hopCount: number): string {
                 <td>
                   <v-chip
                     size="x-small"
-                    :color="beacon.hopCount === 0 ? 'blue' : beacon.hopCount === -1 ? 'grey' : 'orange'"
+                    :color="hopColor(beacon)"
                     variant="tonal"
                   >
-                    {{ hopLabel(beacon.hopCount) }}
+                    {{ hopLabel(beacon) }}
                   </v-chip>
                 </td>
                 <td class="text-caption">

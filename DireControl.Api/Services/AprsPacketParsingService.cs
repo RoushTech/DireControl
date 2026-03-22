@@ -936,21 +936,46 @@ public sealed class AprsPacketParsingService(
 
     private async Task RecordOwnBeaconAsync(Radio radio, DbPacket packet, DireControlContext db, CancellationToken ct)
     {
-        // Deduplication: BeaconNowAsync records a HopCount=0 entry at send time.  When
-        // Direwolf's KISS echo arrives shortly afterwards it would create a duplicate.
-        // Suppress the echo if a matching entry already exists within 30 seconds.
         var dedupWindow = packet.ReceivedAt.AddSeconds(-30);
-        var alreadyRecorded = await db.OwnBeacons
-            .AnyAsync(b => b.RadioId == radio.Id && b.HopCount == 0 && b.BeaconedAt >= dedupWindow, ct);
 
-        if (alreadyRecorded)
+        // Look for a pending (HopCount == -2, Heard == false) beacon recorded by
+        // BeaconService within the last 30 s.  If found, upgrade it to confirmed.
+        var pending = await db.OwnBeacons
+            .FirstOrDefaultAsync(b => b.RadioId == radio.Id && b.HopCount == -2 && !b.Heard && b.BeaconedAt >= dedupWindow, ct);
+
+        if (pending is not null)
         {
+            pending.HopCount = 0;
+            pending.Heard = true;
+            await db.SaveChangesAsync(ct);
+
+            await hubContext.Clients.All.SendAsync(PacketHub.BeaconConfirmedHeardMethod, new BeaconConfirmedHeardDto
+            {
+                RadioId = radio.Id,
+                BeaconId = pending.Id,
+            }, ct);
+
             logger.LogDebug(
-                "Skipping duplicate own-beacon KISS echo for {Callsign} — already recorded within 30 s.",
+                "Confirmed own beacon for {Callsign} (KISS echo received).",
                 radio.FullCallsign);
             return;
         }
 
+        // Also suppress if a fully confirmed (HopCount == 0) record already exists
+        // within 30 s — prevents duplicates when the echo arrives after a prior echo.
+        var alreadyConfirmed = await db.OwnBeacons
+            .AnyAsync(b => b.RadioId == radio.Id && b.HopCount == 0 && b.BeaconedAt >= dedupWindow, ct);
+
+        if (alreadyConfirmed)
+        {
+            logger.LogDebug(
+                "Skipping duplicate own-beacon KISS echo for {Callsign} — already confirmed within 30 s.",
+                radio.FullCallsign);
+            return;
+        }
+
+        // No prior record — beacon originated outside DireControl (e.g. Direwolf
+        // timer beacon or heard via APRS-IS).  Create a new confirmed record.
         var beacon = new OwnBeacon
         {
             RadioId = radio.Id,
@@ -960,6 +985,7 @@ public sealed class AprsPacketParsingService(
             Comment = string.IsNullOrEmpty(packet.Comment) ? null : packet.Comment,
             PathUsed = string.IsNullOrEmpty(packet.Path) ? null : packet.Path,
             HopCount = 0,
+            Heard = true,
         };
 
         db.OwnBeacons.Add(beacon);
@@ -974,6 +1000,7 @@ public sealed class AprsPacketParsingService(
             Lat = beacon.Latitude,
             Lon = beacon.Longitude,
             PathUsed = beacon.PathUsed,
+            Heard = true,
         }, ct);
 
         logger.LogDebug("Recorded own beacon for {Callsign} at {Time}.", radio.FullCallsign, beacon.BeaconedAt);
@@ -984,9 +1011,10 @@ public sealed class AprsPacketParsingService(
         var now = packet.ReceivedAt;
         var window = now.AddSeconds(-90);
 
-        // Find the most recent direct echo (HopCount >= 0 excludes placeholders) within 90 s.
+        // Find the most recent own beacon (HopCount >= -2 includes unconfirmed sends,
+        // excludes -1 placeholders) within 90 s.
         var ownBeacon = await db.OwnBeacons
-            .Where(b => b.RadioId == radio.Id && b.BeaconedAt >= window && b.HopCount >= 0)
+            .Where(b => b.RadioId == radio.Id && b.BeaconedAt >= window && b.HopCount >= -2 && b.HopCount != -1)
             .OrderByDescending(b => b.BeaconedAt)
             .FirstOrDefaultAsync(ct);
 
@@ -1002,6 +1030,7 @@ public sealed class AprsPacketParsingService(
                 Comment = string.IsNullOrEmpty(packet.Comment) ? null : packet.Comment,
                 PathUsed = string.IsNullOrEmpty(packet.Path) ? null : packet.Path,
                 HopCount = -1,
+                Heard = true,
             };
 
             db.OwnBeacons.Add(ownBeacon);
@@ -1019,6 +1048,18 @@ public sealed class AprsPacketParsingService(
                 Lat = ownBeacon.Latitude,
                 Lon = ownBeacon.Longitude,
                 PathUsed = ownBeacon.PathUsed,
+                Heard = true,
+            }, ct);
+        }
+
+        // A digi relayed our beacon — that confirms it was heard on RF.
+        if (!ownBeacon.Heard)
+        {
+            ownBeacon.Heard = true;
+            await hubContext.Clients.All.SendAsync(PacketHub.BeaconConfirmedHeardMethod, new BeaconConfirmedHeardDto
+            {
+                RadioId = radio.Id,
+                BeaconId = ownBeacon.Id,
             }, ct);
         }
 

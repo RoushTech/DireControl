@@ -24,7 +24,9 @@ public sealed class BeaconService(
 {
     /// <summary>
     /// Transmits a position beacon for <paramref name="radio"/> and immediately
-    /// records it as a <see cref="OwnBeacon"/> with <c>HopCount = 0</c>.
+    /// records it as a <see cref="OwnBeacon"/> with <c>HopCount = -2</c> and
+    /// <c>Heard = false</c>.  The record is upgraded to <c>HopCount = 0</c> /
+    /// <c>Heard = true</c> when the KISS echo or a digi confirmation arrives.
     /// Returns the saved record, or <see langword="null"/> if the beacon could
     /// not be sent (no connection, or home position not configured).
     /// </summary>
@@ -71,7 +73,8 @@ public sealed class BeaconService(
             Longitude  = lon,
             Comment    = string.IsNullOrEmpty(radio.BeaconComment) ? null : radio.BeaconComment,
             PathUsed   = string.IsNullOrEmpty(path) ? null : path,
-            HopCount   = 0,
+            HopCount   = -2,
+            Heard      = false,
         };
 
         db.OwnBeacons.Add(beacon);
@@ -86,6 +89,7 @@ public sealed class BeaconService(
             Lat          = lat,
             Lon          = lon,
             PathUsed     = beacon.PathUsed,
+            Heard        = false,
         }, ct);
 
         return beacon;

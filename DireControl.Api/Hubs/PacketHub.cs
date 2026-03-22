@@ -14,4 +14,5 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string MessageAcknowledgedMethod = "messageAcknowledged";
     public const string MessageFailedMethod = "messageFailed";
     public const string AprsIsStateChangedMethod = "aprsIsStateChanged";
+    public const string BeaconConfirmedHeardMethod = "beaconConfirmedHeard";
 }

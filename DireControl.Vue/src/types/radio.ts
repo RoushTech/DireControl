@@ -60,6 +60,7 @@ export interface LastBeaconDto {
   longitude: number | null
   pathUsed: string | null
   comment: string | null
+  heard: boolean
   confirmations: DigiConfirmationDto[]
 }
 
@@ -70,6 +71,7 @@ export interface OwnBeaconHistoryItemDto {
   longitude: number | null
   pathUsed: string | null
   hopCount: number
+  heard: boolean
   confirmations: DigiConfirmationDto[]
 }
 
@@ -81,6 +83,12 @@ export interface OwnBeaconBroadcastDto {
   lat: number | null
   lon: number | null
   pathUsed: string | null
+  heard: boolean
+}
+
+export interface BeaconConfirmedHeardDto {
+  radioId: string
+  beaconId: number
 }
 
 export interface DigiConfirmationBroadcastDto {

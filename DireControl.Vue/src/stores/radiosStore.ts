@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
 import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr'
 import { getRadios, getLastBeacon } from '@/api/radiosApi'
-import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto } from '@/types/radio'
+import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto, BeaconConfirmedHeardDto } from '@/types/radio'
 
 export const useRadiosStore = defineStore('radios', () => {
   const radios = ref<RadioDto[]>([])
@@ -59,7 +59,15 @@ export const useRadiosStore = defineStore('radios', () => {
       longitude: dto.lon,
       pathUsed: dto.pathUsed,
       comment: existing?.comment ?? null,
+      heard: dto.heard,
       confirmations: [],
+    }
+  }
+
+  function onBeaconConfirmedHeard(dto: BeaconConfirmedHeardDto) {
+    const existing = lastBeacons[dto.radioId]
+    if (existing) {
+      existing.heard = true
     }
   }
 
@@ -108,6 +116,10 @@ export const useRadiosStore = defineStore('radios', () => {
 
     connection.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => {
       onDigiConfirmation(dto)
+    })
+
+    connection.on('beaconConfirmedHeard', (dto: BeaconConfirmedHeardDto) => {
+      onBeaconConfirmedHeard(dto)
     })
 
     async function start() {
