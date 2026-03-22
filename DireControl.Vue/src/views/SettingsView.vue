@@ -611,15 +611,15 @@ async function confirmDelete() {
             hint="Leave blank for direct (no digipeating)"
             persistent-hint
           />
-          <div class="d-flex ga-2">
-            <div style="flex: 1">
+          <div class="d-flex align-start ga-2">
+            <div style="flex: 1; min-width: 0">
               <AprsSymbolPicker v-model="rBeaconSymbol" />
             </div>
             <v-text-field
               v-model="rBeaconComment"
               label="Comment"
               density="compact"
-              style="flex: 3"
+              style="flex: 2; min-width: 0"
             />
           </div>
         </v-card-text>
