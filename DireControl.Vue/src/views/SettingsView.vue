@@ -9,6 +9,8 @@ import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApi
 import { getWeatherStatus } from '@/api/weatherApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
+import { getSymbolStyle } from '@/utils/aprsIcon'
+import AprsSymbolPicker from '@/components/AprsSymbolPicker.vue'
 
 // ─── Units ────────────────────────────────────────────────────────────────────
 const { distanceUnit, formatDistance, setDistanceUnit } = useUnits()
@@ -490,7 +492,14 @@ async function confirmDelete() {
           border
         >
           <div class="d-flex align-center justify-space-between">
-            <div class="text-body-1 font-weight-medium">{{ radio.name }}</div>
+            <div class="d-flex align-center ga-2">
+              <div
+                v-if="radio.beaconSymbol && radio.beaconSymbol.length >= 2"
+                :style="getSymbolStyle(radio.beaconSymbol[0]!, radio.beaconSymbol[1]!)"
+                class="radio-symbol-icon"
+              />
+              <div class="text-body-1 font-weight-medium">{{ radio.name }}</div>
+            </div>
             <div class="d-flex align-center ga-1">
               <v-btn
                 icon="mdi-pencil"
@@ -603,16 +612,9 @@ async function confirmDelete() {
             persistent-hint
           />
           <div class="d-flex ga-2">
-            <v-text-field
-              v-model="rBeaconSymbol"
-              label="Symbol"
-              density="compact"
-              placeholder="e.g. /-"
-              hint="Table+code, e.g. /- house"
-              persistent-hint
-              maxlength="2"
-              style="flex: 1"
-            />
+            <div style="flex: 1">
+              <AprsSymbolPicker v-model="rBeaconSymbol" />
+            </div>
             <v-text-field
               v-model="rBeaconComment"
               label="Comment"
@@ -1155,5 +1157,10 @@ async function confirmDelete() {
     max-width: 100%;
     width: 100%;
   }
+}
+
+.radio-symbol-icon {
+  image-rendering: pixelated;
+  flex-shrink: 0;
 }
 </style>
