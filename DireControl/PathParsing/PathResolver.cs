@@ -59,7 +59,7 @@ public static class PathResolver
             ? (IReadOnlyList<string>)[]
             : rawPath.Split(',', System.StringSplitOptions.RemoveEmptyEntries);
 
-        var heardVia = AprsPathParser.ClassifyHeardVia(pathEntries, hopCount);
+        var heardVia = AprsPathParser.ClassifyHeardVia(pathEntries);
 
         // Build final hop list: source → intermediate digisp → home
         var allHops = new List<ResolvedPathEntry>(viaHops.Count + 2);

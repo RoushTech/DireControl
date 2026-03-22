@@ -465,7 +465,7 @@ public class PathParserTests
         var rawPath = new List<string> { "APRS", "WIDE2", "W4CAT-2", "WIDE2*", "qAR", "N8DEU-7" };
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(rawPath);
 
-        Assert.That(hopCount, Is.EqualTo(1));
+        Assert.That(hopCount, Is.EqualTo(2));
         Assert.That(hops.Count, Is.EqualTo(2));
         Assert.That(hops[0].Callsign, Is.EqualTo("W4CAT-2"));
         Assert.That(hops[0].HopIndex, Is.EqualTo(1));
@@ -527,19 +527,19 @@ public class PathResolverTests
             new string?[] { null, "WIDE1", "WIDE2", null },
             2, HeardVia.Digi);
 
-        // igated from RF direct — qAR, no RF hops, igate included
+        // igated from RF direct — qAR, no RF digi hops, igate is the one RF hop
         yield return new TestCaseData(
             "W1ABC>APRS,qAR,VK2ION:!data",
             new[] { "W1ABC", "VK2ION", "W3UWU" },
             new string?[] { null, null, null },
-            0, HeardVia.IgateRf);
+            1, HeardVia.IgateRf);
 
         // igated from RF via digi — qAR with starred hops before it, igate included
         yield return new TestCaseData(
             "W1ABC>APRS,KD4RFT-10*,WIDE1*,qAR,VK2ION:!data",
             new[] { "W1ABC", "KD4RFT-10", "VK2ION", "W3UWU" },
             new string?[] { null, "WIDE1", null, null },
-            1, HeardVia.IgateRfDigi);
+            2, HeardVia.IgateRfDigi);
 
         // Pure internet origin — qAC
         yield return new TestCaseData(
@@ -555,19 +555,26 @@ public class PathResolverTests
             new string?[] { null, null },
             0, HeardVia.Internet);
 
-        // Unused path entries before q — WIDE2-1 unstarred, then qAR, igate included
+        // Unused path entries before q — WIDE2-1 unstarred, then qAR, igate is the one RF hop
         yield return new TestCaseData(
             "W1ABC>APRS,WIDE2-1,qAR,VK2ION:!data",
             new[] { "W1ABC", "VK2ION", "W3UWU" },
             new string?[] { null, null, null },
-            0, HeardVia.IgateRf);
+            1, HeardVia.IgateRf);
 
         // Unstarred digi before starred alias — W4CAT-2,WIDE2* pattern (real-world report), igate included
         yield return new TestCaseData(
             "W1ABC>APRS,WIDE2,W4CAT-2,WIDE2*,qAR,N8DEU-7:!data",
             new[] { "W1ABC", "W4CAT-2", "N8DEU-7", "W3UWU" },
             new string?[] { null, "WIDE2", null, null },
-            1, HeardVia.IgateRfDigi);
+            2, HeardVia.IgateRfDigi);
+
+        // Direct to igate — unused WIDE1-1,WIDE2-1 path, no digi hops, igate is the only hop
+        yield return new TestCaseData(
+            "KR4BRU-9>APMI0A,WIDE1-1,WIDE2-1,qAR,KM4KMO-14:/220059z3510.27N/08509.27Wa043/000/A=000815Ramble-Ambulance",
+            new[] { "KR4BRU-9", "KM4KMO-14", "W3UWU" },
+            new string?[] { null, null, null },
+            1, HeardVia.IgateRf);
 
         // NOGATE token — RF only, not internet
         yield return new TestCaseData(

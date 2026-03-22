@@ -258,19 +258,19 @@ public static class RealPacketData
         // internet only — no RF hops
         yield return new TestCaseData(Weather_AtPrefix_AllFields,             0, Array.Empty<string>());
 
-        // qAR igated from RF direct — 0 RF hops, igate callsign included
-        yield return new TestCaseData(Message_WithId_IgatedDirectRf,          0, new[] { "WZ0C-4" });
+        // qAR igated from RF direct — igate is the one RF hop
+        yield return new TestCaseData(Message_WithId_IgatedDirectRf,          1, new[] { "WZ0C-4" });
 
         // 2 real hops: KN6RO-13 (no alias) then WE4MB-3 (alias = WIDE2)
         yield return new TestCaseData("YORKSC>APDW16,KN6RO-13*,WE4MB-3*,WIDE2*:!3459.17NI08114.90W#W4PSC DigiGate - York, SC",
           2, new[] { "KN6RO-13", "WE4MB-3" });
 
-        // 1 real hop + qAR: KQ4HOM-1, then WIDE2-1 unused alias, igate KJ4G-2
-        yield return new TestCaseData(Object_WithCoords,                      1, new[] { "KQ4HOM-1", "KJ4G-2" });
+        // 1 digi hop + igate: KQ4HOM-1, then WIDE2-1 unused alias, igate KJ4G-2
+        yield return new TestCaseData(Object_WithCoords,                      2, new[] { "KQ4HOM-1", "KJ4G-2" });
 
         // digi-before-alias: K3ODX-10 (unstarred) immediately before WIDE1* (starred alias), igate K3ODX-11
         yield return new TestCaseData("K2KAZ-7>APAT81-1,K3ODX-10,WIDE1*,WIDE2-2,qAR,K3ODX-11::WXBOT    :18330",
-          1, new[] { "K3ODX-10", "K3ODX-11" });
+          2, new[] { "K3ODX-10", "K3ODX-11" });
 
         // 5 real hops: N8DEU-7, W4GGM-1, W4DMM-3 (consumes WIDE1*), KM4BJZ-2, WE4MB-3
         yield return new TestCaseData("WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2",
@@ -440,7 +440,7 @@ public class HopExtractionRealPacketTests
         var aprs = new Packet(raw);
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        Assert.That(hopCount, Is.EqualTo(1));
+        Assert.That(hopCount, Is.EqualTo(2));
         Assert.That(hops.Count, Is.EqualTo(2));
         Assert.That(hops[0].Callsign, Is.EqualTo("K3ODX-10"));
         Assert.That(hops[0].AliasUsed, Is.EqualTo("WIDE1"));

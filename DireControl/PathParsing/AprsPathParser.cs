@@ -93,14 +93,13 @@ public static class AprsPathParser
     }
 
     /// <summary>
-    /// Classifies how a packet was received based on its via-path entries and RF hop count.
+    /// Classifies how a packet was received based on its via-path entries.
     /// </summary>
     /// <param name="pathEntries">
     ///   The via-path entries after the TOCALL, with <c>*</c> markers intact.
     ///   These are the raw comma-separated tokens from the path field.
     /// </param>
-    /// <param name="hopCount">Number of RF digipeater hops (internet tokens excluded).</param>
-    public static HeardVia ClassifyHeardVia(IReadOnlyList<string> pathEntries, int hopCount)
+    public static HeardVia ClassifyHeardVia(IReadOnlyList<string> pathEntries)
     {
         bool hasQConstruct = pathEntries.Any(h =>
             h.TrimEnd('*').Trim().StartsWith("q", StringComparison.OrdinalIgnoreCase));
@@ -109,8 +108,10 @@ public static class AprsPathParser
 
         if (!hasQConstruct && !hasTcpIp)
         {
-            // Pure RF packet
-            return hopCount == 0 ? HeardVia.Direct : HeardVia.Digi;
+            // Pure RF packet — check for starred non-alias entries to distinguish direct vs digi
+            bool hasDigiHop = pathEntries.Any(h =>
+                h.TrimEnd().EndsWith('*') && !IsGenericAlias(h));
+            return hasDigiHop ? HeardVia.Digi : HeardVia.Direct;
         }
 
         if (hasTcpIp || pathEntries.Any(h =>
@@ -127,11 +128,50 @@ public static class AprsPathParser
                     || s.Equals("qAO", StringComparison.OrdinalIgnoreCase);
             }))
         {
-            // Originated on RF, igated to internet
-            return hopCount > 0 ? HeardVia.IgateRfDigi : HeardVia.IgateRf;
+            // Originated on RF, igated to internet.
+            // Check for starred non-alias entries or digi-before-alias pattern
+            // before the q-code to determine if digipeaters relayed the packet.
+            bool hasDigiHop = HasDigiHopBeforeQCode(pathEntries);
+            return hasDigiHop ? HeardVia.IgateRfDigi : HeardVia.IgateRf;
         }
 
         return HeardVia.Unknown;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="pathEntries"/> contains a digipeater hop
+    /// before the first internet token.  Recognises both the standard starred-callsign
+    /// pattern (<c>WE4MB-3*</c>) and the digi-before-alias pattern
+    /// (<c>W4CAT-2,WIDE2*</c>).
+    /// </summary>
+    private static bool HasDigiHopBeforeQCode(IReadOnlyList<string> pathEntries)
+    {
+        for (int i = 0; i < pathEntries.Count; i++)
+        {
+            var raw      = pathEntries[i];
+            var callsign = raw.TrimEnd('*').Trim();
+
+            if (IsInternetToken(callsign))
+                return false;  // reached internet section without finding a digi hop
+
+            var isUsed = raw.TrimEnd().EndsWith('*');
+
+            // Starred real callsign = digi hop
+            if (isUsed && !IsGenericAlias(callsign))
+                return true;
+
+            // Digi-before-alias: unstarred real callsign followed by a starred generic alias
+            if (!isUsed && !IsGenericAlias(callsign)
+                && i + 1 < pathEntries.Count)
+            {
+                var nextRaw      = pathEntries[i + 1];
+                var nextCallsign = nextRaw.TrimEnd('*').Trim();
+                if (nextRaw.TrimEnd().EndsWith('*') && IsGenericAlias(nextCallsign))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -165,7 +205,7 @@ public static class AprsPathParser
     ///   The TOCALL is unconditionally skipped — only via-path entries (index 1+) are processed.
     /// </param>
     /// <returns>
-    ///   The intermediate hop entries (HopIndex 1…N) and the count of real RF digipeater hops.
+    ///   The intermediate hop entries (HopIndex 1…N) and the total RF hop count (including igate).
     /// </returns>
     public static (List<ResolvedPathEntry> Hops, int HopCount) ExtractViaHops(
         IList<string>? aprsPath)
@@ -267,7 +307,6 @@ public static class AprsPathParser
             });
         }
 
-        var rfHopCount = hops.Count(h => !h.IsIgate);
-        return (hops, rfHopCount);
+        return (hops, hops.Count);
     }
 }

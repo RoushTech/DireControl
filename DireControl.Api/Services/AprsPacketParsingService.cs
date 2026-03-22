@@ -405,7 +405,7 @@ public sealed class AprsPacketParsingService(
                             IReadOnlyList<string> entries = string.IsNullOrEmpty(p.Path)
                                 ? []
                                 : p.Path.Split(',', StringSplitOptions.RemoveEmptyEntries);
-                            return AprsPathParser.ClassifyHeardVia(entries, p.HopCount);
+                            return AprsPathParser.ClassifyHeardVia(entries);
                         })
                         .ToList();
 
