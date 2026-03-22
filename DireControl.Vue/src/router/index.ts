@@ -35,6 +35,11 @@ const router = createRouter({
       component: () => import('@/views/SettingsView.vue'),
     },
     {
+      path: '/frequencies',
+      name: 'frequencies',
+      component: () => import('@/views/FrequenciesView.vue'),
+    },
+    {
       path: '/statistics',
       name: 'statistics',
       component: () => import('@/views/StatisticsView.vue'),

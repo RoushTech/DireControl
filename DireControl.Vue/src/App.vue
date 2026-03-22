@@ -210,6 +210,12 @@ onUnmounted(() => {
           </template>
         </v-list-item>
         <v-list-item
+          to="/frequencies"
+          prepend-icon="mdi-sine-wave"
+          title="Frequencies"
+          @click="mobileDrawerOpen = false"
+        />
+        <v-list-item
           to="/statistics"
           prepend-icon="mdi-chart-bar"
           title="Statistics"
@@ -263,6 +269,7 @@ onUnmounted(() => {
             />
           </v-btn>
 
+          <v-btn to="/frequencies" variant="text" size="small">Frequencies</v-btn>
           <v-btn to="/statistics" variant="text" size="small">Statistics</v-btn>
           <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
         </div>
