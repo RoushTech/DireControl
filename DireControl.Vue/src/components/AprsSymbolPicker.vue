@@ -52,6 +52,7 @@ function selectSymbol(table: string, code: string) {
       <div
         class="symbol-preview"
         :class="{ 'symbol-preview--empty': !previewStyle }"
+        style="align-self: start; margin-top: 4px"
         @click="pickerOpen = true"
       >
         <div v-if="previewStyle" :style="previewStyle" class="symbol-sprite" />
@@ -72,6 +73,7 @@ function selectSymbol(table: string, code: string) {
         icon="mdi-grid"
         size="small"
         variant="tonal"
+        style="flex-shrink: 0; align-self: start; margin-top: 4px"
         @click="pickerOpen = true"
         title="Browse symbols"
       />
