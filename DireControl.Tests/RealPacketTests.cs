@@ -1,7 +1,7 @@
 using AprsSharp.AprsParser;
 using DireControl.Api.Services;
 using DireControl.PathParsing;
-using Xunit;
+using NUnit.Framework;
 using AprsPacketType = AprsSharp.AprsParser.PacketType;
 
 namespace DireControl.Tests;
@@ -164,88 +164,88 @@ public static class RealPacketData
     public const string Unparseable_ThirdParty =
         "AC4AG-4>APMI06,WE4MB-3*,WIDE2*:}KK4KTV-13>APRS,TCPIP,AC4AG-4*:@020501z3720.22N/08453.10W_042/005g007t038r000p000P000h77b10248L000AmbientCWOP.com";
 
-    // ── Shared TheoryData ─────────────────────────────────────────────────────
+    // ── Shared TestCaseSource data ──────────────────────────────────────────
 
     /// <summary>
     /// Weather packets → (tempF, windDirDeg, windSpeedMph, windGustMph, humidityPct, pressureMbar).
     /// pressureMbar = AprsSharp BarometricPressure / 10.0.
     /// </summary>
-    public static TheoryData<string, int, int, int, int, int, double> WeatherFieldData => new()
+    public static IEnumerable<TestCaseData> WeatherFieldData()
     {
-        { Weather_AtPrefix_AllFields,        54, 269, 5, 9, 89, 1021.9 },
-        { Weather_AtPrefix_LuminosityField,  47,  89, 0, 0, 95, 1026.1 },
-        { Weather_AtPrefix_RfDigipeated,     55,  29, 0, 0, 75, 1019.1 },
+        yield return new TestCaseData(Weather_AtPrefix_AllFields,        54, 269, 5, 9, 89, 1021.9);
+        yield return new TestCaseData(Weather_AtPrefix_LuminosityField,  47,  89, 0, 0, 95, 1026.1);
+        yield return new TestCaseData(Weather_AtPrefix_RfDigipeated,     55,  29, 0, 0, 75, 1019.1);
         // Note: _ prefix packets (WO4U-13, AJ4FJ-13) have Type=WeatherReport but
         // InfoField is UnsupportedInfo in AprsSharp 0.4.1 — cannot cast to WeatherInfo.
         // They are exercised only in RawWeatherPacket_UnderscorePrefix_ParsedAsAWeatherVariant.
-    };
+    }
 
     /// <summary>
     /// Position packets → expected decimal-degree coordinates (tolerance ±0.001°).
     /// </summary>
-    public static TheoryData<string, double, double> PositionCoordData => new()
+    public static IEnumerable<TestCaseData> PositionCoordData()
     {
-        { Position_BangPrefix_AltTable,          35.2452, -84.9753 },
-        { Position_EqualsPrefix_PrimaryTable,    34.9360, -85.1060 },
-        { Position_SlashPrefix_TimestampZ,       35.0727, -85.1900 },
-        { Position_AtPrefix_TimestampZ_AltTable, 34.5197, -84.3433 },
-        { Position_SlashPrefix_TimestampH,       36.0242, -86.4860 },
-        { Position_DStarGateway,                 35.3653, -85.6632 },
-    };
+        yield return new TestCaseData(Position_BangPrefix_AltTable,          35.2452, -84.9753);
+        yield return new TestCaseData(Position_EqualsPrefix_PrimaryTable,    34.9360, -85.1060);
+        yield return new TestCaseData(Position_SlashPrefix_TimestampZ,       35.0727, -85.1900);
+        yield return new TestCaseData(Position_AtPrefix_TimestampZ_AltTable, 34.5197, -84.3433);
+        yield return new TestCaseData(Position_SlashPrefix_TimestampH,       36.0242, -86.4860);
+        yield return new TestCaseData(Position_DStarGateway,                 35.3653, -85.6632);
+    }
 
     /// <summary>
     /// Message packets → (addressee trimmed, body, messageId — empty string when absent).
     /// </summary>
-    public static TheoryData<string, string, string, string> MessageFieldData => new()
+    public static IEnumerable<TestCaseData> MessageFieldData()
     {
-        { Message_WithNumericId,         "N1YKT-7",  "Was up brother",                                            "108"   },
-        { Message_AckReply,              "KE9BPC-7", "ack3DF4A",                                                  ""      },
-        { Message_WithAlphanumericId,    "WY4RC-67", "CQ CQ CQ KE9BPC calling CQ",                               "3DF4A" },
-        { Message_NoId_WxBotResponse,    "K2KAZ-7",  "Effort PA. Tonight,Rain Likely and Patchy Fog 60% Low 33", ""      },
-        { Message_WithId_IgatedDirectRf, "WB2BWU-2", "Please list (QTC #)",                                      "24805" },
+        yield return new TestCaseData(Message_WithNumericId,         "N1YKT-7",  "Was up brother",                                            "108");
+        yield return new TestCaseData(Message_AckReply,              "KE9BPC-7", "ack3DF4A",                                                  "");
+        yield return new TestCaseData(Message_WithAlphanumericId,    "WY4RC-67", "CQ CQ CQ KE9BPC calling CQ",                               "3DF4A");
+        yield return new TestCaseData(Message_NoId_WxBotResponse,    "K2KAZ-7",  "Effort PA. Tonight,Rain Likely and Patchy Fog 60% Low 33", "");
+        yield return new TestCaseData(Message_WithId_IgatedDirectRf, "WB2BWU-2", "Please list (QTC #)",                                      "24805");
         // Message_BulletinBln omitted: AprsSharp 0.4.1 throws ArgumentException on construction
         // for BLN* bulletin addresses — tested separately in UnparseablePacketTests.
-        { Message_TelemetryBits,         "KN6RO-13", "BITS.11111111,KN6RO-13 Telemetry",                        ""      },
-    };
+        yield return new TestCaseData(Message_TelemetryBits,         "KN6RO-13", "BITS.11111111,KN6RO-13 Telemetry",                        "");
+    }
 
     /// <summary>
     /// Packets → (source, tocall, rawPath) for ParseTnc2Header.
     /// Covers internet paths, qAR/qAS, multi-hop RF, ID TOCALL, MIC-E destination.
     /// </summary>
-    public static TheoryData<string, string, string, string> Tnc2HeaderData => new()
+    public static IEnumerable<TestCaseData> Tnc2HeaderData()
     {
         // internet only — TOCALL APRS, path starts with TCPIP*
-        { Weather_AtPrefix_AllFields,
-            "N4YH-13",   "APRS",   "TCPIP*,qAC,T2TEXAS" },
+        yield return new TestCaseData(Weather_AtPrefix_AllFields,
+            "N4YH-13",   "APRS",   "TCPIP*,qAC,T2TEXAS");
 
         // qAR igated from RF direct
-        { Message_WithId_IgatedDirectRf,
-            "NTSGTE",    "APN20H", "qAR,WZ0C-4" },
+        yield return new TestCaseData(Message_WithId_IgatedDirectRf,
+            "NTSGTE",    "APN20H", "qAR,WZ0C-4");
 
         // qAS (server-added), same callsign as igate
-        { Position_AtPrefix_TimestampZ_AltTable,
-            "AK4ZX-15",  "APMI06", "TCPIP*,qAS,AK4ZX" },
+        yield return new TestCaseData(Position_AtPrefix_TimestampZ_AltTable,
+            "AK4ZX-15",  "APMI06", "TCPIP*,qAS,AK4ZX");
 
         // single real digi + unused alias + qAR + igate callsign
-        { Object_WithCoords,
-            "KC4OJS-3",  "APU25N", "KQ4HOM-1*,WIDE2-1,qAR,KJ4G-2" },
+        yield return new TestCaseData(Object_WithCoords,
+            "KC4OJS-3",  "APU25N", "KQ4HOM-1*,WIDE2-1,qAR,KJ4G-2");
 
         // TOCALL = "ID" (non-standard)
-        { Unparseable_IdTocall,
-            "WO4U-13",   "ID",     "WE4MB-3*,WIDE2-1" },
+        yield return new TestCaseData(Unparseable_IdTocall,
+            "WO4U-13",   "ID",     "WE4MB-3*,WIDE2-1");
 
         // one unused alias only, no stars
-        { Position_BangPrefix_AltTable,
-            "WE4MB-3",   "APNX16", "WIDE2-2" },
+        yield return new TestCaseData(Position_BangPrefix_AltTable,
+            "WE4MB-3",   "APNX16", "WIDE2-2");
 
         // MIC-E packet: destination encodes position, 4 RF hops
-        { MicE_Current,
-            "WB7VPC-2",  "S5PR4Q", "W4NAR-2*,WIDE1*,WE4MB-3*,WIDE2*" },
+        yield return new TestCaseData(MicE_Current,
+            "WB7VPC-2",  "S5PR4Q", "W4NAR-2*,WIDE1*,WE4MB-3*,WIDE2*");
 
         // 5 real starred hops + trailing unused alias — longest path in corpus
-        { "WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2",
-            "WA4HR-2",   "APDW17", "N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1" },
-    };
+        yield return new TestCaseData("WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2",
+            "WA4HR-2",   "APDW17", "N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1");
+    }
 
     /// <summary>
     /// Packets → (hopCount, hop callsigns in order).
@@ -253,32 +253,32 @@ public static class RealPacketData
     /// internet 0-hop, qAR 0-hop, 2-hop with alias, 1-hop+qAR, digi-before-alias,
     /// 5-hop chain, non-standard TOCALL.
     /// </summary>
-    public static TheoryData<string, int, string[]> HopExtractionData => new()
+    public static IEnumerable<TestCaseData> HopExtractionData()
     {
         // internet only — no RF hops
-        { Weather_AtPrefix_AllFields,             0, Array.Empty<string>() },
+        yield return new TestCaseData(Weather_AtPrefix_AllFields,             0, Array.Empty<string>());
 
-        // qAR igated from RF direct — 0 hops
-        { Message_WithId_IgatedDirectRf,          0, Array.Empty<string>() },
+        // qAR igated from RF direct — 0 RF hops, igate callsign included
+        yield return new TestCaseData(Message_WithId_IgatedDirectRf,          0, new[] { "WZ0C-4" });
 
         // 2 real hops: KN6RO-13 (no alias) then WE4MB-3 (alias = WIDE2)
-        { "YORKSC>APDW16,KN6RO-13*,WE4MB-3*,WIDE2*:!3459.17NI08114.90W#W4PSC DigiGate - York, SC",
-          2, new[] { "KN6RO-13", "WE4MB-3" } },
+        yield return new TestCaseData("YORKSC>APDW16,KN6RO-13*,WE4MB-3*,WIDE2*:!3459.17NI08114.90W#W4PSC DigiGate - York, SC",
+          2, new[] { "KN6RO-13", "WE4MB-3" });
 
-        // 1 real hop + qAR: KQ4HOM-1, then WIDE2-1 unused alias
-        { Object_WithCoords,                      1, new[] { "KQ4HOM-1" } },
+        // 1 real hop + qAR: KQ4HOM-1, then WIDE2-1 unused alias, igate KJ4G-2
+        yield return new TestCaseData(Object_WithCoords,                      1, new[] { "KQ4HOM-1", "KJ4G-2" });
 
-        // digi-before-alias: K3ODX-10 (unstarred) immediately before WIDE1* (starred alias)
-        { "K2KAZ-7>APAT81-1,K3ODX-10,WIDE1*,WIDE2-2,qAR,K3ODX-11::WXBOT    :18330",
-          1, new[] { "K3ODX-10" } },
+        // digi-before-alias: K3ODX-10 (unstarred) immediately before WIDE1* (starred alias), igate K3ODX-11
+        yield return new TestCaseData("K2KAZ-7>APAT81-1,K3ODX-10,WIDE1*,WIDE2-2,qAR,K3ODX-11::WXBOT    :18330",
+          1, new[] { "K3ODX-10", "K3ODX-11" });
 
         // 5 real hops: N8DEU-7, W4GGM-1, W4DMM-3 (consumes WIDE1*), KM4BJZ-2, WE4MB-3
-        { "WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2",
-          5, new[] { "N8DEU-7", "W4GGM-1", "W4DMM-3", "KM4BJZ-2", "WE4MB-3" } },
+        yield return new TestCaseData("WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2",
+          5, new[] { "N8DEU-7", "W4GGM-1", "W4DMM-3", "KM4BJZ-2", "WE4MB-3" });
 
         // TOCALL = "ID" — unconditional TOCALL exclusion still applies, 1 real hop
-        { Unparseable_IdTocall,                   1, new[] { "WE4MB-3" } },
-    };
+        yield return new TestCaseData(Unparseable_IdTocall,                   1, new[] { "WE4MB-3" });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -289,59 +289,59 @@ public static class RealPacketData
 /// Verifies that AprsSharp assigns the expected <see cref="AprsPacketType"/> to
 /// each structurally distinct real packet from the corpus.
 /// </summary>
+[TestFixture]
 public class PacketTypeClassificationTests
 {
-    public static TheoryData<string, AprsPacketType?> Data => new()
+    private static IEnumerable<TestCaseData> Data()
     {
         // ── Weather ───────────────────────────────────────────────────────────
         // AprsSharp 0.4.1: @ prefix weather packets report PositionWithTimestamp*
         // type enum even though InfoField is a WeatherInfo instance.
-        { RealPacketData.Weather_AtPrefix_AllFields,          AprsPacketType.PositionWithTimestampWithMessaging },
-        { RealPacketData.Weather_AtPrefix_LuminosityField,    AprsPacketType.PositionWithTimestampWithMessaging },
-        { RealPacketData.Weather_AtPrefix_RfDigipeated,       AprsPacketType.PositionWithTimestampWithMessaging },
+        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_AllFields,          AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_LuminosityField,    AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_RfDigipeated,       AprsPacketType.PositionWithTimestampWithMessaging);
 
         // ── Position ──────────────────────────────────────────────────────────
-        { RealPacketData.Position_BangPrefix_AltTable,        AprsPacketType.PositionWithoutTimestampNoMessaging  },
-        { RealPacketData.Position_EqualsPrefix_PrimaryTable,  AprsPacketType.PositionWithoutTimestampWithMessaging },
-        { RealPacketData.Position_SlashPrefix_TimestampZ,     AprsPacketType.PositionWithTimestampNoMessaging     },
-        { RealPacketData.Position_AtPrefix_TimestampZ_AltTable, AprsPacketType.PositionWithTimestampWithMessaging },
-        { RealPacketData.Position_SlashPrefix_TimestampH,     AprsPacketType.PositionWithTimestampNoMessaging     },
-        { RealPacketData.Position_AtPrefix_TimestampSlash,    AprsPacketType.PositionWithTimestampWithMessaging   },
+        yield return new TestCaseData(RealPacketData.Position_BangPrefix_AltTable,        AprsPacketType.PositionWithoutTimestampNoMessaging);
+        yield return new TestCaseData(RealPacketData.Position_EqualsPrefix_PrimaryTable,  AprsPacketType.PositionWithoutTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampZ,     AprsPacketType.PositionWithTimestampNoMessaging);
+        yield return new TestCaseData(RealPacketData.Position_AtPrefix_TimestampZ_AltTable, AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampH,     AprsPacketType.PositionWithTimestampNoMessaging);
+        yield return new TestCaseData(RealPacketData.Position_AtPrefix_TimestampSlash,    AprsPacketType.PositionWithTimestampWithMessaging);
 
         // _ weather-station symbol but no c/s/g/t/r... weather data → still Position
-        { RealPacketData.Position_WxSymbolNoWxData,           AprsPacketType.PositionWithoutTimestampWithMessaging },
-        { RealPacketData.Position_BangPrefix_WxSymbolNoWxData, AprsPacketType.PositionWithoutTimestampNoMessaging  },
+        yield return new TestCaseData(RealPacketData.Position_WxSymbolNoWxData,           AprsPacketType.PositionWithoutTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Position_BangPrefix_WxSymbolNoWxData, AprsPacketType.PositionWithoutTimestampNoMessaging);
 
         // ── Objects ───────────────────────────────────────────────────────────
-        { RealPacketData.Object_WithCoords,                   AprsPacketType.Object },
-        { RealPacketData.Object_RepeaterFrequency,            AprsPacketType.Object },
+        yield return new TestCaseData(RealPacketData.Object_WithCoords,                   AprsPacketType.Object);
+        yield return new TestCaseData(RealPacketData.Object_RepeaterFrequency,            AprsPacketType.Object);
 
         // ── Status ────────────────────────────────────────────────────────────
-        { RealPacketData.Status_PlainText,                    AprsPacketType.Status },
-        { RealPacketData.Status_GridSquare_DxInfo,            AprsPacketType.Status },
-        { RealPacketData.Status_WithTimestamp,                AprsPacketType.Status },
+        yield return new TestCaseData(RealPacketData.Status_PlainText,                    AprsPacketType.Status);
+        yield return new TestCaseData(RealPacketData.Status_GridSquare_DxInfo,            AprsPacketType.Status);
+        yield return new TestCaseData(RealPacketData.Status_WithTimestamp,                AprsPacketType.Status);
 
         // ── Messages ──────────────────────────────────────────────────────────
-        { RealPacketData.Message_WithNumericId,               AprsPacketType.Message },
-        { RealPacketData.Message_AckReply,                    AprsPacketType.Message },
+        yield return new TestCaseData(RealPacketData.Message_WithNumericId,               AprsPacketType.Message);
+        yield return new TestCaseData(RealPacketData.Message_AckReply,                    AprsPacketType.Message);
         // Message_BulletinBln omitted: AprsSharp 0.4.1 throws on construction.
-        { RealPacketData.Message_TelemetryBits,               AprsPacketType.Message },
+        yield return new TestCaseData(RealPacketData.Message_TelemetryBits,               AprsPacketType.Message);
 
         // ── Telemetry ─────────────────────────────────────────────────────────
-        { RealPacketData.Telemetry_T_Hash,                    AprsPacketType.TelemetryData },
+        yield return new TestCaseData(RealPacketData.Telemetry_T_Hash,                    AprsPacketType.TelemetryData);
 
         // ── MIC-E ─────────────────────────────────────────────────────────────
         // AprsSharp 0.4.1 uses more specific subtypes than the base MIC-E enums.
-        { RealPacketData.MicE_Current,                        AprsPacketType.CurrentMicEDataNotTMD700 },
-        { RealPacketData.MicE_Old_PeetBros,                   AprsPacketType.OldMicEDataCurrentTMD700 },
-    };
+        yield return new TestCaseData(RealPacketData.MicE_Current,                        AprsPacketType.CurrentMicEDataNotTMD700);
+        yield return new TestCaseData(RealPacketData.MicE_Old_PeetBros,                   AprsPacketType.OldMicEDataCurrentTMD700);
+    }
 
-    [Theory]
-    [MemberData(nameof(Data))]
+    [TestCaseSource(nameof(Data))]
     public void Packet_ParsesToExpectedAprsType(string raw, AprsPacketType? expected)
     {
         var packet = new Packet(raw);
-        Assert.Equal(expected, packet.InfoField?.Type);
+        Assert.That(packet.InfoField?.Type, Is.EqualTo(expected));
     }
 
     /// <summary>
@@ -349,14 +349,14 @@ public class PacketTypeClassificationTests
     /// classified as either WeatherReport or PeetBrosUIIWeatherStation depending on
     /// the AprsSharp version.  Either is acceptable and maps to our Weather type.
     /// </summary>
-    [Theory]
-    [InlineData(RealPacketData.Weather_UnderscorePrefix_RawNoPosition)]
-    [InlineData(RealPacketData.Weather_UnderscorePrefix_RfDigipeated)]
+    [TestCase(RealPacketData.Weather_UnderscorePrefix_RawNoPosition)]
+    [TestCase(RealPacketData.Weather_UnderscorePrefix_RfDigipeated)]
     public void RawWeatherPacket_UnderscorePrefix_ParsedAsAWeatherVariant(string raw)
     {
         var type = new Packet(raw).InfoField?.Type;
-        Assert.True(
+        Assert.That(
             type is AprsPacketType.WeatherReport or AprsPacketType.PeetBrosUIIWeatherStation,
+            Is.True,
             $"Expected a weather variant but got {type}");
     }
 }
@@ -369,10 +369,10 @@ public class PacketTypeClassificationTests
 /// Validates <see cref="AprsPathParser.ParseTnc2Header"/> against real corpus packets,
 /// covering internet paths, qAR/qAS, multi-hop RF, non-standard TOCALLs, and MIC-E.
 /// </summary>
+[TestFixture]
 public class ParseTnc2HeaderRealPacketTests
 {
-    [Theory]
-    [MemberData(nameof(RealPacketData.Tnc2HeaderData), MemberType = typeof(RealPacketData))]
+    [TestCaseSource(typeof(RealPacketData), nameof(RealPacketData.Tnc2HeaderData))]
     public void ParseTnc2Header_RealPacket_CorrectHeaderExtracted(
         string raw,
         string expectedSource,
@@ -381,9 +381,9 @@ public class ParseTnc2HeaderRealPacketTests
     {
         var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(raw);
 
-        Assert.Equal(expectedSource, source);
-        Assert.Equal(expectedTocall, tocall);
-        Assert.Equal(expectedRawPath, rawPath);
+        Assert.That(source, Is.EqualTo(expectedSource));
+        Assert.That(tocall, Is.EqualTo(expectedTocall));
+        Assert.That(rawPath, Is.EqualTo(expectedRawPath));
     }
 }
 
@@ -397,10 +397,10 @@ public class ParseTnc2HeaderRealPacketTests
 /// internet/qAR zero-hop, 2-hop with alias, single digi + qAR, digi-before-alias,
 /// 5-hop chain, and TOCALL exclusion with a non-standard TOCALL.
 /// </summary>
+[TestFixture]
 public class HopExtractionRealPacketTests
 {
-    [Theory]
-    [MemberData(nameof(RealPacketData.HopExtractionData), MemberType = typeof(RealPacketData))]
+    [TestCaseSource(typeof(RealPacketData), nameof(RealPacketData.HopExtractionData))]
     public void ExtractViaHops_RealPacket_CorrectHopsExtracted(
         string raw,
         int expectedHopCount,
@@ -409,62 +409,65 @@ public class HopExtractionRealPacketTests
         var aprs = new Packet(raw);
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        Assert.Equal(expectedHopCount, hopCount);
-        Assert.Equal(expectedCallsigns, hops.Select(h => h.Callsign).ToArray());
+        Assert.That(hopCount, Is.EqualTo(expectedHopCount));
+        Assert.That(hops.Select(h => h.Callsign).ToArray(), Is.EqualTo(expectedCallsigns));
     }
 
     /// <summary>
     /// YORKSC 2-hop: KN6RO-13* has no following alias; WE4MB-3* consumes the WIDE2* alias.
     /// Verifies AliasUsed is set only for the second hop.
     /// </summary>
-    [Fact]
+    [Test]
     public void ExtractViaHops_TwoHops_FirstNoAlias_SecondConsumesAlias()
     {
         const string raw = "YORKSC>APDW16,KN6RO-13*,WE4MB-3*,WIDE2*:!3459.17NI08114.90W#W4PSC DigiGate - York, SC";
         var aprs = new Packet(raw);
         var (hops, _) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        Assert.Equal(2, hops.Count);
-        Assert.Null(hops[0].AliasUsed);
-        Assert.Equal("WIDE2", hops[1].AliasUsed);
+        Assert.That(hops.Count, Is.EqualTo(2));
+        Assert.That(hops[0].AliasUsed, Is.Null);
+        Assert.That(hops[1].AliasUsed, Is.EqualTo("WIDE2"));
     }
 
     /// <summary>
     /// K2KAZ-7 real-world digi-before-alias: K3ODX-10 (unstarred) followed by WIDE1* (starred).
     /// Verifies alias is attached to the unstarred callsign preceding the starred alias.
     /// </summary>
-    [Fact]
+    [Test]
     public void ExtractViaHops_DigiBeforeAlias_RealWorldPacket_AliasAttached()
     {
         const string raw = "K2KAZ-7>APAT81-1,K3ODX-10,WIDE1*,WIDE2-2,qAR,K3ODX-11::WXBOT    :18330";
         var aprs = new Packet(raw);
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        Assert.Equal(1, hopCount);
-        Assert.Single(hops);
-        Assert.Equal("K3ODX-10", hops[0].Callsign);
-        Assert.Equal("WIDE1", hops[0].AliasUsed);
+        Assert.That(hopCount, Is.EqualTo(1));
+        Assert.That(hops.Count, Is.EqualTo(2));
+        Assert.That(hops[0].Callsign, Is.EqualTo("K3ODX-10"));
+        Assert.That(hops[0].AliasUsed, Is.EqualTo("WIDE1"));
+        Assert.That(hops[0].IsIgate, Is.False);
+        Assert.That(hops[1].Callsign, Is.EqualTo("K3ODX-11"));
+        Assert.That(hops[1].IsIgate, Is.True);
     }
 
     /// <summary>
     /// WA4HR-2 5-hop chain: W4DMM-3* is immediately followed by WIDE1* alias; verifies
     /// only W4DMM-3 gets AliasUsed set, and neighbouring real hops stay null.
     /// </summary>
-    [Fact]
+    [Test]
     public void ExtractViaHops_FiveHopChain_MiddleHopConsumesAlias()
     {
         const string raw = "WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2";
         var aprs = new Packet(raw);
         var (hops, hopCount) = AprsPathParser.ExtractViaHops(aprs.Path);
 
-        Assert.Equal(5, hopCount);
-        Assert.Equal(5, hops.Count);
+        Assert.That(hopCount, Is.EqualTo(5));
+        Assert.That(hops.Count, Is.EqualTo(5));
 
-        Assert.Equal("N8DEU-7", hops[0].Callsign); Assert.Null(hops[0].AliasUsed);
-        Assert.Equal("W4GGM-1", hops[1].Callsign); Assert.Null(hops[1].AliasUsed);
-        Assert.Equal("W4DMM-3", hops[2].Callsign); Assert.Equal("WIDE1", hops[2].AliasUsed);
-        Assert.Equal("KM4BJZ-2", hops[3].Callsign); Assert.Null(hops[3].AliasUsed);
-        Assert.Equal("WE4MB-3", hops[4].Callsign); Assert.Null(hops[4].AliasUsed);
+        Assert.That(hops[0].Callsign, Is.EqualTo("N8DEU-7")); Assert.That(hops[0].AliasUsed, Is.Null);
+        Assert.That(hops[1].Callsign, Is.EqualTo("W4GGM-1")); Assert.That(hops[1].AliasUsed, Is.Null);
+        Assert.That(hops[2].Callsign, Is.EqualTo("W4DMM-3")); Assert.That(hops[2].AliasUsed, Is.EqualTo("WIDE1"));
+        Assert.That(hops[3].Callsign, Is.EqualTo("KM4BJZ-2")); Assert.That(hops[3].AliasUsed, Is.Null);
+        Assert.That(hops[4].Callsign, Is.EqualTo("WE4MB-3")); Assert.That(hops[4].AliasUsed, Is.Null);
     }
 }
 
@@ -478,10 +481,10 @@ public class HopExtractionRealPacketTests
 /// AprsSharp units: Temperature °F (int), WindSpeed/Gust mph (int),
 /// WindDirection degrees (int), Humidity % (int), BarometricPressure tenths-of-mbar (int).
 /// </summary>
+[TestFixture]
 public class WeatherPayloadTests
 {
-    [Theory]
-    [MemberData(nameof(RealPacketData.WeatherFieldData), MemberType = typeof(RealPacketData))]
+    [TestCaseSource(typeof(RealPacketData), nameof(RealPacketData.WeatherFieldData))]
     public void WeatherPacket_ParsesFieldsCorrectly(
         string raw,
         int expectedTempF,
@@ -492,30 +495,33 @@ public class WeatherPayloadTests
         double expectedPressureMbar)
     {
         var aprs = new Packet(raw);
-        var wx = Assert.IsAssignableFrom<WeatherInfo>(aprs.InfoField);
+        var wx = aprs.InfoField as WeatherInfo;
+        Assert.That(wx, Is.Not.Null);
+        Assert.That(wx, Is.AssignableTo<WeatherInfo>());
 
-        Assert.Equal(expectedTempF, wx.Temperature);
-        Assert.Equal(expectedWindDir, wx.WindDirection);
-        Assert.Equal(expectedWindSpeed, wx.WindSpeed);
-        Assert.Equal(expectedWindGust, wx.WindGust);
-        Assert.Equal(expectedHumidity, wx.Humidity);
-        Assert.NotNull(wx.BarometricPressure);
-        Assert.Equal(expectedPressureMbar, wx.BarometricPressure!.Value / 10.0, precision: 1);
+        Assert.That(wx!.Temperature, Is.EqualTo(expectedTempF));
+        Assert.That(wx.WindDirection, Is.EqualTo(expectedWindDir));
+        Assert.That(wx.WindSpeed, Is.EqualTo(expectedWindSpeed));
+        Assert.That(wx.WindGust, Is.EqualTo(expectedWindGust));
+        Assert.That(wx.Humidity, Is.EqualTo(expectedHumidity));
+        Assert.That(wx.BarometricPressure, Is.Not.Null);
+        Assert.That(wx.BarometricPressure!.Value / 10.0, Is.EqualTo(expectedPressureMbar).Within(0.1));
     }
 
     /// <summary>
     /// Weather packets must have rainfall fields populated (may be zero, must not be null).
     /// </summary>
-    [Theory]
-    [InlineData(RealPacketData.Weather_AtPrefix_AllFields)]
-    [InlineData(RealPacketData.Weather_AtPrefix_LuminosityField)]
-    [InlineData(RealPacketData.Weather_AtPrefix_RfDigipeated)]
+    [TestCase(RealPacketData.Weather_AtPrefix_AllFields)]
+    [TestCase(RealPacketData.Weather_AtPrefix_LuminosityField)]
+    [TestCase(RealPacketData.Weather_AtPrefix_RfDigipeated)]
     public void WeatherPacket_RainfallFields_NotNull(string raw)
     {
-        var wx = Assert.IsAssignableFrom<WeatherInfo>(new Packet(raw).InfoField);
-        Assert.NotNull(wx.Rainfall1Hour);
-        Assert.NotNull(wx.Rainfall24Hour);
-        Assert.NotNull(wx.RainfallSinceMidnight);
+        var wx = new Packet(raw).InfoField as WeatherInfo;
+        Assert.That(wx, Is.Not.Null);
+        Assert.That(wx, Is.AssignableTo<WeatherInfo>());
+        Assert.That(wx!.Rainfall1Hour, Is.Not.Null);
+        Assert.That(wx.Rainfall24Hour, Is.Not.Null);
+        Assert.That(wx.RainfallSinceMidnight, Is.Not.Null);
     }
 }
 
@@ -527,22 +533,24 @@ public class WeatherPayloadTests
 /// Validates decoded coordinates from real position packets.
 /// Tolerance ±0.001° covers the inherent APRS resolution of 0.01 arc-minutes.
 /// </summary>
+[TestFixture]
 public class PositionPayloadTests
 {
     private const double CoordTolerance = 0.001;
 
-    [Theory]
-    [MemberData(nameof(RealPacketData.PositionCoordData), MemberType = typeof(RealPacketData))]
+    [TestCaseSource(typeof(RealPacketData), nameof(RealPacketData.PositionCoordData))]
     public void PositionPacket_DecodesCoordinates(string raw, double expectedLat, double expectedLon)
     {
         var aprs = new Packet(raw);
-        var pos = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
+        var pos = aprs.InfoField as PositionInfo;
+        Assert.That(pos, Is.Not.Null);
+        Assert.That(pos, Is.AssignableTo<PositionInfo>());
 
-        var coord = pos.Position!.Coordinates;
-        Assert.False(double.IsNaN(coord.Latitude), "Latitude was NaN");
-        Assert.False(double.IsNaN(coord.Longitude), "Longitude was NaN");
-        Assert.InRange(coord.Latitude, expectedLat - CoordTolerance, expectedLat + CoordTolerance);
-        Assert.InRange(coord.Longitude, expectedLon - CoordTolerance, expectedLon + CoordTolerance);
+        var coord = pos!.Position!.Coordinates;
+        Assert.That(double.IsNaN(coord.Latitude), Is.False, "Latitude was NaN");
+        Assert.That(double.IsNaN(coord.Longitude), Is.False, "Longitude was NaN");
+        Assert.That(coord.Latitude, Is.InRange(expectedLat - CoordTolerance, expectedLat + CoordTolerance));
+        Assert.That(coord.Longitude, Is.InRange(expectedLon - CoordTolerance, expectedLon + CoordTolerance));
     }
 
     /// <summary>
@@ -550,17 +558,18 @@ public class PositionPayloadTests
     /// are classified by AprsSharp 0.4.1 as WeatherInfo (with a Position-category type enum).
     /// They have valid position coordinates despite being WeatherInfo instances.
     /// </summary>
-    [Theory]
-    [InlineData(RealPacketData.Position_WxSymbolNoWxData)]
-    [InlineData(RealPacketData.Position_BangPrefix_WxSymbolNoWxData)]
+    [TestCase(RealPacketData.Position_WxSymbolNoWxData)]
+    [TestCase(RealPacketData.Position_BangPrefix_WxSymbolNoWxData)]
     public void PositionPacket_WxSymbolWithoutWxData_IsWeatherInfoWithValidCoords(string raw)
     {
         var aprs = new Packet(raw);
         // AprsSharp returns WeatherInfo even without weather fields — type enum is Position.
-        var wx = Assert.IsAssignableFrom<WeatherInfo>(aprs.InfoField);
-        Assert.NotNull(wx.Position);
-        Assert.False(double.IsNaN(wx.Position!.Coordinates.Latitude));
-        Assert.False(double.IsNaN(wx.Position!.Coordinates.Longitude));
+        var wx = aprs.InfoField as WeatherInfo;
+        Assert.That(wx, Is.Not.Null);
+        Assert.That(wx, Is.AssignableTo<WeatherInfo>());
+        Assert.That(wx!.Position, Is.Not.Null);
+        Assert.That(double.IsNaN(wx.Position!.Coordinates.Latitude), Is.False);
+        Assert.That(double.IsNaN(wx.Position!.Coordinates.Longitude), Is.False);
     }
 }
 
@@ -572,10 +581,10 @@ public class PositionPayloadTests
 /// Validates addressee, body, and message ID extracted from real message packets.
 /// Addresses are trimmed for comparison because APRS pads them to 9 characters.
 /// </summary>
+[TestFixture]
 public class MessagePayloadTests
 {
-    [Theory]
-    [MemberData(nameof(RealPacketData.MessageFieldData), MemberType = typeof(RealPacketData))]
+    [TestCaseSource(typeof(RealPacketData), nameof(RealPacketData.MessageFieldData))]
     public void MessagePacket_ParsesFieldsCorrectly(
         string raw,
         string expectedAddressee,
@@ -583,29 +592,32 @@ public class MessagePayloadTests
         string expectedMessageId)
     {
         var aprs = new Packet(raw);
-        var msg = Assert.IsAssignableFrom<MessageInfo>(aprs.InfoField);
+        var msg = aprs.InfoField as MessageInfo;
+        Assert.That(msg, Is.Not.Null);
+        Assert.That(msg, Is.AssignableTo<MessageInfo>());
 
-        Assert.Equal(expectedAddressee, msg.Addressee?.Trim());
-        Assert.Equal(expectedBody, msg.Content);
-        Assert.Equal(expectedMessageId, msg.Id ?? string.Empty);
+        Assert.That(msg!.Addressee?.Trim(), Is.EqualTo(expectedAddressee));
+        Assert.That(msg.Content, Is.EqualTo(expectedBody));
+        Assert.That(msg.Id ?? string.Empty, Is.EqualTo(expectedMessageId));
     }
 
     /// <summary>
     /// All message packets in the corpus must produce a non-null addressee.
     /// </summary>
-    [Theory]
-    [InlineData(RealPacketData.Message_WithNumericId)]
-    [InlineData(RealPacketData.Message_AckReply)]
-    [InlineData(RealPacketData.Message_WithAlphanumericId)]
-    [InlineData(RealPacketData.Message_NoId_WxBotResponse)]
-    [InlineData(RealPacketData.Message_WithId_IgatedDirectRf)]
+    [TestCase(RealPacketData.Message_WithNumericId)]
+    [TestCase(RealPacketData.Message_AckReply)]
+    [TestCase(RealPacketData.Message_WithAlphanumericId)]
+    [TestCase(RealPacketData.Message_NoId_WxBotResponse)]
+    [TestCase(RealPacketData.Message_WithId_IgatedDirectRf)]
     // Message_BulletinBln omitted: AprsSharp 0.4.1 throws on construction.
-    [InlineData(RealPacketData.Message_TelemetryBits)]
+    [TestCase(RealPacketData.Message_TelemetryBits)]
     public void MessagePacket_AddresseeIsNotNull(string raw)
     {
-        var msg = Assert.IsAssignableFrom<MessageInfo>(new Packet(raw).InfoField);
-        Assert.NotNull(msg.Addressee);
-        Assert.NotEmpty(msg.Addressee!.Trim());
+        var msg = new Packet(raw).InfoField as MessageInfo;
+        Assert.That(msg, Is.Not.Null);
+        Assert.That(msg, Is.AssignableTo<MessageInfo>());
+        Assert.That(msg!.Addressee, Is.Not.Null);
+        Assert.That(msg.Addressee!.Trim(), Is.Not.Empty);
     }
 }
 
@@ -616,42 +628,49 @@ public class MessagePayloadTests
 /// <summary>
 /// Validates comment text extracted from real status packets.
 /// </summary>
+[TestFixture]
 public class StatusPayloadTests
 {
     /// <summary>
     /// Plain-text status (no embedded grid square or timestamp) — full comment returned as-is.
     /// </summary>
-    [Fact]
+    [Test]
     public void StatusPacket_PlainText_ReturnsFullComment()
     {
         var aprs = new Packet(RealPacketData.Status_PlainText);
-        var status = Assert.IsAssignableFrom<StatusInfo>(aprs.InfoField);
-        Assert.Equal("WIDE 3-# Digi/Igate", status.Comment);
+        var status = aprs.InfoField as StatusInfo;
+        Assert.That(status, Is.Not.Null);
+        Assert.That(status, Is.AssignableTo<StatusInfo>());
+        Assert.That(status!.Comment, Is.EqualTo("WIDE 3-# Digi/Igate"));
     }
 
     /// <summary>
     /// Status with Maidenhead grid square prefix — the substantive text after grid/symbol
     /// must be present in the comment field.
     /// </summary>
-    [Fact]
+    [Test]
     public void StatusPacket_WithGridSquare_CommentContainsDxText()
     {
         var aprs = new Packet(RealPacketData.Status_GridSquare_DxInfo);
-        var status = Assert.IsAssignableFrom<StatusInfo>(aprs.InfoField);
-        Assert.NotNull(status.Comment);
-        Assert.Contains("AJ4FJ-5", status.Comment);
+        var status = aprs.InfoField as StatusInfo;
+        Assert.That(status, Is.Not.Null);
+        Assert.That(status, Is.AssignableTo<StatusInfo>());
+        Assert.That(status!.Comment, Is.Not.Null);
+        Assert.That(status.Comment, Does.Contain("AJ4FJ-5"));
     }
 
     /// <summary>
     /// Status with a leading timestamp (DHMMSSz) — the free-text portion must survive.
     /// </summary>
-    [Fact]
+    [Test]
     public void StatusPacket_WithTimestampPrefix_CommentPreservesText()
     {
         var aprs = new Packet(RealPacketData.Status_WithTimestamp);
-        var status = Assert.IsAssignableFrom<StatusInfo>(aprs.InfoField);
-        Assert.NotNull(status.Comment);
-        Assert.Contains("Expect Winter Weather this weekend", status.Comment);
+        var status = aprs.InfoField as StatusInfo;
+        Assert.That(status, Is.Not.Null);
+        Assert.That(status, Is.AssignableTo<StatusInfo>());
+        Assert.That(status!.Comment, Is.Not.Null);
+        Assert.That(status.Comment, Does.Contain("Expect Winter Weather this weekend"));
     }
 }
 
@@ -664,6 +683,7 @@ public class StatusPayloadTests
 /// In production the parsing service catches all exceptions and marks these Unparseable;
 /// these tests verify the observable AprsSharp behaviour for each category.
 /// </summary>
+[TestFixture]
 public class UnparseablePacketTests
 {
     /// <summary>
@@ -671,14 +691,15 @@ public class UnparseablePacketTests
     /// character ('W', 'K', etc.).  AprsSharp should return null or Unknown for the type —
     /// it must not misidentify it as a position or weather packet.
     /// </summary>
-    [Fact]
+    [Test]
     public void IdTocallPacket_TypeIsNullOrUnknown_NotAPositionOrWeather()
     {
         var packet = new Packet(RealPacketData.Unparseable_IdTocall);
         var type = packet.InfoField?.Type;
 
-        Assert.True(
+        Assert.That(
             type is null or AprsPacketType.Unknown,
+            Is.True,
             $"Expected null or Unknown for ID-TOCALL packet but got {type}");
     }
 
@@ -687,21 +708,27 @@ public class UnparseablePacketTests
     /// AprsSharp 0.4.1 returns ThirdPartyTraffic (not a structured payload type).
     /// The parsing service's Unparseable fallback handles it correctly.
     /// </summary>
-    [Fact]
+    [Test]
     public void ThirdPartyPacket_DoesNotReturnPositionOrWeatherType()
     {
         AprsPacketType? type = null;
-        var ex = Record.Exception(() =>
+        Exception? ex = null;
+        try
         {
             var packet = new Packet(RealPacketData.Unparseable_ThirdParty);
             type = packet.InfoField?.Type;
-        });
+        }
+        catch (Exception e)
+        {
+            ex = e;
+        }
 
         if (ex is null)
         {
             // Parsed without exception — type must not be a structured payload type
-            Assert.True(
+            Assert.That(
                 type is null or AprsPacketType.Unknown or AprsPacketType.ThirdPartyTraffic,
+                Is.True,
                 $"Third-party packet classified as {type}; expected null, Unknown, or ThirdPartyTraffic");
         }
         // If an exception was thrown, that is also acceptable behaviour
@@ -712,27 +739,24 @@ public class UnparseablePacketTests
     /// BLN* bulletin message addresses previously caused AprsSharp to throw ArgumentException.
     /// Now the parser gracefully falls back to UnsupportedInfo instead of throwing.
     /// </summary>
-    [Fact]
+    [Test]
     public void BulletinBln_PacketConstruction_DoesNotThrow()
     {
-        var ex = Record.Exception(() => new Packet(RealPacketData.Message_BulletinBln));
-        Assert.Null(ex);
+        Assert.DoesNotThrow(() => new Packet(RealPacketData.Message_BulletinBln));
     }
 
     /// <summary>
     /// ParseTnc2Header must never throw on any packet in the corpus,
     /// regardless of how unusual the TOCALL or info field is.
     /// </summary>
-    [Theory]
-    [InlineData(RealPacketData.Unparseable_IdTocall)]
-    [InlineData(RealPacketData.Unparseable_ThirdParty)]
-    [InlineData(RealPacketData.MicE_Current)]
-    [InlineData(RealPacketData.MicE_Old_PeetBros)]
-    [InlineData(RealPacketData.Message_BulletinBln)]
+    [TestCase(RealPacketData.Unparseable_IdTocall)]
+    [TestCase(RealPacketData.Unparseable_ThirdParty)]
+    [TestCase(RealPacketData.MicE_Current)]
+    [TestCase(RealPacketData.MicE_Old_PeetBros)]
+    [TestCase(RealPacketData.Message_BulletinBln)]
     public void ParseTnc2Header_UnusualPackets_NeverThrows(string raw)
     {
-        var ex = Record.Exception(() => AprsPathParser.ParseTnc2Header(raw));
-        Assert.Null(ex);
+        Assert.DoesNotThrow(() => AprsPathParser.ParseTnc2Header(raw));
     }
 }
 
@@ -744,115 +768,116 @@ public class UnparseablePacketTests
 /// Validates the pure helpers for extracting mode, frequency, and gateway
 /// classification from TOCALL prefixes and packet comments.
 /// </summary>
+[TestFixture]
 public class ModeFrequencyDetectionTests
 {
     // ── DetectMode ────────────────────────────────────────────────────────────
 
-    [Theory]
-    [InlineData("APDG02", null, "D-Star")]
-    [InlineData("APDMR1", null, "DMR")]
-    [InlineData("APYSF1", null, "YSF")]
-    [InlineData("APWIR0", null, "WIRES-X")]
-    [InlineData("APBM1A", null, "DMR")]
+    [TestCase("APDG02", null, "D-Star")]
+    [TestCase("APDMR1", null, "DMR")]
+    [TestCase("APYSF1", null, "YSF")]
+    [TestCase("APWIR0", null, "WIRES-X")]
+    [TestCase("APBM1A", null, "DMR")]
     public void DetectMode_FromTocall_ReturnsExpectedMode(string tocall, string? comment, string expected)
     {
         var mode = AprsPacketParsingService.DetectMode(tocall, comment);
-        Assert.Equal(expected, mode);
+        Assert.That(mode, Is.EqualTo(expected));
     }
 
-    [Theory]
-    [InlineData("APRS", "2m Voice (D-Star) 144.96000MHz", "D-Star")]
-    [InlineData("APRS", "DMR Repeater 442.55000MHz", "DMR")]
-    [InlineData("APRS", "YSF Gateway on 446.500MHz", "YSF")]
-    [InlineData("APRS", "WIRES-X node active", "WIRES-X")]
-    [InlineData("APRS", "AllStar Node 510139", "AllStar")]
-    [InlineData("APRS", "EchoLink Node active", "AllStar")]
+    [TestCase("APRS", "2m Voice (D-Star) 144.96000MHz", "D-Star")]
+    [TestCase("APRS", "DMR Repeater 442.55000MHz", "DMR")]
+    [TestCase("APRS", "YSF Gateway on 446.500MHz", "YSF")]
+    [TestCase("APRS", "WIRES-X node active", "WIRES-X")]
+    [TestCase("APRS", "AllStar Node 510139", "AllStar")]
+    [TestCase("APRS", "EchoLink Node active", "AllStar")]
     public void DetectMode_FromComment_ReturnsExpectedMode(string tocall, string comment, string expected)
     {
         var mode = AprsPacketParsingService.DetectMode(tocall, comment);
-        Assert.Equal(expected, mode);
+        Assert.That(mode, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public void DetectMode_UnknownTocall_NoModeKeywords_ReturnsNull()
     {
         var mode = AprsPacketParsingService.DetectMode("APRS", "SKYWARN SE TN DIGI");
-        Assert.Null(mode);
+        Assert.That(mode, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void DetectMode_NullInputs_ReturnsNull()
     {
-        Assert.Null(AprsPacketParsingService.DetectMode(null, null));
-        Assert.Null(AprsPacketParsingService.DetectMode(null, ""));
-        Assert.Null(AprsPacketParsingService.DetectMode("", null));
+        Assert.That(AprsPacketParsingService.DetectMode(null, null), Is.Null);
+        Assert.That(AprsPacketParsingService.DetectMode(null, ""), Is.Null);
+        Assert.That(AprsPacketParsingService.DetectMode("", null), Is.Null);
     }
 
     // ── ParseFrequency ───────────────────────────────────────────────────────
 
-    [Theory]
-    [InlineData("RNG0001/A=000010 2m Voice (D-Star) 144.96000MHz +0.0000MHz", "144.96000")]
-    [InlineData("147.060MHz T141 -060", "147.060")]
-    [InlineData("PHG6760/146.715 67.0 tone", null)]  // no "MHz" suffix
-    [InlineData("DMR Repeater 442.55000MHz +5.0000MHz", "442.55000")]
+    [TestCase("RNG0001/A=000010 2m Voice (D-Star) 144.96000MHz +0.0000MHz", "144.96000")]
+    [TestCase("147.060MHz T141 -060", "147.060")]
+    [TestCase("PHG6760/146.715 67.0 tone", null)]  // no "MHz" suffix
+    [TestCase("DMR Repeater 442.55000MHz +5.0000MHz", "442.55000")]
     public void ParseFrequency_ExtractsFirstFrequencyWithMhzSuffix(string comment, string? expected)
     {
         var freq = AprsPacketParsingService.ParseFrequency(comment);
-        Assert.Equal(expected, freq);
+        Assert.That(freq, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public void ParseFrequency_NullOrEmpty_ReturnsNull()
     {
-        Assert.Null(AprsPacketParsingService.ParseFrequency(null));
-        Assert.Null(AprsPacketParsingService.ParseFrequency(""));
+        Assert.That(AprsPacketParsingService.ParseFrequency(null), Is.Null);
+        Assert.That(AprsPacketParsingService.ParseFrequency(""), Is.Null);
     }
 
     // ── IsGatewayTocall ──────────────────────────────────────────────────────
 
-    [Theory]
-    [InlineData("APDG02", true)]
-    [InlineData("APDMR1", true)]
-    [InlineData("APYSF1", true)]
-    [InlineData("APBM1A", true)]
-    [InlineData("APRS", false)]
-    [InlineData("APNX16", false)]   // AllStar node — not a digital voice gateway
-    [InlineData("APU25N", false)]
-    [InlineData(null, false)]
-    [InlineData("", false)]
+    [TestCase("APDG02", true)]
+    [TestCase("APDMR1", true)]
+    [TestCase("APYSF1", true)]
+    [TestCase("APBM1A", true)]
+    [TestCase("APRS", false)]
+    [TestCase("APNX16", false)]   // AllStar node — not a digital voice gateway
+    [TestCase("APU25N", false)]
+    [TestCase(null, false)]
+    [TestCase("", false)]
     public void IsGatewayTocall_ClassifiesCorrectly(string? tocall, bool expected)
     {
-        Assert.Equal(expected, AprsPacketParsingService.IsGatewayTocall(tocall));
+        Assert.That(AprsPacketParsingService.IsGatewayTocall(tocall), Is.EqualTo(expected));
     }
 
     // ── Full packet round-trip ───────────────────────────────────────────────
 
-    [Fact]
+    [Test]
     public void DStarGatewayPacket_ParsesPositionAndComment()
     {
         var aprs = new Packet(RealPacketData.Position_DStarGateway);
-        var pos = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
+        var pos = aprs.InfoField as PositionInfo;
+        Assert.That(pos, Is.Not.Null);
+        Assert.That(pos, Is.AssignableTo<PositionInfo>());
 
-        Assert.NotNull(pos.Position);
-        Assert.InRange(pos.Position!.Coordinates.Latitude, 35.36, 35.37);
-        Assert.InRange(pos.Position.Coordinates.Longitude, -85.67, -85.66);
-        Assert.Equal('D', pos.Position.SymbolTableIdentifier);
-        Assert.Equal('&', pos.Position.SymbolCode);
-        Assert.Contains("144.96000MHz", pos.Comment);
+        Assert.That(pos!.Position, Is.Not.Null);
+        Assert.That(pos.Position!.Coordinates.Latitude, Is.InRange(35.36, 35.37));
+        Assert.That(pos.Position.Coordinates.Longitude, Is.InRange(-85.67, -85.66));
+        Assert.That(pos.Position.SymbolTableIdentifier, Is.EqualTo('D'));
+        Assert.That(pos.Position.SymbolCode, Is.EqualTo('&'));
+        Assert.That(pos.Comment, Does.Contain("144.96000MHz"));
     }
 
-    [Fact]
+    [Test]
     public void DStarGatewayPacket_DetectsModeAndFrequency()
     {
         var (_, tocall, _) = AprsPathParser.ParseTnc2Header(RealPacketData.Position_DStarGateway);
         var aprs = new Packet(RealPacketData.Position_DStarGateway);
-        var pos = Assert.IsAssignableFrom<PositionInfo>(aprs.InfoField);
+        var pos = aprs.InfoField as PositionInfo;
+        Assert.That(pos, Is.Not.Null);
+        Assert.That(pos, Is.AssignableTo<PositionInfo>());
 
-        var mode = AprsPacketParsingService.DetectMode(tocall, pos.Comment);
+        var mode = AprsPacketParsingService.DetectMode(tocall, pos!.Comment);
         var freq = AprsPacketParsingService.ParseFrequency(pos.Comment);
 
-        Assert.Equal("D-Star", mode);
-        Assert.Equal("144.96000", freq);
-        Assert.True(AprsPacketParsingService.IsGatewayTocall(tocall));
+        Assert.That(mode, Is.EqualTo("D-Star"));
+        Assert.That(freq, Is.EqualTo("144.96000"));
+        Assert.That(AprsPacketParsingService.IsGatewayTocall(tocall), Is.True);
     }
 }

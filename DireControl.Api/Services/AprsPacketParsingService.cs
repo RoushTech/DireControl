@@ -796,10 +796,19 @@ public sealed class AprsPacketParsingService(
             var station = db.Stations.Local.FirstOrDefault(s => s.Callsign == hop.Callsign)
                 ?? await db.Stations.FindAsync(new object?[] { hop.Callsign }, ct);
 
-            // Station appears starred in this packet's path — it acted as a digipeater.
-            // Only set when Unknown; never downgrade a more specific type (e.g. IGate).
-            if (station != null && station.StationType == StationType.Unknown)
-                station.StationType = StationType.Digipeater;
+            // Classify the station based on its role in this packet's path.
+            if (station != null)
+            {
+                if (hop.IsIgate &&
+                    station.StationType is StationType.Unknown or StationType.Digipeater)
+                {
+                    station.StationType = StationType.IGate;
+                }
+                else if (!hop.IsIgate && station.StationType == StationType.Unknown)
+                {
+                    station.StationType = StationType.Digipeater;
+                }
+            }
 
             if (station?.LastLat != null && station.LastLon != null)
             {
@@ -810,32 +819,6 @@ public sealed class AprsPacketParsingService(
         }
 
         packet.UnknownHopCount = packet.ResolvedPath.Count(e => !e.Known);
-
-        // Detect igate: the callsign immediately after qAR or qAS in the path
-        // is the station that gated this packet from RF to APRS-IS.
-        // IGate takes priority over Digipeater (promote if already marked Digipeater).
-        var pathParts = (packet.Path ?? string.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries);
-        for (var i = 0; i < pathParts.Length - 1; i++)
-        {
-            var token = pathParts[i].TrimEnd('*');
-            if (token.Equals("qAR", StringComparison.OrdinalIgnoreCase) ||
-                token.Equals("qAS", StringComparison.OrdinalIgnoreCase))
-            {
-                var igateCs = pathParts[i + 1];
-                if (!AprsPathParser.IsGenericAlias(igateCs))
-                {
-                    var igateStn = db.Stations.Local.FirstOrDefault(s => s.Callsign == igateCs)
-                        ?? await db.Stations.FindAsync(new object?[] { igateCs }, ct);
-                    if (igateStn != null &&
-                        igateStn.StationType is StationType.Unknown or StationType.Digipeater)
-                    {
-                        igateStn.StationType = StationType.IGate;
-                    }
-                }
-                break;
-            }
-        }
 
         // --- Final hop: our own station ---
         var homeEntry = new ResolvedPathEntry

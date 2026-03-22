@@ -175,7 +175,7 @@ public static class AprsPathParser
         var hops = new List<ResolvedPathEntry>();
 
         bool internetSectionStarted = false;
-        bool prevWasQCode = false;
+        bool prevWasRfQCode = false;
 
         // Skip index 0 — that is always the TOCALL (destination field),
         // never a digipeater hop.
@@ -187,14 +187,27 @@ public static class AprsPathParser
             if (IsInternetToken(callsign))
             {
                 internetSectionStarted = true;
-                prevWasQCode = callsign.StartsWith("q", StringComparison.OrdinalIgnoreCase);
+                prevWasRfQCode = callsign.Equals("qAR", StringComparison.OrdinalIgnoreCase)
+                              || callsign.Equals("qAO", StringComparison.OrdinalIgnoreCase);
                 continue;
             }
 
-            if (internetSectionStarted && prevWasQCode)
+            if (internetSectionStarted && prevWasRfQCode)
             {
-                // This entry is the igate callsign immediately after a q code — skip it
-                prevWasQCode = false;
+                // This entry is the igate callsign immediately after qAR/qAO.
+                // It's a real station that heard the packet on RF — include it in the path.
+                prevWasRfQCode = false;
+                if (!string.IsNullOrWhiteSpace(callsign) && !IsGenericAlias(callsign))
+                {
+                    hops.Add(new ResolvedPathEntry
+                    {
+                        Callsign = callsign,
+                        HopIndex = hops.Count + 1,
+                        Known    = false,
+                        IsIgate  = true,
+                    });
+                }
+
                 continue;
             }
 
@@ -254,6 +267,7 @@ public static class AprsPathParser
             });
         }
 
-        return (hops, hops.Count);
+        var rfHopCount = hops.Count(h => !h.IsIgate);
+        return (hops, rfHopCount);
     }
 }

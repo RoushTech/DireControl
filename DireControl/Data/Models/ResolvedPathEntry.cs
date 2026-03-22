@@ -20,4 +20,9 @@ public class ResolvedPathEntry
     /// relaying the packet, or null if the hop was a direct relay without an alias.
     /// </summary>
     public string? AliasUsed { get; set; }
+
+    /// <summary>
+    /// True when this hop is an igate that forwarded the packet between RF and APRS-IS.
+    /// </summary>
+    public bool IsIgate { get; set; }
 }
