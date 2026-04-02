@@ -2,6 +2,8 @@
 
 A real-time APRS (Automatic Packet Reporting System) monitoring and control application that interfaces with [Direwolf](https://github.com/wb2osz/direwolf) via KISS TCP. Aggregates packets from local RF and APRS-IS, provides interactive mapping, messaging, alerting, and beacon management for ham radio operators.
 
+![DireControl screenshot](screenshot.png)
+
 ## Features
 
 - **Real-time packet capture** — Connects to Direwolf via KISS TCP, parses AX.25 frames, and classifies stations by type (Mobile, Fixed, Weather, Digipeater, IGate)
