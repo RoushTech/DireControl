@@ -35,25 +35,23 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The app will be available at `http://localhost:5010`. The SQLite database is persisted in the `direcontrol-data` volume.
+The app will be available at `http://localhost`. The SQLite database is persisted in a `data/` directory alongside the compose file.
 
 ### Docker Compose
 
 ```yaml
 services:
   direcontrol:
-    image: roushtech/direcontrol:stable
+    image: roushtech/direcontrol:${VERSION:-stable}
     env_file: .env
     ports:
-      - "5010:5010"
+      - "${HTTP_PORT:-80}:5010"
     volumes:
-      - direcontrol-data:/data
+      - ./data:/data
     restart: unless-stopped
+    # Allows the container to reach Direwolf running on the host via host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-volumes:
-  direcontrol-data:
 ```
 
 ### Configuration
@@ -64,7 +62,9 @@ DireControl is configured through environment variables and the in-app Settings 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `HTTP_PORT` | `80` | Host port to expose the web UI on |
 | `DireControl__OurCallsign` | `N0CALL-10` | Your callsign with SSID |
+| `DireControl__HomeLat` / `DireControl__HomeLon` | *(unset)* | Home position for beacons and distance calculations |
 | `Direwolf__Host` | `localhost` | Direwolf KISS TCP host (`host.docker.internal` for Docker) |
 | `Direwolf__Port` | `8001` | Direwolf KISS TCP port |
 | `QRZ__Username` / `QRZ__Password` | *(empty)* | QRZ callsign lookup credentials (optional — HamDB is used as a free fallback) |

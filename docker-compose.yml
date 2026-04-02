@@ -1,15 +1,12 @@
 services:
   direcontrol:
-    image: roushtech/direcontrol:${VERSION:-latest}
+    image: roushtech/direcontrol:${VERSION:-stable}
     env_file: .env
     ports:
-      - "${HTTP_PORT:-5010}:5010"
+      - "${HTTP_PORT:-80}:5010"
     volumes:
-      - direcontrol-data:/data
+      - ./data:/data
     restart: unless-stopped
     # Allows the container to reach Direwolf running on the host via host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-volumes:
-  direcontrol-data:
