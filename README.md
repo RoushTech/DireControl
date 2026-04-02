@@ -27,15 +27,58 @@ A real-time APRS (Automatic Packet Reporting System) monitoring and control appl
 
 ## Docker
 
-The easiest way to run DireControl is with the published Docker image:
+The easiest way to run DireControl is with Docker Compose. Copy `docker-compose.yml` and `.env.example` from the repo, then:
 
 ```bash
-docker run -d \
-  --name direcontrol \
-  -p 5010:5010 \
-  -v direcontrol-data:/app/data \
-  roushtech/direcontrol:stable
+cp .env.example .env
+# Edit .env — at minimum set DireControl__OurCallsign to your callsign
+docker compose up -d
 ```
+
+The app will be available at `http://localhost:5010`. The SQLite database is persisted in the `direcontrol-data` volume.
+
+### Docker Compose
+
+```yaml
+services:
+  direcontrol:
+    image: roushtech/direcontrol:stable
+    env_file: .env
+    ports:
+      - "5010:5010"
+    volumes:
+      - direcontrol-data:/data
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  direcontrol-data:
+```
+
+### Configuration
+
+DireControl is configured through environment variables and the in-app Settings page.
+
+**Environment variables** (set in `.env` or passed to the container):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DireControl__OurCallsign` | `N0CALL-10` | Your callsign with SSID |
+| `Direwolf__Host` | `localhost` | Direwolf KISS TCP host (`host.docker.internal` for Docker) |
+| `Direwolf__Port` | `8001` | Direwolf KISS TCP port |
+| `QRZ__Username` / `QRZ__Password` | *(empty)* | QRZ callsign lookup credentials (optional — HamDB is used as a free fallback) |
+| `DireControl__StationExpiryTimeoutMinutes` | `120` | Default minutes before inactive stations expire |
+
+See `.env.example` for the full list including per-type station expiry overrides.
+
+**In-app settings** (configured through the Settings page in the UI):
+
+- APRS-IS connection (host, port, filter, passcode)
+- Weather API keys (OpenWeatherMap, Tomorrow.io, RainViewer)
+- Radar provider selection
+
+### Image Tags
 
 The `stable` tag always points to the latest release. Pinned version tags (e.g. `0.2.0.173`) are also available — see [Docker Hub](https://hub.docker.com/r/roushtech/direcontrol/tags) for all tags.
 
@@ -46,8 +89,6 @@ The `stable` tag always points to the latest release. Pinned version tags (e.g. 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Node.js](https://nodejs.org/) 20.19+ or 22.12+
 - [Direwolf](https://github.com/wb2osz/direwolf) running with KISS TCP enabled
-
-### Getting Started
 
 ### Backend
 
@@ -66,7 +107,7 @@ npm run dev
 
 The Vite dev server proxies API and SignalR requests to the backend automatically.
 
-### Configuration
+### Local Configuration
 
 Copy and edit the local settings override (git-ignored):
 
@@ -74,17 +115,7 @@ Copy and edit the local settings override (git-ignored):
 cp DireControl.Api/appsettings.json DireControl.Api/appsettings.local.json
 ```
 
-Key settings:
-
-| Setting | Description |
-|---------|-------------|
-| `ConnectionStrings:Default` | SQLite database path |
-| `Direwolf:Host` / `Port` | Direwolf KISS TCP connection |
-| `QRZ:Username` / `Password` | QRZ callsign lookup credentials (optional) |
-| `DireControl:OurCallsign` | Your callsign with SSID |
-| `DireControl:StationExpiryTimeoutMinutes` | How long before inactive stations expire |
-
-Weather API keys and APRS-IS settings are configured through the in-app Settings page.
+The same settings from the environment variable table above can be set here using the nested JSON format (e.g. `Direwolf__Host` becomes `"Direwolf": { "Host": "..." }`).
 
 ## Running Tests
 

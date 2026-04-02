@@ -487,6 +487,4 @@ appsettings.local.json
 
 
 #Temp?
-docker-compose.yml
-.env.example
 RawPackets.txt
