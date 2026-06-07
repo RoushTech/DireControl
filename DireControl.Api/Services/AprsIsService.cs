@@ -165,6 +165,10 @@ public sealed class AprsIsService(
                         if (serverIdx >= 0)
                             serverName = raw[(serverIdx + 7)..].Trim();
                         statusService.SetState(AprsIsConnectionState.Connected, serverName);
+                        logger.LogInformation(
+                            "Connected to APRS-IS server {Server} as {Callsign} (filter: {Filter}).",
+                            serverName ?? "(unknown)", options.Value.OurCallsign,
+                            string.IsNullOrEmpty(settings.AprsIsFilter) ? "(none)" : settings.AprsIsFilter);
                     }
                     continue;
                 }
