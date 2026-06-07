@@ -222,6 +222,12 @@ onUnmounted(() => {
           @click="mobileDrawerOpen = false"
         />
         <v-list-item
+          to="/logs"
+          prepend-icon="mdi-text-box-outline"
+          title="Logs"
+          @click="mobileDrawerOpen = false"
+        />
+        <v-list-item
           to="/settings"
           prepend-icon="mdi-cog"
           title="Settings"
@@ -271,6 +277,7 @@ onUnmounted(() => {
 
           <v-btn to="/frequencies" variant="text" size="small">Frequencies</v-btn>
           <v-btn to="/statistics" variant="text" size="small">Statistics</v-btn>
+          <v-btn to="/logs" variant="text" size="small">Logs</v-btn>
           <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
         </div>
 

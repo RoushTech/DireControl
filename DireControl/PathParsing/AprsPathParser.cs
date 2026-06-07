@@ -46,20 +46,20 @@ public static class AprsPathParser
     public static (string Source, string Tocall, string RawPath) ParseTnc2Header(string raw)
     {
         var colonIdx = raw.IndexOf(':');
-        var header   = colonIdx >= 0 ? raw[..colonIdx] : raw;
+        var header = colonIdx >= 0 ? raw[..colonIdx] : raw;
 
         var gtIdx = header.IndexOf('>');
         if (gtIdx < 0)
             return (raw, string.Empty, string.Empty);
 
-        var source  = header[..gtIdx];
+        var source = header[..gtIdx];
         var afterGt = header[(gtIdx + 1)..];
 
         var firstComma = afterGt.IndexOf(',');
         if (firstComma < 0)
             return (source, afterGt, string.Empty);  // only TOCALL, no via entries
 
-        var tocall  = afterGt[..firstComma];
+        var tocall = afterGt[..firstComma];
         var rawPath = afterGt[(firstComma + 1)..];   // "WE4MB-3*,WIDE2"
 
         return (source, tocall, rawPath);
@@ -86,8 +86,8 @@ public static class AprsPathParser
     {
         var stripped = hop.TrimEnd('*').Trim();
         return stripped.StartsWith("q", StringComparison.OrdinalIgnoreCase)
-            || stripped.Equals("TCPIP",  StringComparison.OrdinalIgnoreCase)
-            || stripped.Equals("TCPXX",  StringComparison.OrdinalIgnoreCase)
+            || stripped.Equals("TCPIP", StringComparison.OrdinalIgnoreCase)
+            || stripped.Equals("TCPXX", StringComparison.OrdinalIgnoreCase)
             || stripped.Equals("NOGATE", StringComparison.OrdinalIgnoreCase)
             || stripped.Equals("RFONLY", StringComparison.OrdinalIgnoreCase);
     }
@@ -148,7 +148,7 @@ public static class AprsPathParser
     {
         for (int i = 0; i < pathEntries.Count; i++)
         {
-            var raw      = pathEntries[i];
+            var raw = pathEntries[i];
             var callsign = raw.TrimEnd('*').Trim();
 
             if (IsInternetToken(callsign))
@@ -164,7 +164,7 @@ public static class AprsPathParser
             if (!isUsed && !IsGenericAlias(callsign)
                 && i + 1 < pathEntries.Count)
             {
-                var nextRaw      = pathEntries[i + 1];
+                var nextRaw = pathEntries[i + 1];
                 var nextCallsign = nextRaw.TrimEnd('*').Trim();
                 if (nextRaw.TrimEnd().EndsWith('*') && IsGenericAlias(nextCallsign))
                     return true;
@@ -221,7 +221,7 @@ public static class AprsPathParser
         // never a digipeater hop.
         for (int i = 1; i < viaEntries.Count; i++)
         {
-            var raw      = viaEntries[i];
+            var raw = viaEntries[i];
             var callsign = raw.TrimEnd('*').Trim();
 
             if (IsInternetToken(callsign))
@@ -243,8 +243,8 @@ public static class AprsPathParser
                     {
                         Callsign = callsign,
                         HopIndex = hops.Count + 1,
-                        Known    = false,
-                        IsIgate  = true,
+                        Known = false,
+                        IsIgate = true,
                     });
                 }
 
@@ -267,15 +267,15 @@ public static class AprsPathParser
                 // If the next entry is a starred generic alias, this callsign is that hop.
                 if (i + 1 < viaEntries.Count)
                 {
-                    var nextRaw      = viaEntries[i + 1];
+                    var nextRaw = viaEntries[i + 1];
                     var nextCallsign = nextRaw.TrimEnd('*').Trim();
                     if (nextRaw.TrimEnd().EndsWith('*') && IsGenericAlias(nextCallsign))
                     {
                         hops.Add(new ResolvedPathEntry
                         {
-                            Callsign  = callsign,
-                            HopIndex  = hops.Count + 1,
-                            Known     = false,
+                            Callsign = callsign,
+                            HopIndex = hops.Count + 1,
+                            Known = false,
                             AliasUsed = nextCallsign,
                         });
                         i++;  // consume the starred alias — already recorded as AliasUsed
@@ -300,9 +300,9 @@ public static class AprsPathParser
             // Real callsign that was used — it's a hop
             hops.Add(new ResolvedPathEntry
             {
-                Callsign  = callsign,
-                HopIndex  = hops.Count + 1,  // 0 is reserved for the originating station
-                Known     = false,
+                Callsign = callsign,
+                HopIndex = hops.Count + 1,  // 0 is reserved for the originating station
+                Known = false,
                 AliasUsed = null,
             });
         }

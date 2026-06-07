@@ -172,9 +172,9 @@ public static class RealPacketData
     /// </summary>
     public static IEnumerable<TestCaseData> WeatherFieldData()
     {
-        yield return new TestCaseData(Weather_AtPrefix_AllFields,        54, 269, 5, 9, 89, 1021.9);
-        yield return new TestCaseData(Weather_AtPrefix_LuminosityField,  47,  89, 0, 0, 95, 1026.1);
-        yield return new TestCaseData(Weather_AtPrefix_RfDigipeated,     55,  29, 0, 0, 75, 1019.1);
+        yield return new TestCaseData(Weather_AtPrefix_AllFields, 54, 269, 5, 9, 89, 1021.9);
+        yield return new TestCaseData(Weather_AtPrefix_LuminosityField, 47, 89, 0, 0, 95, 1026.1);
+        yield return new TestCaseData(Weather_AtPrefix_RfDigipeated, 55, 29, 0, 0, 75, 1019.1);
         // Note: _ prefix packets (WO4U-13, AJ4FJ-13) have Type=WeatherReport but
         // InfoField is UnsupportedInfo in AprsSharp 0.4.1 — cannot cast to WeatherInfo.
         // They are exercised only in RawWeatherPacket_UnderscorePrefix_ParsedAsAWeatherVariant.
@@ -185,12 +185,12 @@ public static class RealPacketData
     /// </summary>
     public static IEnumerable<TestCaseData> PositionCoordData()
     {
-        yield return new TestCaseData(Position_BangPrefix_AltTable,          35.2452, -84.9753);
-        yield return new TestCaseData(Position_EqualsPrefix_PrimaryTable,    34.9360, -85.1060);
-        yield return new TestCaseData(Position_SlashPrefix_TimestampZ,       35.0727, -85.1900);
+        yield return new TestCaseData(Position_BangPrefix_AltTable, 35.2452, -84.9753);
+        yield return new TestCaseData(Position_EqualsPrefix_PrimaryTable, 34.9360, -85.1060);
+        yield return new TestCaseData(Position_SlashPrefix_TimestampZ, 35.0727, -85.1900);
         yield return new TestCaseData(Position_AtPrefix_TimestampZ_AltTable, 34.5197, -84.3433);
-        yield return new TestCaseData(Position_SlashPrefix_TimestampH,       36.0242, -86.4860);
-        yield return new TestCaseData(Position_DStarGateway,                 35.3653, -85.6632);
+        yield return new TestCaseData(Position_SlashPrefix_TimestampH, 36.0242, -86.4860);
+        yield return new TestCaseData(Position_DStarGateway, 35.3653, -85.6632);
     }
 
     /// <summary>
@@ -198,14 +198,14 @@ public static class RealPacketData
     /// </summary>
     public static IEnumerable<TestCaseData> MessageFieldData()
     {
-        yield return new TestCaseData(Message_WithNumericId,         "N1YKT-7",  "Was up brother",                                            "108");
-        yield return new TestCaseData(Message_AckReply,              "KE9BPC-7", "ack3DF4A",                                                  "");
-        yield return new TestCaseData(Message_WithAlphanumericId,    "WY4RC-67", "CQ CQ CQ KE9BPC calling CQ",                               "3DF4A");
-        yield return new TestCaseData(Message_NoId_WxBotResponse,    "K2KAZ-7",  "Effort PA. Tonight,Rain Likely and Patchy Fog 60% Low 33", "");
-        yield return new TestCaseData(Message_WithId_IgatedDirectRf, "WB2BWU-2", "Please list (QTC #)",                                      "24805");
+        yield return new TestCaseData(Message_WithNumericId, "N1YKT-7", "Was up brother", "108");
+        yield return new TestCaseData(Message_AckReply, "KE9BPC-7", "ack3DF4A", "");
+        yield return new TestCaseData(Message_WithAlphanumericId, "WY4RC-67", "CQ CQ CQ KE9BPC calling CQ", "3DF4A");
+        yield return new TestCaseData(Message_NoId_WxBotResponse, "K2KAZ-7", "Effort PA. Tonight,Rain Likely and Patchy Fog 60% Low 33", "");
+        yield return new TestCaseData(Message_WithId_IgatedDirectRf, "WB2BWU-2", "Please list (QTC #)", "24805");
         // Message_BulletinBln omitted: AprsSharp 0.4.1 throws ArgumentException on construction
         // for BLN* bulletin addresses — tested separately in UnparseablePacketTests.
-        yield return new TestCaseData(Message_TelemetryBits,         "KN6RO-13", "BITS.11111111,KN6RO-13 Telemetry",                        "");
+        yield return new TestCaseData(Message_TelemetryBits, "KN6RO-13", "BITS.11111111,KN6RO-13 Telemetry", "");
     }
 
     /// <summary>
@@ -216,35 +216,35 @@ public static class RealPacketData
     {
         // internet only — TOCALL APRS, path starts with TCPIP*
         yield return new TestCaseData(Weather_AtPrefix_AllFields,
-            "N4YH-13",   "APRS",   "TCPIP*,qAC,T2TEXAS");
+            "N4YH-13", "APRS", "TCPIP*,qAC,T2TEXAS");
 
         // qAR igated from RF direct
         yield return new TestCaseData(Message_WithId_IgatedDirectRf,
-            "NTSGTE",    "APN20H", "qAR,WZ0C-4");
+            "NTSGTE", "APN20H", "qAR,WZ0C-4");
 
         // qAS (server-added), same callsign as igate
         yield return new TestCaseData(Position_AtPrefix_TimestampZ_AltTable,
-            "AK4ZX-15",  "APMI06", "TCPIP*,qAS,AK4ZX");
+            "AK4ZX-15", "APMI06", "TCPIP*,qAS,AK4ZX");
 
         // single real digi + unused alias + qAR + igate callsign
         yield return new TestCaseData(Object_WithCoords,
-            "KC4OJS-3",  "APU25N", "KQ4HOM-1*,WIDE2-1,qAR,KJ4G-2");
+            "KC4OJS-3", "APU25N", "KQ4HOM-1*,WIDE2-1,qAR,KJ4G-2");
 
         // TOCALL = "ID" (non-standard)
         yield return new TestCaseData(Unparseable_IdTocall,
-            "WO4U-13",   "ID",     "WE4MB-3*,WIDE2-1");
+            "WO4U-13", "ID", "WE4MB-3*,WIDE2-1");
 
         // one unused alias only, no stars
         yield return new TestCaseData(Position_BangPrefix_AltTable,
-            "WE4MB-3",   "APNX16", "WIDE2-2");
+            "WE4MB-3", "APNX16", "WIDE2-2");
 
         // MIC-E packet: destination encodes position, 4 RF hops
         yield return new TestCaseData(MicE_Current,
-            "WB7VPC-2",  "S5PR4Q", "W4NAR-2*,WIDE1*,WE4MB-3*,WIDE2*");
+            "WB7VPC-2", "S5PR4Q", "W4NAR-2*,WIDE1*,WE4MB-3*,WIDE2*");
 
         // 5 real starred hops + trailing unused alias — longest path in corpus
         yield return new TestCaseData("WA4HR-2>APDW17,N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1:!3502.17NS08645.46W#360/000WA4HR-2",
-            "WA4HR-2",   "APDW17", "N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1");
+            "WA4HR-2", "APDW17", "N8DEU-7*,W4GGM-1*,W4DMM-3*,WIDE1*,KM4BJZ-2*,WE4MB-3*,WIDE2-1");
     }
 
     /// <summary>
@@ -256,17 +256,17 @@ public static class RealPacketData
     public static IEnumerable<TestCaseData> HopExtractionData()
     {
         // internet only — no RF hops
-        yield return new TestCaseData(Weather_AtPrefix_AllFields,             0, Array.Empty<string>());
+        yield return new TestCaseData(Weather_AtPrefix_AllFields, 0, Array.Empty<string>());
 
         // qAR igated from RF direct — igate is the one RF hop
-        yield return new TestCaseData(Message_WithId_IgatedDirectRf,          1, new[] { "WZ0C-4" });
+        yield return new TestCaseData(Message_WithId_IgatedDirectRf, 1, new[] { "WZ0C-4" });
 
         // 2 real hops: KN6RO-13 (no alias) then WE4MB-3 (alias = WIDE2)
         yield return new TestCaseData("YORKSC>APDW16,KN6RO-13*,WE4MB-3*,WIDE2*:!3459.17NI08114.90W#W4PSC DigiGate - York, SC",
           2, new[] { "KN6RO-13", "WE4MB-3" });
 
         // 1 digi hop + igate: KQ4HOM-1, then WIDE2-1 unused alias, igate KJ4G-2
-        yield return new TestCaseData(Object_WithCoords,                      2, new[] { "KQ4HOM-1", "KJ4G-2" });
+        yield return new TestCaseData(Object_WithCoords, 2, new[] { "KQ4HOM-1", "KJ4G-2" });
 
         // digi-before-alias: K3ODX-10 (unstarred) immediately before WIDE1* (starred alias), igate K3ODX-11
         yield return new TestCaseData("K2KAZ-7>APAT81-1,K3ODX-10,WIDE1*,WIDE2-2,qAR,K3ODX-11::WXBOT    :18330",
@@ -277,7 +277,7 @@ public static class RealPacketData
           5, new[] { "N8DEU-7", "W4GGM-1", "W4DMM-3", "KM4BJZ-2", "WE4MB-3" });
 
         // TOCALL = "ID" — unconditional TOCALL exclusion still applies, 1 real hop
-        yield return new TestCaseData(Unparseable_IdTocall,                   1, new[] { "WE4MB-3" });
+        yield return new TestCaseData(Unparseable_IdTocall, 1, new[] { "WE4MB-3" });
     }
 }
 
@@ -297,44 +297,44 @@ public class PacketTypeClassificationTests
         // ── Weather ───────────────────────────────────────────────────────────
         // AprsSharp 0.4.1: @ prefix weather packets report PositionWithTimestamp*
         // type enum even though InfoField is a WeatherInfo instance.
-        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_AllFields,          AprsPacketType.PositionWithTimestampWithMessaging);
-        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_LuminosityField,    AprsPacketType.PositionWithTimestampWithMessaging);
-        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_RfDigipeated,       AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_AllFields, AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_LuminosityField, AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Weather_AtPrefix_RfDigipeated, AprsPacketType.PositionWithTimestampWithMessaging);
 
         // ── Position ──────────────────────────────────────────────────────────
-        yield return new TestCaseData(RealPacketData.Position_BangPrefix_AltTable,        AprsPacketType.PositionWithoutTimestampNoMessaging);
-        yield return new TestCaseData(RealPacketData.Position_EqualsPrefix_PrimaryTable,  AprsPacketType.PositionWithoutTimestampWithMessaging);
-        yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampZ,     AprsPacketType.PositionWithTimestampNoMessaging);
+        yield return new TestCaseData(RealPacketData.Position_BangPrefix_AltTable, AprsPacketType.PositionWithoutTimestampNoMessaging);
+        yield return new TestCaseData(RealPacketData.Position_EqualsPrefix_PrimaryTable, AprsPacketType.PositionWithoutTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampZ, AprsPacketType.PositionWithTimestampNoMessaging);
         yield return new TestCaseData(RealPacketData.Position_AtPrefix_TimestampZ_AltTable, AprsPacketType.PositionWithTimestampWithMessaging);
-        yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampH,     AprsPacketType.PositionWithTimestampNoMessaging);
-        yield return new TestCaseData(RealPacketData.Position_AtPrefix_TimestampSlash,    AprsPacketType.PositionWithTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampH, AprsPacketType.PositionWithTimestampNoMessaging);
+        yield return new TestCaseData(RealPacketData.Position_AtPrefix_TimestampSlash, AprsPacketType.PositionWithTimestampWithMessaging);
 
         // _ weather-station symbol but no c/s/g/t/r... weather data → still Position
-        yield return new TestCaseData(RealPacketData.Position_WxSymbolNoWxData,           AprsPacketType.PositionWithoutTimestampWithMessaging);
+        yield return new TestCaseData(RealPacketData.Position_WxSymbolNoWxData, AprsPacketType.PositionWithoutTimestampWithMessaging);
         yield return new TestCaseData(RealPacketData.Position_BangPrefix_WxSymbolNoWxData, AprsPacketType.PositionWithoutTimestampNoMessaging);
 
         // ── Objects ───────────────────────────────────────────────────────────
-        yield return new TestCaseData(RealPacketData.Object_WithCoords,                   AprsPacketType.Object);
-        yield return new TestCaseData(RealPacketData.Object_RepeaterFrequency,            AprsPacketType.Object);
+        yield return new TestCaseData(RealPacketData.Object_WithCoords, AprsPacketType.Object);
+        yield return new TestCaseData(RealPacketData.Object_RepeaterFrequency, AprsPacketType.Object);
 
         // ── Status ────────────────────────────────────────────────────────────
-        yield return new TestCaseData(RealPacketData.Status_PlainText,                    AprsPacketType.Status);
-        yield return new TestCaseData(RealPacketData.Status_GridSquare_DxInfo,            AprsPacketType.Status);
-        yield return new TestCaseData(RealPacketData.Status_WithTimestamp,                AprsPacketType.Status);
+        yield return new TestCaseData(RealPacketData.Status_PlainText, AprsPacketType.Status);
+        yield return new TestCaseData(RealPacketData.Status_GridSquare_DxInfo, AprsPacketType.Status);
+        yield return new TestCaseData(RealPacketData.Status_WithTimestamp, AprsPacketType.Status);
 
         // ── Messages ──────────────────────────────────────────────────────────
-        yield return new TestCaseData(RealPacketData.Message_WithNumericId,               AprsPacketType.Message);
-        yield return new TestCaseData(RealPacketData.Message_AckReply,                    AprsPacketType.Message);
+        yield return new TestCaseData(RealPacketData.Message_WithNumericId, AprsPacketType.Message);
+        yield return new TestCaseData(RealPacketData.Message_AckReply, AprsPacketType.Message);
         // Message_BulletinBln omitted: AprsSharp 0.4.1 throws on construction.
-        yield return new TestCaseData(RealPacketData.Message_TelemetryBits,               AprsPacketType.Message);
+        yield return new TestCaseData(RealPacketData.Message_TelemetryBits, AprsPacketType.Message);
 
         // ── Telemetry ─────────────────────────────────────────────────────────
-        yield return new TestCaseData(RealPacketData.Telemetry_T_Hash,                    AprsPacketType.TelemetryData);
+        yield return new TestCaseData(RealPacketData.Telemetry_T_Hash, AprsPacketType.TelemetryData);
 
         // ── MIC-E ─────────────────────────────────────────────────────────────
         // AprsSharp 0.4.1 uses more specific subtypes than the base MIC-E enums.
-        yield return new TestCaseData(RealPacketData.MicE_Current,                        AprsPacketType.CurrentMicEDataNotTMD700);
-        yield return new TestCaseData(RealPacketData.MicE_Old_PeetBros,                   AprsPacketType.OldMicEDataCurrentTMD700);
+        yield return new TestCaseData(RealPacketData.MicE_Current, AprsPacketType.CurrentMicEDataNotTMD700);
+        yield return new TestCaseData(RealPacketData.MicE_Old_PeetBros, AprsPacketType.OldMicEDataCurrentTMD700);
     }
 
     [TestCaseSource(nameof(Data))]

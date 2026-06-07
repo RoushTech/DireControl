@@ -410,7 +410,7 @@ public sealed class AprsPacketParsingService(
                         .ToList();
 
                     var hasDirectRf = perPacketVias.Any(v => v == HeardVia.Direct);
-                    var hasDigi     = perPacketVias.Any(v => v == HeardVia.Digi);
+                    var hasDigi = perPacketVias.Any(v => v == HeardVia.Digi);
 
                     station.HeardVia = hasDirectRf && hasDigi
                         ? HeardVia.DirectAndDigi
@@ -442,7 +442,7 @@ public sealed class AprsPacketParsingService(
                     if (recentPositions.Count >= FixedDetectionMinPackets)
                     {
                         var firstTime = recentPositions.Min(p => p.ReceivedAt);
-                        var lastTime  = recentPositions.Max(p => p.ReceivedAt);
+                        var lastTime = recentPositions.Max(p => p.ReceivedAt);
 
                         if ((lastTime - firstTime).TotalHours >= FixedDetectionWindowHours)
                         {
@@ -450,7 +450,7 @@ public sealed class AprsPacketParsingService(
                             var refLon = recentPositions[0].Longitude!.Value;
 
                             var allWithinThreshold = recentPositions.All(p =>
-                                Math.Abs(p.Latitude!.Value  - refLat) <= MovementThresholdDeg &&
+                                Math.Abs(p.Latitude!.Value - refLat) <= MovementThresholdDeg &&
                                 Math.Abs(p.Longitude!.Value - refLon) <= MovementThresholdDeg);
 
                             if (allWithinThreshold)
@@ -506,7 +506,7 @@ public sealed class AprsPacketParsingService(
                     && station.LastLon is not null
                     && !double.IsNaN(coord.Latitude)
                     && !double.IsNaN(coord.Longitude)
-                    && (Math.Abs(coord.Latitude  - station.LastLat.Value) > MovementThresholdDeg
+                    && (Math.Abs(coord.Latitude - station.LastLat.Value) > MovementThresholdDeg
                      || Math.Abs(coord.Longitude - station.LastLon.Value) > MovementThresholdDeg);
 
                 if ((isMobileSymbol || hasMoved) &&
@@ -595,7 +595,7 @@ public sealed class AprsPacketParsingService(
                     && station.LastLon is not null
                     && !double.IsNaN(coord.Latitude)
                     && !double.IsNaN(coord.Longitude)
-                    && (Math.Abs(coord.Latitude  - station.LastLat.Value) > MovementThresholdDeg
+                    && (Math.Abs(coord.Latitude - station.LastLat.Value) > MovementThresholdDeg
                      || Math.Abs(coord.Longitude - station.LastLon.Value) > MovementThresholdDeg);
 
                 if ((isMobileSymbol || hasMoved) &&

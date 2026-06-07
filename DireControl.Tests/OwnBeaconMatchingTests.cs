@@ -24,24 +24,24 @@ public class FindMatchingRadioTests
     private static DbPacket RfPacket(string callsign, int kissChannel = 0) => new()
     {
         StationCallsign = callsign,
-        RawPacket       = $"{callsign}>APRS:!data",
-        Source          = PacketSource.Rf,
-        KissChannel     = kissChannel,
+        RawPacket = $"{callsign}>APRS:!data",
+        Source = PacketSource.Rf,
+        KissChannel = kissChannel,
     };
 
     private static DbPacket AprsIsPacket(string callsign) => new()
     {
         StationCallsign = callsign,
-        RawPacket       = $"{callsign}>APRS,qAR,N8DEU-7:!data",
-        Source          = PacketSource.AprsIs,
+        RawPacket = $"{callsign}>APRS,qAR,N8DEU-7:!data",
+        Source = PacketSource.AprsIs,
         // KissChannel stays at 0 — int default, never set for APRS-IS packets
     };
 
     private static DbRadio MakeRadio(string callsign, string? ssid = null, int channel = 0) => new()
     {
-        Name          = "Test",
-        Callsign      = callsign,
-        Ssid          = ssid,
+        Name = "Test",
+        Callsign = callsign,
+        Ssid = ssid,
         ChannelNumber = channel,
     };
 
@@ -50,7 +50,7 @@ public class FindMatchingRadioTests
     [Test]
     public void Rf_ChannelAndCallsignMatch_ReturnsRadio()
     {
-        var radio  = MakeRadio("W3UWU", channel: 0);
+        var radio = MakeRadio("W3UWU", channel: 0);
         var packet = RfPacket("W3UWU", kissChannel: 0);
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.SameAs(radio));
@@ -60,7 +60,7 @@ public class FindMatchingRadioTests
     public void Rf_ChannelMatchesButWrongCallsign_ReturnsNull()
     {
         // Different station heard on the same KISS port — must not be treated as own beacon.
-        var radio  = MakeRadio("W3UWU", channel: 0);
+        var radio = MakeRadio("W3UWU", channel: 0);
         var packet = RfPacket("K9OTHER", kissChannel: 0);
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.Null);
@@ -70,7 +70,7 @@ public class FindMatchingRadioTests
     public void Rf_WrongChannel_ReturnsNull()
     {
         // Radio is configured on channel 1; packet arrived on channel 0.
-        var radio  = MakeRadio("W3UWU", channel: 1);
+        var radio = MakeRadio("W3UWU", channel: 1);
         var packet = RfPacket("W3UWU", kissChannel: 0);
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.Null);
@@ -80,7 +80,7 @@ public class FindMatchingRadioTests
     public void Rf_NonDefaultChannel_MatchingCallsign_ReturnsRadio()
     {
         // A radio on channel 1 must be found when a matching RF packet arrives on channel 1.
-        var radio  = MakeRadio("W3UWU", channel: 1);
+        var radio = MakeRadio("W3UWU", channel: 1);
         var packet = RfPacket("W3UWU", kissChannel: 1);
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.SameAs(radio));
@@ -89,7 +89,7 @@ public class FindMatchingRadioTests
     [Test]
     public void Rf_TwoRadiosDifferentChannels_MatchesCorrectOne()
     {
-        var radioA = MakeRadio("W3UWU",  channel: 0);
+        var radioA = MakeRadio("W3UWU", channel: 0);
         var radioB = MakeRadio("KD4RFT", channel: 1);
         var packet = RfPacket("KD4RFT", kissChannel: 1);
 
@@ -100,7 +100,7 @@ public class FindMatchingRadioTests
     public void Rf_Ssid0EquivalentToNoSsid_Matches()
     {
         // W3UWU-0 in a packet is the same station as W3UWU (no SSID).
-        var radio  = MakeRadio("W3UWU", ssid: null, channel: 0);
+        var radio = MakeRadio("W3UWU", ssid: null, channel: 0);
         var packet = RfPacket("W3UWU-0", kissChannel: 0);
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.SameAs(radio));
@@ -119,7 +119,7 @@ public class FindMatchingRadioTests
     [Test]
     public void AprsIs_MatchingCallsign_ReturnsRadio()
     {
-        var radio  = MakeRadio("W3UWU");
+        var radio = MakeRadio("W3UWU");
         var packet = AprsIsPacket("W3UWU");
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.SameAs(radio));
@@ -128,7 +128,7 @@ public class FindMatchingRadioTests
     [Test]
     public void AprsIs_NonMatchingCallsign_ReturnsNull()
     {
-        var radio  = MakeRadio("W3UWU");
+        var radio = MakeRadio("W3UWU");
         var packet = AprsIsPacket("K9OTHER");
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.Null);
@@ -146,7 +146,7 @@ public class FindMatchingRadioTests
     [Test]
     public void AprsIs_RadioOnNonZeroChannel_StillMatchesByCallsign()
     {
-        var radio  = MakeRadio("W3UWU", channel: 1);  // non-zero channel
+        var radio = MakeRadio("W3UWU", channel: 1);  // non-zero channel
         var packet = AprsIsPacket("W3UWU");             // KissChannel = 0 (default)
 
         // Must match even though packet.KissChannel (0) != radio.ChannelNumber (1)
@@ -166,7 +166,7 @@ public class FindMatchingRadioTests
     [Test]
     public void AprsIs_Ssid0EquivalentToNoSsid_Matches()
     {
-        var radio  = MakeRadio("W3UWU", ssid: null);
+        var radio = MakeRadio("W3UWU", ssid: null);
         var packet = AprsIsPacket("W3UWU-0");
 
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.SameAs(radio));

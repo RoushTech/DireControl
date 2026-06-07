@@ -85,7 +85,7 @@ public static class PathResolver
         {
             HopCount = hopCount,
             HeardVia = heardVia,
-            Hops     = allHops,
+            Hops = allHops,
         };
     }
 
@@ -97,16 +97,16 @@ public static class PathResolver
     {
         var entry = new ResolvedPathEntry
         {
-            Callsign  = callsign,
-            HopIndex  = hopIndex,
+            Callsign = callsign,
+            HopIndex = hopIndex,
             AliasUsed = aliasUsed,
-            Known     = false,
+            Known = false,
         };
 
         if (lookup is not null && lookup.TryGetValue(callsign, out var coords))
         {
-            entry.Known     = true;
-            entry.Latitude  = coords.Lat;
+            entry.Known = true;
+            entry.Latitude = coords.Lat;
             entry.Longitude = coords.Lon;
         }
 

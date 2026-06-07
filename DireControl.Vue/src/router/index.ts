@@ -45,6 +45,11 @@ const router = createRouter({
       component: () => import('@/views/StatisticsView.vue'),
     },
     {
+      path: '/logs',
+      name: 'logs',
+      component: () => import('@/views/LogsView.vue'),
+    },
+    {
       path: '/map-only',
       name: 'map-only',
       component: MapView,
@@ -54,6 +59,12 @@ const router = createRouter({
       path: '/stream-only',
       name: 'stream-only',
       component: () => import('@/views/BeaconStreamView.vue'),
+      meta: { isPopOut: true },
+    },
+    {
+      path: '/logs-only',
+      name: 'logs-only',
+      component: () => import('@/views/LogsView.vue'),
       meta: { isPopOut: true },
     },
   ],

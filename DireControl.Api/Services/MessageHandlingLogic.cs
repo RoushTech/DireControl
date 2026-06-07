@@ -66,13 +66,13 @@ internal static class MessageHandlingLogic
             if (!string.IsNullOrEmpty(candidate))
             {
                 var senderEnd = candidate.IndexOf('>');
-                innerRaw    = candidate;
+                innerRaw = candidate;
                 innerSender = senderEnd > 0 ? candidate[..senderEnd].Trim() : candidate;
                 return true;
             }
         }
 
-        innerRaw    = string.Empty;
+        innerRaw = string.Empty;
         innerSender = string.Empty;
         return false;
     }

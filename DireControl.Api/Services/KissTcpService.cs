@@ -223,11 +223,11 @@ public sealed class KissTcpService(
             var chars = new char[6];
             for (var i = 0; i < 6; i++)
                 chars[i] = (char)(buf[offset + i] >> 1);
-            var call     = new string(chars).TrimEnd();
+            var call = new string(chars).TrimEnd();
             var ssidByte = buf[offset + 6];
-            var ssid     = (ssidByte >> 1) & 0x0F;
-            var hBit     = (ssidByte & 0x80) != 0;
-            var endBit   = (ssidByte & 0x01) != 0;
+            var ssid = (ssidByte >> 1) & 0x0F;
+            var hBit = (ssidByte & 0x80) != 0;
+            var endBit = (ssidByte & 0x01) != 0;
             return (call, ssid, hBit, endBit);
         }
 
@@ -237,22 +237,22 @@ public sealed class KissTcpService(
             return star ? s + "*" : s;
         }
 
-        var (destCall, destSsid, _, _)    = DecodeAddr(data, 0);
-        var tocall                         = FormatCall(destCall, destSsid);
+        var (destCall, destSsid, _, _) = DecodeAddr(data, 0);
+        var tocall = FormatCall(destCall, destSsid);
 
         var (srcCall, srcSsid, _, srcEnd) = DecodeAddr(data, 7);
-        var source                         = FormatCall(srcCall, srcSsid);
+        var source = FormatCall(srcCall, srcSsid);
 
         var viaList = new List<string>();
-        var pos     = 14;
-        var endBit  = srcEnd;
+        var pos = 14;
+        var endBit = srcEnd;
 
         while (!endBit && pos + 7 <= data.Count)
         {
             var (repCall, repSsid, hBit, rEnd) = DecodeAddr(data, pos);
             viaList.Add(FormatCall(repCall, repSsid, hBit));
             endBit = rEnd;
-            pos   += 7;
+            pos += 7;
         }
 
         // Skip control (1 byte) and PID (1 byte) to reach the info field.
@@ -260,7 +260,7 @@ public sealed class KissTcpService(
         if (pos > data.Count)
             return string.Empty;
 
-        var info     = Encoding.ASCII.GetString(data.ToArray(), pos, data.Count - pos);
+        var info = Encoding.ASCII.GetString(data.ToArray(), pos, data.Count - pos);
         var pathPart = viaList.Count > 0 ? "," + string.Join(",", viaList) : string.Empty;
 
         return $"{source}>{tocall}{pathPart}:{info}";

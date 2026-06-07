@@ -1,5 +1,6 @@
 using DireControl.Api;
 using DireControl.Api.Hubs;
+using DireControl.Api.Logging;
 using DireControl.Api.Services;
 using DireControl.Api.Services.Weather;
 using DireControl.Data;
@@ -13,7 +14,14 @@ var config = builder.Configuration;
 
 config.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
 
+// Runtime, DB-backed log-level overrides. Added last so they take precedence over
+// appsettings; updating them at runtime reloads the logging filters live.
+var runtimeLoggingSource = new RuntimeLoggingConfigSource();
+((IConfigurationBuilder)config).Add(runtimeLoggingSource);
+
 services
+    .AddSingleton(runtimeLoggingSource)
+    .AddSingleton<LogLevelService>()
     .Configure<DireControlOptions>(config.GetSection(DireControlOptions.Section))
     .Configure<DirewolfOptions>(config.GetSection(DirewolfOptions.Section))
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
@@ -85,6 +93,9 @@ services
     .AddHostedService<MessageRetryService>()
     .AddHostedService<WeatherCacheService>()
     .AddHostedService<StatisticsAggregationService>()
+    .AddHostedService<LogBroadcastService>()
+    .AddSingleton<LogStreamBroadcaster>()
+    .AddSingleton<ILoggerProvider, SignalRLoggerProvider>()
     .AddSingleton<KissConnectionHolder>()
     .AddSingleton<AprsIsReconnectTrigger>()
     .AddSingleton<IAprsIsStatusService, AprsIsStatusService>()
@@ -101,6 +112,7 @@ services
 var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
+await app.Services.GetRequiredService<LogLevelService>().ApplyFromDatabaseAsync();
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
@@ -117,6 +129,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapHub<PacketHub>(PacketHub.HubPath);
+app.MapHub<LogHub>(LogHub.HubPath);
 app.MapFallbackToFile("index.html");
 
 await app.RunAsync();

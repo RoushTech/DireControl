@@ -18,6 +18,7 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<UserSetting> UserSettings => Set<UserSetting>();
     public DbSet<DigipeaterStatistic> DigipeaterStatistics => Set<DigipeaterStatistic>();
     public DbSet<CoverageGridStatistic> CoverageGridStatistics => Set<CoverageGridStatistic>();
+    public DbSet<LogLevelOverride> LogLevelOverrides => Set<LogLevelOverride>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

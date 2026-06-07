@@ -111,9 +111,9 @@ public sealed class AprsIsService(
             // include the parsed server name from the login response line.
             var mapped = state switch
             {
-                AprsConnectionState.Connected    => (AprsIsConnectionState?)AprsIsConnectionState.Connecting,
+                AprsConnectionState.Connected => (AprsIsConnectionState?)AprsIsConnectionState.Connecting,
                 AprsConnectionState.Disconnected => AprsIsConnectionState.Disconnected,
-                _                                => null,
+                _ => null,
             };
             if (mapped is { } s)
                 statusService.SetState(s);

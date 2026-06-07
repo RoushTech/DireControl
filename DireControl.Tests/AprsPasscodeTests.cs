@@ -6,9 +6,9 @@ namespace DireControl.Tests;
 [TestFixture]
 public class AprsPasscodeTests
 {
-    [TestCase("W1AW",   25988)]
+    [TestCase("W1AW", 25988)]
     [TestCase("VK2RXX", 20387)]
-    [TestCase("W3UWU",   9350)]
+    [TestCase("W3UWU", 9350)]
     public void GeneratePasscode_KnownCallsigns_ReturnExpectedValue(string callsign, int expected)
     {
         var result = AprsPasscodeHelper.GeneratePasscode(callsign);

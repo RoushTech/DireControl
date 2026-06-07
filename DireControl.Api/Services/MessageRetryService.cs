@@ -82,7 +82,7 @@ public sealed class MessageRetryService(
                     PacketHub.MessageFailedMethod,
                     new MessageFailedDto
                     {
-                        Id         = message.Id,
+                        Id = message.Id,
                         ToCallsign = message.ToCallsign,
                         RetryCount = message.RetryCount,
                     },
@@ -98,11 +98,11 @@ public sealed class MessageRetryService(
                     PacketHub.MessageRetriedMethod,
                     new MessageRetriedDto
                     {
-                        Id          = message.Id,
-                        RetryCount  = message.RetryCount,
-                        MaxRetries  = message.MaxRetries,
+                        Id = message.Id,
+                        RetryCount = message.RetryCount,
+                        MaxRetries = message.MaxRetries,
                         NextRetryAt = message.NextRetryAt,
-                        LastSentAt  = message.LastSentAt,
+                        LastSentAt = message.LastSentAt,
                     },
                     ct);
             }
