@@ -30,6 +30,19 @@ public class DireControlOptions
     /// <summary>Delay in seconds before the first retry. Doubles on each subsequent attempt.</summary>
     public int InitialRetryDelaySeconds { get; set; } = 30;
 
+    /// <summary>
+    /// How often the scheduled database cleanup (packet pruning + VACUUM) runs, in hours.
+    /// 0 disables the schedule — cleanup then only runs when triggered manually.
+    /// </summary>
+    public int DatabaseCleanupIntervalHours { get; set; } = 24;
+
+    /// <summary>
+    /// Whether a cleanup run also runs VACUUM to reclaim freed disk space after pruning.
+    /// VACUUM rewrites the whole file and needs a brief exclusive lock, so it only runs
+    /// when packets were actually deleted.
+    /// </summary>
+    public bool VacuumOnCleanup { get; set; } = true;
+
     public int GetExpiryMinutes(StationType stationType)
     {
         var key = stationType.ToString();

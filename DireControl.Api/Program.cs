@@ -94,6 +94,8 @@ services
     .AddHostedService<WeatherCacheService>()
     .AddHostedService<StatisticsAggregationService>()
     .AddHostedService<LogBroadcastService>()
+    .AddHostedService<DatabaseCleanupHostedService>()
+    .AddSingleton<DatabaseMaintenanceService>()
     .AddSingleton<LogStreamBroadcaster>()
     .AddSingleton<ILoggerProvider, SignalRLoggerProvider>()
     .AddSingleton<KissConnectionHolder>()

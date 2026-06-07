@@ -7,6 +7,7 @@ import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } f
 import type { RadioDto } from '@/types/radio'
 import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys, RadarProvider } from '@/api/stationsApi'
 import { getWeatherStatus } from '@/api/weatherApi'
+import { getMaintenanceStatus, updateRetention, runCleanup, type CleanupResult } from '@/api/maintenanceApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 import { getSymbolStyle } from '@/utils/aprsIcon'
@@ -304,6 +305,86 @@ let mapMarker: L.Marker | null = null
 let mapCircle: L.Circle | null = null
 let pickingFor: 'geofence' | 'rule' | null = null
 
+// ─── Database maintenance ─────────────────────────────────────────────────────
+const dbSizeBytes = ref(0)
+const cleanupIntervalHours = ref(0)
+const vacuumOnCleanup = ref(true)
+const lastCleanup = ref<CleanupResult | null>(null)
+const cleanupRunning = ref(false)
+const retentionRfDays = ref(0)
+const retentionAprsIsDays = ref(14)
+const retentionOwnDays = ref(0)
+const retentionSaving = ref(false)
+const retentionSaveError = ref('')
+let cleanupPollTimer: ReturnType<typeof setInterval> | null = null
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = bytes
+  let u = 0
+  while (size >= 1024 && u < units.length - 1) { size /= 1024; u++ }
+  return `${size.toFixed(1)} ${units[u]}`
+}
+
+async function loadMaintenance() {
+  try {
+    const s = await getMaintenanceStatus()
+    dbSizeBytes.value = s.databaseSizeBytes
+    cleanupIntervalHours.value = s.cleanupIntervalHours
+    vacuumOnCleanup.value = s.vacuumOnCleanup
+    lastCleanup.value = s.lastResult
+    cleanupRunning.value = s.isRunning
+    retentionRfDays.value = s.retention.rfDays
+    retentionAprsIsDays.value = s.retention.aprsIsDays
+    retentionOwnDays.value = s.retention.ownDays
+    if (s.isRunning) startCleanupPolling()
+  } catch { /* ignore */ }
+}
+
+async function saveRetention() {
+  retentionSaving.value = true
+  retentionSaveError.value = ''
+  try {
+    await updateRetention({
+      rfDays: Math.max(0, Math.floor(retentionRfDays.value || 0)),
+      aprsIsDays: Math.max(0, Math.floor(retentionAprsIsDays.value || 0)),
+      ownDays: Math.max(0, Math.floor(retentionOwnDays.value || 0)),
+    })
+  } catch {
+    retentionSaveError.value = 'Failed to save retention settings.'
+  } finally {
+    retentionSaving.value = false
+  }
+}
+
+function startCleanupPolling() {
+  if (cleanupPollTimer) return
+  cleanupPollTimer = setInterval(async () => {
+    try {
+      const s = await getMaintenanceStatus()
+      cleanupRunning.value = s.isRunning
+      dbSizeBytes.value = s.databaseSizeBytes
+      lastCleanup.value = s.lastResult
+      if (!s.isRunning) stopCleanupPolling()
+    } catch { /* keep polling */ }
+  }, 1500)
+}
+
+function stopCleanupPolling() {
+  if (cleanupPollTimer) { clearInterval(cleanupPollTimer); cleanupPollTimer = null }
+}
+
+async function runCleanupNow() {
+  cleanupRunning.value = true
+  try {
+    await runCleanup()
+    startCleanupPolling()
+  } catch {
+    cleanupRunning.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     const s = await getSettings()
@@ -324,10 +405,11 @@ onMounted(async () => {
     selectedRadarProvider.value = status.radarProvider as RadarProvider
     rvProKeyConfigured.value = status.rainViewerProKeyConfigured
   } catch { /* ignore */ }
-  await Promise.all([loadRadios(), loadGeofences(), loadRules()])
+  await Promise.all([loadRadios(), loadGeofences(), loadRules(), loadMaintenance()])
 })
 
 onUnmounted(() => {
+  stopCleanupPolling()
   if (map) {
     map.remove()
     map = null
@@ -1121,6 +1203,109 @@ async function confirmDelete() {
       >
         {{ aprsIsSaveError }}
       </v-alert>
+    </v-card>
+
+    <!-- ================================================================ -->
+    <!-- Database maintenance -->
+    <!-- ================================================================ -->
+    <div class="section-header d-flex align-center mb-2 mt-6">
+      <span class="text-h6">Database Maintenance</span>
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <div class="d-flex align-center mb-4">
+        <div>
+          <div class="text-caption text-medium-emphasis">Database size</div>
+          <div class="text-h6">{{ formatBytes(dbSizeBytes) }}</div>
+        </div>
+        <v-spacer />
+        <v-btn
+          color="primary"
+          :loading="cleanupRunning"
+          :disabled="cleanupRunning"
+          prepend-icon="mdi-broom"
+          @click="runCleanupNow"
+        >
+          {{ cleanupRunning ? 'Cleaning…' : 'Run Cleanup Now' }}
+        </v-btn>
+      </div>
+
+      <div class="text-body-2 mb-2">
+        Packet retention — how long to keep received packets before pruning.
+        <strong>0 = keep forever.</strong>
+      </div>
+
+      <div class="d-flex flex-wrap ga-4 mb-1">
+        <v-text-field
+          v-model.number="retentionRfDays"
+          type="number"
+          min="0"
+          label="RF (days)"
+          density="compact"
+          variant="outlined"
+          hide-details
+          style="max-width: 160px"
+        />
+        <v-text-field
+          v-model.number="retentionAprsIsDays"
+          type="number"
+          min="0"
+          label="APRS-IS (days)"
+          density="compact"
+          variant="outlined"
+          hide-details
+          style="max-width: 160px"
+        />
+        <v-text-field
+          v-model.number="retentionOwnDays"
+          type="number"
+          min="0"
+          label="Own (days)"
+          density="compact"
+          variant="outlined"
+          hide-details
+          style="max-width: 160px"
+        />
+        <v-btn
+          variant="tonal"
+          color="primary"
+          :loading="retentionSaving"
+          prepend-icon="mdi-content-save"
+          @click="saveRetention"
+        >
+          Save
+        </v-btn>
+      </div>
+
+      <v-alert v-if="retentionSaveError" type="error" variant="tonal" density="compact" class="mt-2">
+        {{ retentionSaveError }}
+      </v-alert>
+
+      <div class="text-caption text-medium-emphasis mt-3">
+        Cleanup runs automatically
+        <template v-if="cleanupIntervalHours > 0">every {{ cleanupIntervalHours }}h</template>
+        <template v-else>only when triggered manually</template>,
+        and {{ vacuumOnCleanup ? 'reclaims freed space (VACUUM)' : 'does not VACUUM' }} after pruning.
+      </div>
+
+      <v-divider class="my-3" />
+
+      <div class="text-caption text-medium-emphasis mb-1">Last cleanup</div>
+      <div v-if="!lastCleanup" class="text-body-2 text-medium-emphasis">No cleanup has run yet.</div>
+      <div v-else-if="lastCleanup.error" class="text-body-2 text-error">
+        Failed: {{ lastCleanup.error }}
+      </div>
+      <div v-else class="text-body-2">
+        Deleted
+        <strong>{{ (lastCleanup.rfDeleted + lastCleanup.aprsIsDeleted + lastCleanup.ownDeleted).toLocaleString() }}</strong>
+        packets ({{ lastCleanup.aprsIsDeleted.toLocaleString() }} APRS-IS,
+        {{ lastCleanup.rfDeleted.toLocaleString() }} RF,
+        {{ lastCleanup.ownDeleted.toLocaleString() }} Own) ·
+        {{ formatBytes(lastCleanup.sizeBeforeBytes) }} → {{ formatBytes(lastCleanup.sizeAfterBytes) }}
+        <span v-if="lastCleanup.vacuumed" class="text-success">· vacuumed</span>
+        <span v-else-if="lastCleanup.vacuumError" class="text-warning">· VACUUM skipped (busy)</span>
+        <span class="text-medium-emphasis"> · {{ new Date(lastCleanup.completedAt).toLocaleString() }}</span>
+      </div>
     </v-card>
 
     <!-- Delete confirmation dialog -->

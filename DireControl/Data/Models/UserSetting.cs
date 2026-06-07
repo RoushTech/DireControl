@@ -42,6 +42,23 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// </summary>
     public int DeduplicationWindowSeconds { get; set; } = 60;
 
+    // ─── Packet retention (database cleanup) ─────────────────────────────────
+
+    /// <summary>
+    /// Days of RF-received packet history to keep. 0 (the default) means keep
+    /// forever — RF traffic is your own station's heard traffic and is small.
+    /// </summary>
+    public int PacketRetentionRfDays { get; set; } = 0;
+
+    /// <summary>
+    /// Days of APRS-IS packet history to keep before pruning. APRS-IS is the
+    /// high-volume internet feed, so this defaults to a short window. 0 = keep forever.
+    /// </summary>
+    public int PacketRetentionAprsIsDays { get; set; } = 14;
+
+    /// <summary>Days of own-transmitted packet history to keep. 0 = keep forever.</summary>
+    public int PacketRetentionOwnDays { get; set; } = 0;
+
     // ─── Weather overlay API keys ─────────────────────────────────────────────
 
     /// <summary>OpenWeatherMap API key used for the wind tile overlay.</summary>
