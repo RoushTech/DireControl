@@ -2,6 +2,7 @@ using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -11,6 +12,7 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/maintenance")]
 public class MaintenanceController(
     DatabaseMaintenanceService maintenance,
+    PacketReprocessingService reprocessor,
     IOptions<DireControlOptions> options,
     DireControlContext db) : ControllerBase
 {
@@ -64,6 +66,55 @@ public class MaintenanceController(
     {
         if (!maintenance.TryStart(options.Value.VacuumOnCleanup))
             return Conflict("A cleanup run is already in progress.");
+
+        return Accepted();
+    }
+
+    /// <summary>Current packet-reprocessing progress and the last completed run.</summary>
+    [HttpGet("reprocess")]
+    public ActionResult<ReprocessStatusDto> GetReprocessStatus()
+    {
+        return Ok(new ReprocessStatusDto
+        {
+            IsRunning = reprocessor.IsRunning,
+            Processed = reprocessor.Processed,
+            Total = reprocessor.Total,
+            CurrentParserVersion = ParserVersionInfo.Current,
+            LastResult = reprocessor.LastResult,
+        });
+    }
+
+    /// <summary>
+    /// Triggers a packet-reprocessing run in the background. With an empty body it drains
+    /// all rows below the current parser version; the optional filter narrows the scope.
+    /// </summary>
+    [HttpPost("reprocess")]
+    public ActionResult RunReprocess([FromBody] ReprocessRequest? request)
+    {
+        request ??= new ReprocessRequest();
+
+        PacketSource? source = null;
+        if (!string.IsNullOrWhiteSpace(request.Source))
+        {
+            if (!Enum.TryParse<PacketSource>(request.Source, ignoreCase: true, out var parsed))
+                return BadRequest($"Unknown source '{request.Source}'. Expected Rf, AprsIs, or Own.");
+            source = parsed;
+        }
+
+        if (request.After is { } a && request.Before is { } b && a >= b)
+            return BadRequest("'after' must be earlier than 'before'.");
+
+        var filter = new ReprocessFilter
+        {
+            Force = request.Force,
+            Source = source,
+            After = request.After,
+            Before = request.Before,
+            DeleteOrphanStations = request.DeleteOrphanStations,
+        };
+
+        if (!reprocessor.TryStart(filter))
+            return Conflict("A reprocessing run is already in progress.");
 
         return Accepted();
     }

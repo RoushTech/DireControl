@@ -164,11 +164,30 @@ public sealed class AprsPacketParsingService(
                 db.ChangeTracker.Clear();
                 await db.Packets
                     .Where(p => p.Id == packet.Id)
-                    .ExecuteUpdateAsync(s => s.SetProperty(p => p.ParsedType, OurPacketType.Unparseable), ct);
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(p => p.ParsedType, OurPacketType.Unparseable)
+                        .SetProperty(p => p.ParserVersion, ParserVersionInfo.Current), ct);
             }
         }
 
         await UpdateStationStatisticsAsync(db, callsigns, ct);
+    }
+
+    /// <summary>
+    /// Re-derives all of a packet's structured fields from its <c>RawPacket</c> without
+    /// firing any of the reactive side effects of live parsing (inbox additions,
+    /// auto-ACK/replies, station-type promotion, mode/frequency updates, statistics,
+    /// own-beacon detection, hub broadcasts, alerts). Used by
+    /// <see cref="PacketReprocessingService"/> to repair historical rows after a parser
+    /// change. Stamps <see cref="DireControl.Data.Models.Packet.ParserVersion"/>.
+    /// The caller is responsible for ensuring the derived <c>StationCallsign</c> has a
+    /// backing <c>Station</c> row and for persisting the changes.
+    /// </summary>
+    public async Task ReprocessOneAsync(DbPacket packet, DireControlContext db, string ourCallsign, CancellationToken ct)
+    {
+        var discardedEffects = new List<MessageEffect>();
+        await ParsePacketAsync(packet, db, ourCallsign, discardedEffects, ct, reprocess: true);
+        await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct, reprocess: true);
     }
 
     private async Task ApplyMessageEffectsAsync(
@@ -232,7 +251,7 @@ public sealed class AprsPacketParsingService(
         }
     }
 
-    private async Task ParsePacketAsync(DbPacket packet, DireControlContext db, string ourCallsign, List<MessageEffect> effects, CancellationToken ct)
+    private async Task ParsePacketAsync(DbPacket packet, DireControlContext db, string ourCallsign, List<MessageEffect> effects, CancellationToken ct, bool reprocess = false)
     {
         var aprs = new AprsSharp.AprsParser.Packet(packet.RawPacket);
 
@@ -241,7 +260,16 @@ public sealed class AprsPacketParsingService(
         // Extract path from the raw TNC2 string.  ParseTnc2Header reads directly
         // from RawPacket so asterisk markers from the AX.25 H-bit are preserved;
         // the returned RawPath already excludes the TOCALL.
-        var (_, tocall, rawPath) = AprsPathParser.ParseTnc2Header(packet.RawPacket);
+        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(packet.RawPacket);
+
+        // When reprocessing, re-derive StationCallsign from the TNC2 header (the outer
+        // source) to repair rows whose value was corrupted by older parsers. The live
+        // path leaves StationCallsign exactly as ingest stored it (the preloaded Station
+        // and FK depend on it), so live behaviour is unchanged.
+        if (reprocess && !string.IsNullOrWhiteSpace(source) && packet.RawPacket.Contains('>'))
+            packet.StationCallsign = source;
+
+        packet.ParserVersion = ParserVersionInfo.Current;
 
         packet.Path = rawPath;   // e.g. "WE4MB-3*,WIDE2" — TOCALL absent, asterisks intact
 
@@ -259,15 +287,15 @@ public sealed class AprsPacketParsingService(
         switch (aprs.InfoField)
         {
             case WeatherInfo weather:
-                HandleWeather(packet, weather, db);
+                HandleWeather(packet, weather, db, reprocess);
                 break;
 
             case PositionlessWeatherInfo plWx:
-                HandlePositionlessWeather(packet, plWx, db);
+                HandlePositionlessWeather(packet, plWx, db, reprocess);
                 break;
 
             case MicEInfo micE:
-                HandleMicE(packet, micE, db);
+                HandleMicE(packet, micE, db, reprocess);
                 break;
 
             case ObjectInfo obj:
@@ -279,11 +307,11 @@ public sealed class AprsPacketParsingService(
                 break;
 
             case PositionInfo position:
-                HandlePosition(packet, position, db);
+                HandlePosition(packet, position, db, reprocess);
                 break;
 
             case MessageInfo message:
-                await HandleMessageAsync(packet, message, db, ourCallsign, effects, ct);
+                await HandleMessageAsync(packet, message, db, ourCallsign, effects, ct, reprocess: reprocess);
                 break;
 
             case StatusInfo status:
@@ -291,15 +319,17 @@ public sealed class AprsPacketParsingService(
                 break;
 
             case ThirdPartyTrafficInfo thirdParty:
-                await HandleThirdPartyAsync(packet, thirdParty, db, ourCallsign, effects, ct);
+                await HandleThirdPartyAsync(packet, thirdParty, db, ourCallsign, effects, ct, reprocess);
                 break;
         }
 
         // ── Mode / frequency / gateway detection ────────────────────────────────
+        // Skipped when reprocessing: these mutate live Station state from the packet,
+        // and replaying historical packets must not overwrite a station's current mode.
         var mode = DetectMode(tocall, packet.Comment);
         var freq = ParseFrequency(packet.Comment);
 
-        if (mode != null || freq != null)
+        if (!reprocess && (mode != null || freq != null))
         {
             UpdateStation(db, packet.StationCallsign, s =>
             {
@@ -472,7 +502,7 @@ public sealed class AprsPacketParsingService(
     // Per-type handlers
     // -------------------------------------------------------------------------
 
-    private void HandlePosition(DbPacket packet, PositionInfo info, DireControlContext db)
+    private void HandlePosition(DbPacket packet, PositionInfo info, DireControlContext db, bool reprocess = false)
     {
         packet.Comment = info.Comment ?? string.Empty;
 
@@ -484,6 +514,11 @@ public sealed class AprsPacketParsingService(
                 packet.Latitude = coord.Latitude;
                 packet.Longitude = coord.Longitude;
             }
+
+            // Reprocessing must not replay this packet's position/symbol onto the live
+            // Station record — only the packet's own fields above are re-derived.
+            if (reprocess)
+                return;
 
             var symbol = $"{pos.SymbolTableIdentifier}{pos.SymbolCode}";
 
@@ -522,9 +557,9 @@ public sealed class AprsPacketParsingService(
         }
     }
 
-    private void HandleWeather(DbPacket packet, WeatherInfo info, DireControlContext db)
+    private void HandleWeather(DbPacket packet, WeatherInfo info, DireControlContext db, bool reprocess = false)
     {
-        HandlePosition(packet, info, db);
+        HandlePosition(packet, info, db, reprocess);
 
         // Rainfall fields in AprsSharp are in 100ths of an inch; convert to inches.
         // Pressure in AprsSharp is in tenths of mb; convert to mb.
@@ -542,6 +577,9 @@ public sealed class AprsPacketParsingService(
             RainfallSinceMidnightIn = info.RainfallSinceMidnight.HasValue ? info.RainfallSinceMidnight.Value / 100.0 : null,
         };
 
+        if (reprocess)
+            return;
+
         UpdateStation(db, packet.StationCallsign, s =>
         {
             s.IsWeatherStation = true;
@@ -549,7 +587,7 @@ public sealed class AprsPacketParsingService(
         });
     }
 
-    private void HandlePositionlessWeather(DbPacket packet, PositionlessWeatherInfo info, DireControlContext db)
+    private void HandlePositionlessWeather(DbPacket packet, PositionlessWeatherInfo info, DireControlContext db, bool reprocess = false)
     {
         logger.LogDebug("APRSSharp positionless weather pressure={Pressure} for packet {Raw}", info.BarometricPressure, packet.RawPacket);
         packet.Comment = info.Comment ?? string.Empty;
@@ -566,6 +604,9 @@ public sealed class AprsPacketParsingService(
             RainfallSinceMidnightIn = info.RainfallSinceMidnight.HasValue ? info.RainfallSinceMidnight.Value / 100.0 : null,
         };
 
+        if (reprocess)
+            return;
+
         UpdateStation(db, packet.StationCallsign, s =>
         {
             s.IsWeatherStation = true;
@@ -573,7 +614,7 @@ public sealed class AprsPacketParsingService(
         });
     }
 
-    private void HandleMicE(DbPacket packet, MicEInfo info, DireControlContext db)
+    private void HandleMicE(DbPacket packet, MicEInfo info, DireControlContext db, bool reprocess = false)
     {
         packet.Comment = info.Comment ?? string.Empty;
 
@@ -585,6 +626,11 @@ public sealed class AprsPacketParsingService(
                 packet.Latitude = coord.Latitude;
                 packet.Longitude = coord.Longitude;
             }
+
+            // Reprocessing must not replay this packet's position/symbol onto the live
+            // Station record — only the packet's own fields above are re-derived.
+            if (reprocess)
+                return;
 
             var symbol = $"{pos.SymbolTableIdentifier}{pos.SymbolCode}";
 
@@ -649,14 +695,15 @@ public sealed class AprsPacketParsingService(
         DireControlContext db,
         string ourCallsign,
         List<MessageEffect> effects,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool reprocess = false)
     {
         if (info.InnerPacket?.InfoField is MessageInfo innerMsg)
         {
             packet.ParsedType = OurPacketType.Message;
             var innerSender = info.InnerPacket.Sender ?? packet.StationCallsign;
             await HandleMessageAsync(packet, innerMsg, db, ourCallsign, effects, ct,
-                senderCallsignOverride: innerSender);
+                senderCallsignOverride: innerSender, reprocess: reprocess);
         }
     }
 
@@ -667,7 +714,8 @@ public sealed class AprsPacketParsingService(
         string ourCallsign,
         List<MessageEffect> effects,
         CancellationToken ct,
-        string? senderCallsignOverride = null)
+        string? senderCallsignOverride = null,
+        bool reprocess = false)
     {
         var fromCallsign = senderCallsignOverride ?? packet.StationCallsign;
         var addressee = info.Addressee ?? string.Empty;
@@ -680,6 +728,12 @@ public sealed class AprsPacketParsingService(
             Text = body,
             MessageId = messageId,
         };
+
+        // Everything below mutates external state (inbox rows, auto-ACK/send effects).
+        // When reprocessing historical packets we only re-derive the row's fields above
+        // and must not replay those side effects.
+        if (reprocess)
+            return;
 
         if (string.IsNullOrWhiteSpace(ourCallsign))
             return;
@@ -760,7 +814,8 @@ public sealed class AprsPacketParsingService(
         DbPacket packet,
         DireControlContext db,
         string ourCallsign,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool reprocess = false)
     {
         var opts = options.Value;
 
@@ -797,7 +852,9 @@ public sealed class AprsPacketParsingService(
                 ?? await db.Stations.FindAsync(new object?[] { hop.Callsign }, ct);
 
             // Classify the station based on its role in this packet's path.
-            if (station != null)
+            // Skipped during reprocessing — promoting station types from replayed
+            // historical packets would mutate current station state.
+            if (!reprocess && station != null)
             {
                 if (hop.IsIgate &&
                     station.StationType is StationType.Unknown or StationType.Digipeater)

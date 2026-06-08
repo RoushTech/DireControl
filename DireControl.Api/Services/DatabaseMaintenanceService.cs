@@ -162,6 +162,53 @@ public sealed class DatabaseMaintenanceService(
         return total;
     }
 
+    /// <summary>
+    /// Deletes <see cref="Station"/> rows that have no packets and are not on the watch
+    /// list, in batches. Orphans accumulate when packet retention prunes a station's last
+    /// packet, and when reprocessing repairs a corrupted StationCallsign (leaving the old
+    /// garbage station behind). The cascade FK removes each station's StationStatistic.
+    /// Returns the number of stations deleted.
+    /// </summary>
+    public async Task<int> DeleteOrphanStationsAsync(CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != ConnectionState.Open)
+            await conn.OpenAsync(ct);
+
+        await ExecAsync(conn, "PRAGMA busy_timeout=120000;", ct);
+        // Ensure the StationStatistic cascade fires on the raw DELETE below, regardless
+        // of how this connection was opened (foreign keys default off in SQLite).
+        await ExecAsync(conn, "PRAGMA foreign_keys=ON;", ct);
+
+        var total = 0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                "DELETE FROM Stations WHERE Callsign IN " +
+                "(SELECT s.Callsign FROM Stations s " +
+                " WHERE s.IsOnWatchList = 0 " +
+                "   AND NOT EXISTS (SELECT 1 FROM Packets p WHERE p.StationCallsign = s.Callsign) " +
+                " LIMIT $lim);";
+            AddParam(cmd, "$lim", BatchSize);
+
+            var deleted = await cmd.ExecuteNonQueryAsync(ct);
+            total += deleted;
+
+            if (deleted < BatchSize)
+                break;
+        }
+
+        if (total > 0)
+            logger.LogInformation("Deleted {Count} orphan stations (no packets, not watch-listed).", total);
+
+        return total;
+    }
+
     /// <summary>Current database file size in bytes (page_count × page_size).</summary>
     public async Task<long> GetCurrentSizeBytesAsync(CancellationToken ct = default)
     {

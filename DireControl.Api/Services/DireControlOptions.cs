@@ -43,6 +43,13 @@ public class DireControlOptions
     /// </summary>
     public bool VacuumOnCleanup { get; set; } = true;
 
+    /// <summary>
+    /// When true, a packet-reprocessing drain runs shortly after startup to re-derive any
+    /// rows below the current parser version (e.g. after a parser fix + version bump).
+    /// Default false: reprocessing is then only triggered manually via the maintenance API.
+    /// </summary>
+    public bool ReprocessStaleOnStartup { get; set; }
+
     public int GetExpiryMinutes(StationType stationType)
     {
         var key = stationType.ToString();

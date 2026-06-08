@@ -13,6 +13,14 @@ public class Packet : IEntityTypeConfiguration<Packet>
     public required string RawPacket { get; set; }
     public PacketType ParsedType { get; set; } = PacketType.Unknown;
 
+    /// <summary>
+    /// Version of the parsing logic that last populated this row's derived fields.
+    /// Rows whose value is below <c>ParserVersionInfo.Current</c> were parsed by an
+    /// older (potentially buggy) parser and are eligible for reprocessing. A value of
+    /// 0 means the row predates parser versioning.
+    /// </summary>
+    public int ParserVersion { get; set; }
+
     /// <summary>How this packet reached DireControl (RF via Direwolf KISS, or APRS-IS).</summary>
     public PacketSource Source { get; set; } = PacketSource.Rf;
 
@@ -47,6 +55,7 @@ public class Packet : IEntityTypeConfiguration<Packet>
         builder.HasIndex(p => p.StationCallsign);
         builder.HasIndex(p => p.ReceivedAt);
         builder.HasIndex(p => new { p.StationCallsign, p.ReceivedAt });
+        builder.HasIndex(p => p.ParserVersion);
 
         builder.Property(p => p.ResolvedPath)
                .HasConversion(

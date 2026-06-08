@@ -86,7 +86,10 @@ services
         })
         .Services
     .AddHostedService<KissTcpService>()
-    .AddHostedService<AprsPacketParsingService>()
+    .AddSingleton<AprsPacketParsingService>()
+    .AddHostedService(sp => sp.GetRequiredService<AprsPacketParsingService>())
+    .AddSingleton<PacketReprocessingService>()
+    .AddHostedService<ReprocessStartupDrainService>()
     .AddHostedService<AprsIsService>()
     .AddHostedService<StationExpiryService>()
     .AddHostedService<AlertingService>()
