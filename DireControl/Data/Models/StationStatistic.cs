@@ -7,6 +7,8 @@ public class StationStatistic : IEntityTypeConfiguration<StationStatistic>
 {
     public required string Callsign { get; set; }
     public int PacketsToday { get; set; }
+    // Maintained incrementally by the parser; seeded with a one-time COUNT when 0.
+    public int TotalPackets { get; set; }
     public double AveragePacketsPerHour { get; set; }
     public int LongestGapMinutes { get; set; }
     public DateTime LastComputedAt { get; set; }

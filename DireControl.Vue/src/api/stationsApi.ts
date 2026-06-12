@@ -103,6 +103,7 @@ export async function updateAprsIsSettings(payload: {
   aprsIsHost: string
   aprsIsPort: number
   aprsIsPasscodeOverride: number | null
+  clearAprsIsPasscodeOverride: boolean
   aprsIsFilter: string
   deduplicationWindowSeconds: number
 }): Promise<void> {

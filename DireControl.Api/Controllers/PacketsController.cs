@@ -10,11 +10,18 @@ namespace DireControl.Api.Controllers;
 public class PacketsController(DireControlContext db) : ControllerBase
 {
     [HttpGet("positions")]
-    public async Task<ActionResult<IReadOnlyList<PacketPositionDto>>> GetPositions(CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<PacketPositionDto>>> GetPositions(
+        [FromQuery] int hours = 24,
+        CancellationToken ct = default)
     {
+        // Time-bounded so the heatmap doesn't pull the entire position history
+        // on every toggle; the row cap is a hard backstop.
+        hours = Math.Clamp(hours, 1, 24 * 30);
+        var since = DateTime.UtcNow.AddHours(-hours);
+
         var positions = await db.Packets
             .AsNoTracking()
-            .Where(p => p.Latitude != null && p.Longitude != null)
+            .Where(p => p.Latitude != null && p.Longitude != null && p.ReceivedAt >= since)
             .OrderByDescending(p => p.ReceivedAt)
             .Take(50_000)
             .Select(p => new PacketPositionDto

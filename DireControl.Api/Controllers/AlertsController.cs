@@ -12,8 +12,12 @@ public class AlertsController(DireControlContext db) : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<AlertDto>>> GetAlerts(
         [FromQuery] bool? unacknowledged = null,
+        [FromQuery] int limit = 500,
         CancellationToken ct = default)
     {
+        // Alerts accrue indefinitely; cap what one request can pull.
+        limit = Math.Clamp(limit, 1, 2000);
+
         var query = db.Alerts.AsNoTracking();
 
         if (unacknowledged == true)
@@ -21,6 +25,7 @@ public class AlertsController(DireControlContext db) : ControllerBase
 
         var alerts = await query
             .OrderByDescending(a => a.TriggeredAt)
+            .Take(limit)
             .ToListAsync(ct);
 
         var dtos = alerts.Select(a => new AlertDto

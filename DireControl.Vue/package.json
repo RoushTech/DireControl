@@ -15,7 +15,7 @@
     "format": "oxfmt src/"
   },
   "dependencies": {
-    "@mdi/font": "^7.4.47",
+    "@mdi/js": "^7.4.47",
     "@microsoft/signalr": "^10.0.0",
     "axios": "^1.13.6",
     "chart.js": "^4.5.1",

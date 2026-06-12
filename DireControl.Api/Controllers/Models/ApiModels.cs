@@ -115,7 +115,7 @@ public sealed class SettingsDto
     public bool AprsIsEnabled { get; init; }
     public required string AprsIsHost { get; init; }
     public int AprsIsPort { get; init; }
-    public int? AprsIsPasscodeOverride { get; init; }
+    public bool AprsIsPasscodeOverrideConfigured { get; init; }
     public int AprsIsPasscodeComputed { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
@@ -126,7 +126,10 @@ public sealed class UpdateAprsIsSettingsRequest
     public bool AprsIsEnabled { get; init; }
     public required string AprsIsHost { get; init; }
     public int AprsIsPort { get; init; }
+    // Write-only secret: null leaves the stored override unchanged unless
+    // ClearAprsIsPasscodeOverride is set.
     public int? AprsIsPasscodeOverride { get; init; }
+    public bool ClearAprsIsPasscodeOverride { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
 }

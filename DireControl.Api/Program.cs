@@ -27,7 +27,9 @@ services
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
     .AddOpenApi()
     .AddDbContext<DireControlContext>(options =>
-        options.UseSqlite(config.GetConnectionString("Default") ?? "Data Source=direcontrol.db"))
+        // Default Timeout doubles as SQLite's busy timeout: writers wait out
+        // maintenance locks (VACUUM) instead of failing with "database is locked".
+        options.UseSqlite(config.GetConnectionString("Default") ?? "Data Source=direcontrol.db;Default Timeout=120"))
     .AddControllers()
         .AddJsonOptions(options =>
         {

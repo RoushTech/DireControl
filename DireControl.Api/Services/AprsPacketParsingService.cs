@@ -116,16 +116,21 @@ public sealed class AprsPacketParsingService(
 
         logger.LogDebug("Parsing batch of {Count} packets.", packets.Count);
 
-        // Pre-load all stations for this batch so UpdateStation can find them in
-        // db.Stations.Local without issuing a separate query per packet.
+        // Pre-load all stations this batch can touch — senders plus digipeater hops
+        // from the raw path headers — so path resolution never queries per packet.
         var callsigns = packets.Select(p => p.StationCallsign).Distinct().ToList();
-        await db.Stations.Where(s => callsigns.Contains(s.Callsign)).LoadAsync(ct);
+        var preloadCallsigns = callsigns
+            .Concat(packets.SelectMany(HopCallsignsFromHeader))
+            .Distinct()
+            .ToList();
+        await db.Stations.Where(s => preloadCallsigns.Contains(s.Callsign)).LoadAsync(ct);
 
         var ourCallsign = options.Value.OurCallsign.Trim();
 
         // Pre-load active radios so own-beacon detection doesn't need per-packet DB queries.
         var activeRadios = await db.Radios.Where(r => r.IsActive).ToListAsync(ct);
 
+        var parsed = new List<(DbPacket Packet, List<MessageEffect> Effects)>();
         foreach (var packet in packets)
         {
             var effects = new List<MessageEffect>();
@@ -133,44 +138,78 @@ public sealed class AprsPacketParsingService(
             {
                 await ParsePacketAsync(packet, db, ourCallsign, effects, ct);
                 await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct);
-                await db.SaveChangesAsync(ct);
-
-                await CheckOwnBeaconAsync(packet, activeRadios, db, ct);
-                await ApplyMessageEffectsAsync(effects, db, ourCallsign, ct);
-
-                var update = new PacketBroadcastDto
-                {
-                    Id = packet.Id,
-                    Callsign = packet.StationCallsign,
-                    ParsedType = packet.ParsedType.ToString(),
-                    Source = packet.Source,
-                    ReceivedAt = packet.ReceivedAt,
-                    Latitude = packet.Latitude,
-                    Longitude = packet.Longitude,
-                    Summary = BuildSummary(packet),
-                    HopCount = packet.HopCount,
-                    ResolvedPath = packet.ResolvedPath,
-                };
-
-                await hubContext.Clients.All.SendAsync(PacketHub.PacketReceivedMethod, update, ct);
-
-                // Notify alerting service of updated station
-                alertChannel.Writer.TryWrite(packet.StationCallsign);
+                parsed.Add((packet, effects));
             }
             catch (Exception ex)
             {
                 logger.LogTrace(ex, "Could not parse packet {Id} ({Raw}).", packet.Id, packet.RawPacket);
-                // Discard any partial changes and mark this packet so it is not re-queued.
-                db.ChangeTracker.Clear();
-                await db.Packets
-                    .Where(p => p.Id == packet.Id)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(p => p.ParsedType, OurPacketType.Unparseable)
-                        .SetProperty(p => p.ParserVersion, ParserVersionInfo.Current), ct);
+                // Revert this packet's fields and mark it Unparseable so it is not
+                // re-queued. Parse failures throw inside AprsSharp before any station
+                // mutation, so reverting the packet row alone is sufficient.
+                var entry = db.Entry(packet);
+                entry.CurrentValues.SetValues(entry.OriginalValues);
+                packet.ParsedType = OurPacketType.Unparseable;
+                packet.ParserVersion = ParserVersionInfo.Current;
             }
         }
 
-        await UpdateStationStatisticsAsync(db, callsigns, ct);
+        // One commit for the whole batch instead of one per packet.
+        await db.SaveChangesAsync(ct);
+
+        foreach (var (packet, effects) in parsed)
+        {
+            await CheckOwnBeaconAsync(packet, activeRadios, db, ct);
+            await ApplyMessageEffectsAsync(effects, db, ourCallsign, ct);
+
+            var update = new PacketBroadcastDto
+            {
+                Id = packet.Id,
+                Callsign = packet.StationCallsign,
+                ParsedType = packet.ParsedType.ToString(),
+                Source = packet.Source,
+                ReceivedAt = packet.ReceivedAt,
+                Latitude = packet.Latitude,
+                Longitude = packet.Longitude,
+                Summary = BuildSummary(packet),
+                HopCount = packet.HopCount,
+                ResolvedPath = packet.ResolvedPath,
+            };
+
+            await hubContext.Clients.All.SendAsync(PacketHub.PacketReceivedMethod, update, ct);
+
+            // Notify alerting service of updated station
+            alertChannel.Writer.TryWrite(packet.StationCallsign);
+        }
+
+        await UpdateStationStatisticsAsync(db, packets, ct);
+    }
+
+    /// <summary>
+    /// Extracts real digipeater callsigns from a packet's raw TNC2 header without
+    /// fully parsing it, so the batch station preload can cover path-resolution lookups.
+    /// </summary>
+    private static IEnumerable<string> HopCallsignsFromHeader(DbPacket packet)
+    {
+        string rawPath;
+        try
+        {
+            (_, _, rawPath) = AprsPathParser.ParseTnc2Header(packet.RawPacket);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        foreach (var entry in rawPath.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var callsign = entry.TrimEnd('*');
+            if (callsign.Length > 0
+                && !AprsPathParser.IsGenericAlias(callsign)
+                && !AprsPathParser.IsInternetToken(callsign))
+            {
+                yield return callsign;
+            }
+        }
     }
 
     /// <summary>
@@ -338,37 +377,55 @@ public sealed class AprsPacketParsingService(
 
     private async Task UpdateStationStatisticsAsync(
         DireControlContext db,
-        IEnumerable<string> callsigns,
+        IReadOnlyList<DbPacket> batchPackets,
         CancellationToken ct)
     {
         var now = DateTime.UtcNow;
         var todayStart = DateTime.Now.Date.ToUniversalTime();
 
-        foreach (var callsign in callsigns)
+        var byCallsign = batchPackets.GroupBy(p => p.StationCallsign).ToList();
+        var batchCallsigns = byCallsign.Select(g => g.Key).ToList();
+
+        // One query for all stats rows in the batch instead of one per callsign.
+        var statsRows = await db.StationStatistics
+            .Where(ss => batchCallsigns.Contains(ss.Callsign))
+            .ToDictionaryAsync(ss => ss.Callsign, ct);
+
+        foreach (var group in byCallsign)
         {
+            var callsign = group.Key;
             try
             {
                 var station = db.Stations.Local.FirstOrDefault(s => s.Callsign == callsign);
                 if (station is null)
                     continue;
 
-                // Use lightweight COUNT queries instead of loading all timestamps.
-                var totalPackets = await db.Packets
-                    .CountAsync(p => p.StationCallsign == callsign, ct);
+                statsRows.TryGetValue(callsign, out var existing);
+
+                // Counters are maintained incrementally from the batch; a station's
+                // history is COUNTed once ever (new row or pre-TotalPackets rows),
+                // not re-counted every batch.
+                int totalPackets;
+                if (existing is null || existing.TotalPackets == 0)
+                    totalPackets = await db.Packets
+                        .CountAsync(p => p.StationCallsign == callsign, ct);
+                else
+                    totalPackets = existing.TotalPackets + group.Count();
 
                 if (totalPackets == 0)
                     continue;
 
-                var packetsToday = await db.Packets
-                    .CountAsync(p => p.StationCallsign == callsign && p.ReceivedAt >= todayStart, ct);
+                // Day rollover (or first sighting today) re-seeds with a query bounded
+                // to today; otherwise increment from the batch.
+                int packetsToday;
+                if (existing is null || existing.LastComputedAt < todayStart)
+                    packetsToday = await db.Packets
+                        .CountAsync(p => p.StationCallsign == callsign && p.ReceivedAt >= todayStart, ct);
+                else
+                    packetsToday = existing.PacketsToday + group.Count(p => p.ReceivedAt >= todayStart);
 
                 var ageHours = Math.Max(1.0, (now - station.FirstSeen).TotalHours);
                 var averagePerHour = totalPackets / ageHours;
-
-                // Incrementally maintain longest gap: compare the gap between the two
-                // most recent packets against the stored maximum.
-                var existing = await db.StationStatistics
-                    .FirstOrDefaultAsync(ss => ss.Callsign == callsign, ct);
 
                 var longestGapMinutes = existing?.LongestGapMinutes ?? 0;
 
@@ -392,6 +449,7 @@ public sealed class AprsPacketParsingService(
                     {
                         Callsign = callsign,
                         PacketsToday = packetsToday,
+                        TotalPackets = totalPackets,
                         AveragePacketsPerHour = averagePerHour,
                         LongestGapMinutes = longestGapMinutes,
                         LastComputedAt = now,
@@ -400,6 +458,7 @@ public sealed class AprsPacketParsingService(
                 else
                 {
                     existing.PacketsToday = packetsToday;
+                    existing.TotalPackets = totalPackets;
                     existing.AveragePacketsPerHour = averagePerHour;
                     existing.LongestGapMinutes = longestGapMinutes;
                     existing.LastComputedAt = now;
@@ -475,14 +534,15 @@ public sealed class AprsPacketParsingService(
                         }
                     }
                 }
-
-                await db.SaveChangesAsync(ct);
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to update statistics for {Callsign}.", callsign);
             }
         }
+
+        // One commit for the whole batch's statistics.
+        await db.SaveChangesAsync(ct);
     }
 
     private void HandlePosition(DbPacket packet, PositionInfo info, DireControlContext db, bool reprocess = false)

@@ -55,6 +55,8 @@ const aprsIsEnabled = ref(false)
 const aprsIsHost = ref('rotate.aprs2.net')
 const aprsIsPort = ref(14580)
 const aprsIsPasscodeOverride = ref<number | null>(null)
+const aprsIsPasscodeOverrideConfigured = ref(false)
+const clearPasscodeOverride = ref(false)
 const aprsIsPasscodeComputed = ref(0)
 const aprsIsFilter = ref('r/39.0/-98.0/500 t/m')
 const deduplicationWindowSeconds = ref(60)
@@ -71,11 +73,20 @@ async function saveAprsIsSettings() {
       aprsIsEnabled: aprsIsEnabled.value,
       aprsIsHost: aprsIsHost.value.trim(),
       aprsIsPort: aprsIsPort.value,
-      aprsIsPasscodeOverride: aprsIsPasscodeOverride.value,
+      aprsIsPasscodeOverride:
+        !clearPasscodeOverride.value && typeof aprsIsPasscodeOverride.value === 'number'
+          ? aprsIsPasscodeOverride.value
+          : null,
+      clearAprsIsPasscodeOverride: clearPasscodeOverride.value,
       aprsIsFilter: aprsIsFilter.value.trim(),
       deduplicationWindowSeconds: deduplicationWindowSeconds.value,
     })
     aprsIsSaveSuccess.value = true
+    // The override is write-only: track configured state locally, clear the field.
+    if (clearPasscodeOverride.value) aprsIsPasscodeOverrideConfigured.value = false
+    else if (aprsIsPasscodeOverride.value != null) aprsIsPasscodeOverrideConfigured.value = true
+    aprsIsPasscodeOverride.value = null
+    clearPasscodeOverride.value = false
     setTimeout(() => { aprsIsSaveSuccess.value = false }, 3000)
   } catch {
     aprsIsSaveError.value = 'Failed to save APRS-IS settings.'
@@ -393,7 +404,7 @@ onMounted(async () => {
     aprsIsEnabled.value = s.aprsIsEnabled
     aprsIsHost.value = s.aprsIsHost
     aprsIsPort.value = s.aprsIsPort
-    aprsIsPasscodeOverride.value = s.aprsIsPasscodeOverride
+    aprsIsPasscodeOverrideConfigured.value = s.aprsIsPasscodeOverrideConfigured
     aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
     aprsIsFilter.value = s.aprsIsFilter
     deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
@@ -1133,12 +1144,22 @@ async function confirmDelete() {
       </div>
       <v-text-field
         v-model.number="aprsIsPasscodeOverride"
-        label="Passcode override (leave blank to use auto-computed)"
+        :label="aprsIsPasscodeOverrideConfigured
+          ? 'Passcode override (configured — leave blank to keep)'
+          : 'Passcode override (leave blank to use auto-computed)'"
         density="compact"
         type="number"
         clearable
-        class="mb-2"
+        class="mb-1"
         style="max-width: 360px"
+      />
+      <v-checkbox
+        v-if="aprsIsPasscodeOverrideConfigured"
+        v-model="clearPasscodeOverride"
+        label="Clear stored override (use auto-computed)"
+        density="compact"
+        hide-details
+        class="mb-2"
       />
 
       <v-text-field

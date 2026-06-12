@@ -72,10 +72,10 @@ public class Packet : IEntityTypeConfiguration<Packet>
                .HasConversion(
                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
                    v => JsonSerializer.Deserialize<TelemetryData>(v, (JsonSerializerOptions?)null));
-        builder.Property(p => p.MessageData)
-               .HasConversion(
-                   v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-                   v => JsonSerializer.Deserialize<MessageData>(v, (JsonSerializerOptions?)null));
+        // Mapped as a native EF JSON column (same on-disk format as the converter
+        // pattern) so WHERE clauses on Addressee/Text translate to json_extract
+        // instead of throwing at runtime.
+        builder.OwnsOne(p => p.MessageData, mb => mb.ToJson());
         builder.Property(p => p.SignalData)
                .HasConversion(
                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),

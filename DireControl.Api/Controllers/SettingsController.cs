@@ -60,7 +60,7 @@ public class SettingsController(
             AprsIsEnabled = userSetting.AprsIsEnabled,
             AprsIsHost = userSetting.AprsIsHost,
             AprsIsPort = userSetting.AprsIsPort,
-            AprsIsPasscodeOverride = userSetting.AprsIsPasscode,
+            AprsIsPasscodeOverrideConfigured = userSetting.AprsIsPasscode is not null,
             AprsIsPasscodeComputed = computedPasscode,
             AprsIsFilter = userSetting.AprsIsFilter,
             DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
@@ -116,7 +116,12 @@ public class SettingsController(
         setting.AprsIsEnabled = request.AprsIsEnabled;
         setting.AprsIsHost = request.AprsIsHost.Trim();
         setting.AprsIsPort = request.AprsIsPort;
-        setting.AprsIsPasscode = request.AprsIsPasscodeOverride;
+        // The override is a write-only secret: only change it when explicitly
+        // provided or explicitly cleared.
+        if (request.ClearAprsIsPasscodeOverride)
+            setting.AprsIsPasscode = null;
+        else if (request.AprsIsPasscodeOverride is not null)
+            setting.AprsIsPasscode = request.AprsIsPasscodeOverride;
         setting.AprsIsFilter = request.AprsIsFilter.Trim();
         setting.DeduplicationWindowSeconds = request.DeduplicationWindowSeconds;
 

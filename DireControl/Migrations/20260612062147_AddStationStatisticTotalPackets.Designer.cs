@@ -3,6 +3,7 @@ using System;
 using DireControl.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace DireControl.Migrations
 {
     [DbContext(typeof(DireControlContext))]
-    partial class DireControlContextModelSnapshot : ModelSnapshot
+    [Migration("20260612062147_AddStationStatisticTotalPackets")]
+    partial class AddStationStatisticTotalPackets
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.3");
@@ -316,6 +319,9 @@ namespace DireControl.Migrations
 
                     b.Property<double?>("Longitude")
                         .HasColumnType("REAL");
+
+                    b.Property<string>("MessageData")
+                        .HasColumnType("TEXT");
 
                     b.Property<int>("ParsedType")
                         .HasColumnType("INTEGER");
@@ -663,32 +669,6 @@ namespace DireControl.Migrations
                         .HasForeignKey("StationCallsign")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.OwnsOne("DireControl.Data.Models.MessageData", "MessageData", b1 =>
-                        {
-                            b1.Property<int>("PacketId");
-
-                            b1.Property<string>("Addressee")
-                                .IsRequired();
-
-                            b1.Property<string>("MessageId");
-
-                            b1.Property<string>("Text")
-                                .IsRequired();
-
-                            b1.HasKey("PacketId");
-
-                            b1.ToTable("Packets");
-
-                            b1
-                                .ToJson("MessageData")
-                                .HasColumnType("TEXT");
-
-                            b1.WithOwner()
-                                .HasForeignKey("PacketId");
-                        });
-
-                    b.Navigation("MessageData");
 
                     b.Navigation("Station");
                 });

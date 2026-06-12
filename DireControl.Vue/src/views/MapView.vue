@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { defineAsyncComponent, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
@@ -16,7 +16,8 @@ import { estimatePosition } from '@/utils/estimatedPosition'
 import { useUnits } from '@/composables/useUnits'
 import { useMapPrefs } from '@/composables/useMapPrefs'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
-import StationDetailPanel from '@/components/StationDetailPanel.vue'
+// Async: keeps chart.js (used only inside the panel) out of the eager map bundle.
+const StationDetailPanel = defineAsyncComponent(() => import('@/components/StationDetailPanel.vue'))
 import StationListSidebar from '@/components/StationListSidebar.vue'
 import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
 import OwnStationPanel from '@/components/OwnStationPanel.vue'
@@ -206,9 +207,38 @@ let highlightTimeout: ReturnType<typeof setTimeout> | null = null
 // station that stops beaconing has its trail shrink and vanish rather than
 // stay drawn forever.
 const TRACK_WINDOW_MS = 60 * 60 * 1000 // 60 min — matches the track API's default window
-type TrackEntry = { group: L.LayerGroup; points: TrackPointDto[] }
+type TrackEntry = {
+  group: L.LayerGroup
+  points: TrackPointDto[]
+  segments: { line: L.Polyline; toReceivedAt: string }[]
+  circles: { circle: L.CircleMarker; receivedAt: string }[]
+}
 const trackLayers = new Map<string, TrackEntry>()
 let trackAgeInterval: ReturnType<typeof setInterval> | null = null
+// Live positions extend cached tracks locally; the API is hit only when no
+// cached track exists, at most once per station per window.
+const trackFetchLast = new Map<string, number>()
+const TRACK_FETCH_THROTTLE_MS = 10_000
+
+// Leading+trailing throttle: fires immediately, then at most once per `ms`,
+// with a trailing call so the last event in a burst still lands.
+function throttleTrailing(fn: () => void, ms: number): () => void {
+  let last = 0
+  let pending: ReturnType<typeof setTimeout> | null = null
+  return () => {
+    const now = Date.now()
+    if (now - last >= ms) {
+      last = now
+      fn()
+    } else if (!pending) {
+      pending = setTimeout(() => {
+        pending = null
+        last = Date.now()
+        fn()
+      }, ms - (now - last))
+    }
+  }
+}
 
 // Packet path visualisation state
 // Each entry holds the map layer group, an optional fade timer, and whether
@@ -363,6 +393,11 @@ function isMobileStation(station: StationDto): boolean {
 function updateStationsList() {
   stationsList.value = [...stationCache.values()]
 }
+
+// Per-packet callers use these; bulk operations (loadStations etc.) stay direct.
+const throttledStationsListUpdate = throttleTrailing(updateStationsList, 1000)
+const throttledLoadStations = throttleTrailing(() => { loadStations() }, 5000)
+const scheduleDetailRefresh = throttleTrailing(() => { detailRefreshKey.value++ }, 2000)
 
 function updateStaleStationsList() {
   staleStationsList.value = [...staleStationCache.values()]
@@ -1112,6 +1147,8 @@ function renderTrack(callsign: string, points: TrackPointDto[]) {
     Math.max(0, Math.min(1, 1 - (now - new Date(receivedAt).getTime()) / TRACK_WINDOW_MS))
 
   const group = L.layerGroup()
+  const segments: TrackEntry['segments'] = []
+  const circles: TrackEntry['circles'] = []
   for (let i = 0; i < fresh.length - 1; i++) {
     const from = fresh[i]!
     const to = fresh[i + 1]!
@@ -1122,6 +1159,7 @@ function renderTrack(callsign: string, points: TrackPointDto[]) {
       [[from.latitude, from.longitude], [to.latitude, to.longitude]],
       { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
     )
+    segments.push({ line: segment, toReceivedAt: to.receivedAt })
     group.addLayer(segment)
   }
   for (const pt of fresh) {
@@ -1138,25 +1176,59 @@ function renderTrack(callsign: string, points: TrackPointDto[]) {
     circle.bindPopup(
       `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
     )
+    circles.push({ circle, receivedAt: pt.receivedAt })
     group.addLayer(circle)
   }
 
-  trackLayers.set(callsign, { group, points: fresh })
+  trackLayers.set(callsign, { group, points: fresh, segments, circles })
   if (showTracks.value) {
     group.addTo(map.value)
   }
 }
 
-// Periodic pass: re-render every track so points fade and age out over time,
-// and drop tracks whose station is gone (icon removed) so lines don't linger.
+// Extends a station's cached track with a live position instead of refetching
+// the whole track per packet; falls back to a throttled fetch when no cache.
+function appendTrackPoint(callsign: string, latitude: number, longitude: number, receivedAt: string) {
+  const entry = trackLayers.get(callsign)
+  if (entry) {
+    entry.points.push({ latitude, longitude, receivedAt, speed: null, heading: null })
+    renderTrack(callsign, entry.points)
+    return
+  }
+  const last = trackFetchLast.get(callsign) ?? 0
+  if (Date.now() - last < TRACK_FETCH_THROTTLE_MS) return
+  trackFetchLast.set(callsign, Date.now())
+  fetchAndDrawTrack(callsign)
+}
+
+// Periodic pass: fade points in place; rebuild a track only when points age
+// out of the window, and drop tracks whose station is gone.
 function ageTracks() {
+  const now = Date.now()
   for (const callsign of trackLayers.keys()) {
     if (!stationCache.has(callsign)) {
       removeTrack(callsign)
       continue
     }
     const entry = trackLayers.get(callsign)
-    if (entry) renderTrack(callsign, entry.points)
+    if (!entry) continue
+
+    if (entry.points.some(p => now - new Date(p.receivedAt).getTime() > TRACK_WINDOW_MS)) {
+      renderTrack(callsign, entry.points)
+      continue
+    }
+    if (!showTracks.value) continue
+
+    const ageFrac = (receivedAt: string) =>
+      Math.max(0, Math.min(1, 1 - (now - new Date(receivedAt).getTime()) / TRACK_WINDOW_MS))
+    for (const seg of entry.segments) {
+      const frac = ageFrac(seg.toReceivedAt)
+      seg.line.setStyle({ opacity: 0.15 + (0.85 * frac), weight: 2 + Math.round(2 * frac) })
+    }
+    for (const c of entry.circles) {
+      const o = 0.2 + (0.8 * ageFrac(c.receivedAt))
+      c.circle.setStyle({ opacity: o, fillOpacity: o })
+    }
   }
 }
 
@@ -1212,6 +1284,9 @@ function removeGhostLayer(callsign: string) {
 
 function updateGhostLayers() {
   if (!map.value) return
+  // Skip the rebuild entirely while ghosts are hidden; toggling them back on
+  // calls this directly.
+  if (!showGhostMarkers.value) return
   for (const [callsign, station] of stationCache) {
     if (!isMobileStation(station) || station.lastLat == null || station.lastLon == null) {
       removeGhostLayer(callsign)
@@ -1520,29 +1595,36 @@ function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
 }
 
 /**
- * Fetch the most recent packet for a station and draw its path persistently.
- * Used when the user explicitly selects a station (click or sidebar).
+ * Draw a station's path persistently from an already-known resolved path
+ * (e.g. straight from a SignalR broadcast — no HTTP round trip).
  * The path stays until the station is deselected.
  */
-async function showPacketPath(callsign: string) {
+function drawPersistentPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
   if (!map.value) return
   // Clear any existing path (auto or persistent) for this callsign
   removePath(callsign)
+  if (resolvedPath.length < 2) return
+
+  const group = L.layerGroup()
+  if (!drawPathLayers(group, resolvedPath)) return
+
+  group.addTo(map.value)
+  activePaths.set(callsign, { group, fadeTimer: null, persistent: true, resolvedPath })
+}
+
+/**
+ * Fetch the most recent packet for a station and draw its path persistently.
+ * Used when the user explicitly selects a station (click or sidebar).
+ */
+async function showPacketPath(callsign: string) {
+  if (!map.value) return
   try {
     const { items } = await getStationPackets(callsign, 1, 1)
     // Guard: station may have been deselected while the fetch was in flight
     if (selectionStore.selectedCallsign !== callsign) {
       return
     }
-    if (items.length === 0) return
-    const packet = items[0]!
-    if (!packet.resolvedPath || packet.resolvedPath.length < 2) return
-
-    const group = L.layerGroup()
-    if (!drawPathLayers(group, packet.resolvedPath)) return
-
-    group.addTo(map.value)
-    activePaths.set(callsign, { group, fadeTimer: null, persistent: true, resolvedPath: packet.resolvedPath })
+    drawPersistentPath(callsign, items[0]?.resolvedPath ?? [])
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
   }
@@ -1760,11 +1842,11 @@ async function connectSignalR() {
       sessionPacketCounts.value[packet.callsign] =
         (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
 
-      // Trigger detail panel refresh for the selected station.
-      // Re-fetch the persistent path from the API so it reflects the latest packet.
+      // Refresh the detail panel (throttled — it refetches over HTTP) and draw
+      // the persistent path straight from the broadcast's own resolved path.
       if (packet.callsign === selectionStore.selectedCallsign) {
-        detailRefreshKey.value++
-        showPacketPath(packet.callsign)
+        scheduleDetailRefresh()
+        drawPersistentPath(packet.callsign, packet.resolvedPath ?? [])
       } else if (packet.resolvedPath && packet.resolvedPath.length >= 2) {
         // Auto-draw a fading path for non-selected stations.
         drawAutoPath(packet.callsign, packet.resolvedPath)
@@ -1790,7 +1872,7 @@ async function connectSignalR() {
             ? { lastLat: packet.latitude, lastLon: packet.longitude }
             : {}),
         })
-        updateStationsList()
+        throttledStationsListUpdate()
       }
 
       if (packet.latitude != null && packet.longitude != null) {
@@ -1802,11 +1884,11 @@ async function connectSignalR() {
         if (isNew) {
           // loadStations() will call updateStationsList() once the REST response
           // arrives and populates full station data for the new callsign.
-          loadStations()
+          throttledLoadStations()
         } else {
           const station = stationCache.get(packet.callsign)
           if (showTracks.value && station && isMobileStation(station)) {
-            fetchAndDrawTrack(packet.callsign)
+            appendTrackPoint(packet.callsign, packet.latitude, packet.longitude, packet.receivedAt)
           }
         }
       }

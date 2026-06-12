@@ -144,7 +144,8 @@ public class StationsController(
         if (!stationExists)
             return NotFound();
 
-        // WeatherData is a JSON value-converted column; project in-memory after fetching.
+        // Project only the two needed columns — full entities would drag RawPacket
+        // plus four other JSON columns through deserialization per row.
         var baseQuery = db.Packets
             .AsNoTracking()
             .Where(p => p.StationCallsign == callsign && p.WeatherData != null);
@@ -164,6 +165,7 @@ public class StationsController(
             var packets = await baseQuery
                 .Where(p => p.ReceivedAt >= fromUtc && p.ReceivedAt <= toUtc)
                 .OrderBy(p => p.ReceivedAt)
+                .Select(p => new WeatherRow(p.ReceivedAt, p.WeatherData!))
                 .ToListAsync(ct);
 
             return Ok(BucketWeatherReadings(packets, bucketMinutes));
@@ -174,28 +176,31 @@ public class StationsController(
             var packets = await baseQuery
                 .OrderByDescending(p => p.ReceivedAt)
                 .Take(50)
+                .Select(p => new WeatherRow(p.ReceivedAt, p.WeatherData!))
                 .ToListAsync(ct);
 
-            var readings = packets.Select(p => new WeatherReadingDto
+            var readings = packets.Select(r => new WeatherReadingDto
             {
-                ReceivedAt = p.ReceivedAt,
-                Temperature = p.WeatherData!.TemperatureF,
-                Humidity = p.WeatherData.HumidityPercent,
-                WindSpeed = p.WeatherData.WindSpeedMph,
-                WindDirection = p.WeatherData.WindDirectionDeg,
-                WindGust = p.WeatherData.WindGustMph,
-                Pressure = p.WeatherData.PressureMbar,
-                RainLastHour = p.WeatherData.RainfallLastHourIn,
-                RainLast24h = p.WeatherData.RainfallLast24hIn,
-                RainSinceMidnight = p.WeatherData.RainfallSinceMidnightIn,
+                ReceivedAt = r.ReceivedAt,
+                Temperature = r.Weather.TemperatureF,
+                Humidity = r.Weather.HumidityPercent,
+                WindSpeed = r.Weather.WindSpeedMph,
+                WindDirection = r.Weather.WindDirectionDeg,
+                WindGust = r.Weather.WindGustMph,
+                Pressure = r.Weather.PressureMbar,
+                RainLastHour = r.Weather.RainfallLastHourIn,
+                RainLast24h = r.Weather.RainfallLast24hIn,
+                RainSinceMidnight = r.Weather.RainfallSinceMidnightIn,
             }).ToList();
 
             return Ok(readings);
         }
     }
 
+    private sealed record WeatherRow(DateTime ReceivedAt, DireControl.Data.Models.WeatherData Weather);
+
     private static IReadOnlyList<WeatherReadingDto> BucketWeatherReadings(
-        List<DireControl.Data.Models.Packet> packets,
+        List<WeatherRow> packets,
         int bucketMinutes)
     {
         var epoch = DateTime.UnixEpoch;
@@ -211,7 +216,7 @@ public class StationsController(
 
         return groups.Select(g =>
         {
-            var wx = g.Select(p => p.WeatherData!).ToList();
+            var wx = g.Select(p => p.Weather).ToList();
 
             var temps = wx.Where(w => w.TemperatureF.HasValue).Select(w => w.TemperatureF!.Value).ToList();
             var winds = wx.Where(w => w.WindSpeedMph.HasValue).Select(w => w.WindSpeedMph!.Value).ToList();
@@ -311,18 +316,23 @@ public class StationsController(
         // SignalData is null for all packets received via KISS TCP (Direwolf does not
         // expose signal metadata over the KISS interface).  This endpoint returns an
         // empty array in that case, which the frontend treats as "not available".
+        // Latest 500 points, projected — not full entities, not unbounded.
         var packets = await db.Packets
             .AsNoTracking()
             .Where(p => p.StationCallsign == callsign && p.SignalData != null)
-            .OrderBy(p => p.ReceivedAt)
+            .OrderByDescending(p => p.ReceivedAt)
+            .Take(500)
+            .Select(p => new { p.ReceivedAt, p.SignalData })
             .ToListAsync(ct);
 
-        var points = packets.Select(p => new SignalPointDto
-        {
-            ReceivedAt = p.ReceivedAt,
-            DecodeQuality = p.SignalData!.DecodeQuality,
-            FrequencyOffsetHz = p.SignalData.FrequencyOffsetHz,
-        }).ToList();
+        var points = packets
+            .OrderBy(p => p.ReceivedAt)
+            .Select(p => new SignalPointDto
+            {
+                ReceivedAt = p.ReceivedAt,
+                DecodeQuality = p.SignalData!.DecodeQuality,
+                FrequencyOffsetHz = p.SignalData.FrequencyOffsetHz,
+            }).ToList();
 
         return Ok(points);
     }
@@ -338,8 +348,11 @@ public class StationsController(
             .AsNoTracking()
             .FirstOrDefaultAsync(ss => ss.Callsign == callsign, ct);
 
-        var totalPackets = await db.Packets
-            .CountAsync(p => p.StationCallsign == callsign, ct);
+        // The parser maintains TotalPackets incrementally; only fall back to a
+        // full COUNT for stations without a seeded statistics row.
+        var totalPackets = stat?.TotalPackets > 0
+            ? stat.TotalPackets
+            : await db.Packets.CountAsync(p => p.StationCallsign == callsign, ct);
 
         // Build hourly histogram using grouped counts instead of loading all timestamps.
         var now = DateTime.UtcNow;

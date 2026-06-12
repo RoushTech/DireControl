@@ -100,10 +100,15 @@ const filteredAndSorted = computed(() => {
     list = list.filter(s => s.stationType === typeFilter.value)
   }
 
+  // Parse timestamps once per item, not once per comparison.
+  const lastSeenMs = sortKey.value === 'lastSeen'
+    ? new Map(list.map(s => [s.callsign, Date.parse(s.lastSeen)]))
+    : null
+
   return [...list].sort((a, b) => {
     if (sortKey.value === 'callsign') return a.callsign.localeCompare(b.callsign)
-    if (sortKey.value === 'lastSeen')
-      return new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime()
+    if (lastSeenMs)
+      return lastSeenMs.get(b.callsign)! - lastSeenMs.get(a.callsign)!
     if (sortKey.value === 'packets') {
       const pa = props.packetCounts[a.callsign] ?? 0
       const pb = props.packetCounts[b.callsign] ?? 0

@@ -62,6 +62,10 @@ public sealed class MessageRetryService(
 
         logger.LogDebug("Processing {Count} due message retries.", due.Count);
 
+        // Mutate all due messages, save once, then broadcast.
+        var failed = new List<MessageFailedDto>();
+        var retried = new List<MessageRetriedDto>();
+
         foreach (var message in due)
         {
             await messageSendingService.RetransmitAsync(message, ct);
@@ -72,40 +76,39 @@ public sealed class MessageRetryService(
             {
                 message.RetryState = RetryState.Failed;
                 message.NextRetryAt = null;
-                await db.SaveChangesAsync(ct);
 
                 logger.LogInformation(
                     "Message {Id} to {ToCallsign} failed after {Count} attempts — no ACK received.",
                     message.Id, message.ToCallsign, message.RetryCount);
 
-                await hubContext.Clients.All.SendAsync(
-                    PacketHub.MessageFailedMethod,
-                    new MessageFailedDto
-                    {
-                        Id = message.Id,
-                        ToCallsign = message.ToCallsign,
-                        RetryCount = message.RetryCount,
-                    },
-                    ct);
+                failed.Add(new MessageFailedDto
+                {
+                    Id = message.Id,
+                    ToCallsign = message.ToCallsign,
+                    RetryCount = message.RetryCount,
+                });
             }
             else
             {
                 var delaySeconds = options.Value.InitialRetryDelaySeconds * Math.Pow(2, message.RetryCount - 1);
                 message.NextRetryAt = DateTime.UtcNow.AddSeconds(delaySeconds);
-                await db.SaveChangesAsync(ct);
 
-                await hubContext.Clients.All.SendAsync(
-                    PacketHub.MessageRetriedMethod,
-                    new MessageRetriedDto
-                    {
-                        Id = message.Id,
-                        RetryCount = message.RetryCount,
-                        MaxRetries = message.MaxRetries,
-                        NextRetryAt = message.NextRetryAt,
-                        LastSentAt = message.LastSentAt,
-                    },
-                    ct);
+                retried.Add(new MessageRetriedDto
+                {
+                    Id = message.Id,
+                    RetryCount = message.RetryCount,
+                    MaxRetries = message.MaxRetries,
+                    NextRetryAt = message.NextRetryAt,
+                    LastSentAt = message.LastSentAt,
+                });
             }
         }
+
+        await db.SaveChangesAsync(ct);
+
+        foreach (var dto in failed)
+            await hubContext.Clients.All.SendAsync(PacketHub.MessageFailedMethod, dto, ct);
+        foreach (var dto in retried)
+            await hubContext.Clients.All.SendAsync(PacketHub.MessageRetriedMethod, dto, ct);
     }
 }

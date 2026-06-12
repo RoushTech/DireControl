@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.Channels;
 using AprsSharp.KissTnc;
 using AprsSharp.Shared;
 using DireControl.Data;
@@ -13,6 +14,10 @@ namespace DireControl.Api.Services;
 /// Long-running service that maintains a KISS TCP connection to Direwolf via
 /// AprsSharp.KissTnc, receives AX.25 UI frames as APRS packets, and persists
 /// the raw TNC2 string to the database.  Reconnects automatically.
+/// Frames are queued into a bounded channel and persisted by a single consumer:
+/// concurrent frames can't race the dedup check or station insert, and bursts
+/// (or a temporarily locked database during maintenance) buffer instead of
+/// dropping packets.
 /// </summary>
 public sealed class KissTcpService(
     IOptions<DirewolfOptions> options,
@@ -20,8 +25,22 @@ public sealed class KissTcpService(
     KissConnectionHolder connectionHolder,
     ILogger<KissTcpService> logger) : BackgroundService
 {
+    private static readonly TimeSpan SettingsCacheTtl = TimeSpan.FromSeconds(30);
+
+    private readonly Channel<(byte[] Data, int KissChannel)> _frames =
+        Channel.CreateBounded<(byte[], int)>(new BoundedChannelOptions(10_000)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+    private int _cachedDedupWindowSeconds = 60;
+    private DateTime _dedupWindowFetchedAt = DateTime.MinValue;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var consumer = ConsumeFramesAsync(stoppingToken);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -45,7 +64,30 @@ public sealed class KissTcpService(
             }
         }
 
+        _frames.Writer.TryComplete();
+        try { await consumer; }
+        catch (OperationCanceledException) { }
+
         logger.LogInformation("KissTcpService stopped.");
+    }
+
+    private async Task ConsumeFramesAsync(CancellationToken ct)
+    {
+        await foreach (var (data, kissChannel) in _frames.Reader.ReadAllAsync(ct))
+        {
+            try
+            {
+                await ProcessFrameAsync(data, kissChannel, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Unhandled error processing APRS frame.");
+            }
+        }
     }
 
     private async Task ConnectAndReadAsync(CancellationToken ct)
@@ -67,10 +109,8 @@ public sealed class KissTcpService(
         {
             tnc.FrameReceivedEvent += (_, e) =>
             {
-                var data = e.Data;
-                _ = ProcessFrameAsync(data, tncPort, ct).ContinueWith(
-                    t => logger.LogError(t.Exception, "Unhandled error processing APRS frame."),
-                    TaskContinuationOptions.OnlyOnFaulted);
+                if (!_frames.Writer.TryWrite(([.. e.Data], tncPort)))
+                    logger.LogWarning("Frame buffer full — dropping oldest frame.");
             };
 
             while (!ct.IsCancellationRequested && tcpConnection.Connected)
@@ -123,9 +163,15 @@ public sealed class KissTcpService(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
 
-        var setting = await db.UserSettings.FindAsync(new object[] { 1 }, ct);
-        var dedupWindowSeconds = setting?.DeduplicationWindowSeconds ?? 60;
-        var dedupWindow = DateTime.UtcNow.AddSeconds(-dedupWindowSeconds);
+        // The dedup window changes rarely; cache it briefly instead of re-reading
+        // settings for every frame. Single consumer, so plain fields are safe.
+        if (DateTime.UtcNow - _dedupWindowFetchedAt > SettingsCacheTtl)
+        {
+            var setting = await db.UserSettings.FindAsync(new object[] { 1 }, ct);
+            _cachedDedupWindowSeconds = setting?.DeduplicationWindowSeconds ?? 60;
+            _dedupWindowFetchedAt = DateTime.UtcNow;
+        }
+        var dedupWindow = DateTime.UtcNow.AddSeconds(-_cachedDedupWindowSeconds);
 
         // If an APRS-IS copy arrived first, upgrade it to RF rather than inserting a duplicate.
         var existingAprsIs = await db.Packets

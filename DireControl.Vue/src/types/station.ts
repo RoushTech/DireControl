@@ -83,7 +83,7 @@ export interface SettingsDto {
   aprsIsEnabled: boolean;
   aprsIsHost: string;
   aprsIsPort: number;
-  aprsIsPasscodeOverride: number | null;
+  aprsIsPasscodeOverrideConfigured: boolean;
   aprsIsPasscodeComputed: number;
   aprsIsFilter: string;
   deduplicationWindowSeconds: number;
