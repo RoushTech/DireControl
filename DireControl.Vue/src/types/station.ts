@@ -73,6 +73,12 @@ export interface HomePositionDto {
 export interface SettingsDto {
   ourCallsign: string;
   homePosition: HomePositionDto | null;
+  homeLat: number | null;
+  homeLon: number | null;
+  databaseCleanupIntervalHours: number;
+  vacuumOnCleanup: boolean;
+  qrzUsername: string | null;
+  qrzPasswordConfigured: boolean;
   stationExpiryTimeoutMinutes: number;
   direwolfHost: string;
   direwolfPort: number;
@@ -82,7 +88,6 @@ export interface SettingsDto {
   outboundPath: string;
   aprsIsEnabled: boolean;
   aprsIsHost: string;
-  aprsIsPort: number;
   aprsIsPasscodeOverrideConfigured: boolean;
   aprsIsPasscodeComputed: number;
   aprsIsFilter: string;

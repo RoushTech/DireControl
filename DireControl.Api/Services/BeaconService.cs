@@ -18,7 +18,7 @@ public sealed class BeaconService(
     KissConnectionHolder connectionHolder,
     IHubContext<PacketHub> hubContext,
     IServiceScopeFactory scopeFactory,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     ILogger<BeaconService> logger)
 {
     /// <summary>
@@ -31,7 +31,7 @@ public sealed class BeaconService(
     /// </summary>
     public async Task<OwnBeacon?> BeaconNowAsync(Radio radio, CancellationToken ct = default)
     {
-        var opts = options.Value;
+        var opts = await settingsProvider.GetAsync(ct);
 
         if (opts.HomeLat is null || opts.HomeLon is null)
         {

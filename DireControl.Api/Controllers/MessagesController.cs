@@ -15,20 +15,28 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/messages")]
 public class MessagesController(
     DireControlContext db,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     MessageSendingService messageSendingService,
     IHubContext<PacketHub> hubContext) : ControllerBase
 {
     [HttpGet("inbox")]
     public async Task<ActionResult<IReadOnlyList<InboxMessageDto>>> GetInbox(CancellationToken ct)
     {
-        var ourCallsign = options.Value.OurCallsign.Trim();
+        var ourCallsign = (await settingsProvider.GetAsync(ct)).OurCallsign.Trim();
         if (string.IsNullOrWhiteSpace(ourCallsign))
             return Ok(Array.Empty<InboxMessageDto>());
 
+        // The inbox covers the primary callsign plus every active radio's callsign.
+        var identities = await db.Radios
+            .AsNoTracking()
+            .Where(r => r.IsActive)
+            .Select(r => r.FullCallsign.ToUpper())
+            .ToListAsync(ct);
+        identities.Add(ourCallsign.ToUpperInvariant());
+
         var messages = await db.Messages
             .AsNoTracking()
-            .Where(m => m.ToCallsign == ourCallsign || m.FromCallsign == ourCallsign)
+            .Where(m => identities.Contains(m.ToCallsign.ToUpper()) || identities.Contains(m.FromCallsign.ToUpper()))
             .OrderByDescending(m => m.ReceivedAt)
             .Select(m => new InboxMessageDto
             {
@@ -41,7 +49,6 @@ public class MessagesController(
                 ReceivedAt = m.ReceivedAt,
                 IsRead = m.IsRead,
                 AckSent = m.AckSent,
-                ReplySent = m.ReplySent,
                 RetryCount = m.RetryCount,
                 MaxRetries = m.MaxRetries,
                 NextRetryAt = m.NextRetryAt,
@@ -191,7 +198,7 @@ public class MessagesController(
         else
         {
             msg.RetryState = RetryState.Retrying;
-            var delaySeconds = options.Value.InitialRetryDelaySeconds * Math.Pow(2, msg.RetryCount - 1);
+            var delaySeconds = (await settingsProvider.GetAsync(ct)).InitialRetryDelaySeconds * Math.Pow(2, msg.RetryCount - 1);
             msg.NextRetryAt = DateTime.UtcNow.AddSeconds(delaySeconds);
         }
 
@@ -225,7 +232,7 @@ public class MessagesController(
 
         msg.RetryCount = 0;
         msg.RetryState = RetryState.Retrying;
-        msg.NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds);
+        msg.NextRetryAt = DateTime.UtcNow.AddSeconds((await settingsProvider.GetAsync(ct)).InitialRetryDelaySeconds);
         await db.SaveChangesAsync(ct);
 
         return Ok(ToInboxDto(msg));
@@ -260,7 +267,6 @@ public class MessagesController(
         ReceivedAt = m.ReceivedAt,
         IsRead = m.IsRead,
         AckSent = m.AckSent,
-        ReplySent = m.ReplySent,
         RetryCount = m.RetryCount,
         MaxRetries = m.MaxRetries,
         NextRetryAt = m.NextRetryAt,

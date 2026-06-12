@@ -17,25 +17,30 @@ public class SettingsController(
     IOptions<DireControlOptions> options,
     IOptions<DirewolfOptions> direwolfOptions,
     AprsIsReconnectTrigger reconnectTrigger,
+    StationSettingsProvider settingsProvider,
     DireControlContext db) : ControllerBase
 {
     private static readonly Regex PathRegex =
         new(@"^[A-Z0-9-]+(,[A-Z0-9-]+)*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Amateur callsign with optional SSID; permissive enough for portable suffixes.
+    private static readonly Regex CallsignRegex =
+        new(@"^[A-Z0-9]{3,9}(-([0-9]|1[0-5]))?$", RegexOptions.Compiled);
+
     [HttpGet]
     public async Task<ActionResult<SettingsDto>> Get(CancellationToken ct)
     {
-        HomePositionDto? homePosition = null;
+        var effective = await settingsProvider.GetAsync(ct);
 
-        var opt = options.Value;
-        if (opt.HomeLat.HasValue && opt.HomeLon.HasValue)
+        HomePositionDto? homePosition = null;
+        if (effective.HomeLat.HasValue && effective.HomeLon.HasValue)
         {
-            homePosition = new HomePositionDto { Lat = opt.HomeLat.Value, Lon = opt.HomeLon.Value };
+            homePosition = new HomePositionDto { Lat = effective.HomeLat.Value, Lon = effective.HomeLon.Value };
         }
         else
         {
             var station = await db.Stations
-                .Where(s => s.Callsign == opt.OurCallsign && s.LastLat != null && s.LastLon != null)
+                .Where(s => s.Callsign == effective.OurCallsign && s.LastLat != null && s.LastLon != null)
                 .Select(s => new { s.LastLat, s.LastLon })
                 .FirstOrDefaultAsync(ct);
 
@@ -44,27 +49,116 @@ public class SettingsController(
         }
 
         var userSetting = await db.UserSettings.FindAsync([1], ct) ?? new UserSetting { Id = 1 };
-        var computedPasscode = AprsPasscodeHelper.GeneratePasscode(opt.OurCallsign);
+        var computedPasscode = AprsPasscodeHelper.GeneratePasscode(effective.OurCallsign);
 
         return Ok(new SettingsDto
         {
-            OurCallsign = opt.OurCallsign,
+            OurCallsign = effective.OurCallsign,
             HomePosition = homePosition,
-            StationExpiryTimeoutMinutes = opt.StationExpiryTimeoutMinutes,
+            HomeLat = effective.HomeLat,
+            HomeLon = effective.HomeLon,
+            StationExpiryTimeoutMinutes = options.Value.StationExpiryTimeoutMinutes,
             DirewolfHost = direwolfOptions.Value.Host,
             DirewolfPort = direwolfOptions.Value.Port,
             DirewolfReconnectDelaySeconds = direwolfOptions.Value.ReconnectDelaySeconds,
-            MaxRetryAttempts = opt.MaxRetryAttempts,
-            InitialRetryDelaySeconds = opt.InitialRetryDelaySeconds,
+            MaxRetryAttempts = effective.MaxRetryAttempts,
+            InitialRetryDelaySeconds = effective.InitialRetryDelaySeconds,
+            DatabaseCleanupIntervalHours = effective.DatabaseCleanupIntervalHours,
+            VacuumOnCleanup = effective.VacuumOnCleanup,
+            QrzUsername = effective.QrzUsername,
+            QrzPasswordConfigured = effective.QrzPassword is not null,
             OutboundPath = userSetting.OutboundPath,
             AprsIsEnabled = userSetting.AprsIsEnabled,
             AprsIsHost = userSetting.AprsIsHost,
-            AprsIsPort = userSetting.AprsIsPort,
             AprsIsPasscodeOverrideConfigured = userSetting.AprsIsPasscode is not null,
             AprsIsPasscodeComputed = computedPasscode,
             AprsIsFilter = userSetting.AprsIsFilter,
             DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
         });
+    }
+
+    [HttpPut("station")]
+    public async Task<ActionResult> UpdateStationSettings(
+        [FromBody] UpdateStationSettingsRequest request,
+        CancellationToken ct)
+    {
+        var callsign = request.OurCallsign?.Trim().ToUpperInvariant() ?? string.Empty;
+        if (!CallsignRegex.IsMatch(callsign))
+            return BadRequest("Callsign must be a valid amateur callsign with optional SSID (e.g. W3UWU-10).");
+
+        if (request.HomeLat is < -90 or > 90)
+            return BadRequest("Latitude must be between -90 and 90.");
+        if (request.HomeLon is < -180 or > 180)
+            return BadRequest("Longitude must be between -180 and 180.");
+        if ((request.HomeLat is null) != (request.HomeLon is null))
+            return BadRequest("Set both latitude and longitude, or neither.");
+        if (request.MaxRetryAttempts is < 1 or > 20)
+            return BadRequest("Max retry attempts must be between 1 and 20.");
+        if (request.InitialRetryDelaySeconds is < 5 or > 600)
+            return BadRequest("Initial retry delay must be between 5 and 600 seconds.");
+
+        var setting = await GetOrCreateRowAsync(ct);
+        setting.OurCallsign = callsign;
+        setting.HomeLat = request.HomeLat;
+        setting.HomeLon = request.HomeLon;
+        setting.MaxRetryAttempts = request.MaxRetryAttempts;
+        setting.InitialRetryDelaySeconds = request.InitialRetryDelaySeconds;
+
+        await db.SaveChangesAsync(ct);
+        settingsProvider.Invalidate();
+
+        // Callsign defines the APRS-IS login + passcode — reconnect with the new identity.
+        reconnectTrigger.Trigger();
+
+        return NoContent();
+    }
+
+    [HttpPut("qrz")]
+    public async Task<ActionResult> UpdateQrzCredentials(
+        [FromBody] UpdateQrzCredentialsRequest request,
+        CancellationToken ct)
+    {
+        var setting = await GetOrCreateRowAsync(ct);
+
+        setting.QrzUsername = string.IsNullOrWhiteSpace(request.Username) ? null : request.Username.Trim();
+
+        // Password is a write-only secret: only change when provided or explicitly cleared.
+        if (request.ClearPassword)
+            setting.QrzPassword = null;
+        else if (!string.IsNullOrWhiteSpace(request.Password))
+            setting.QrzPassword = request.Password;
+
+        await db.SaveChangesAsync(ct);
+        settingsProvider.Invalidate();
+        return NoContent();
+    }
+
+    [HttpPut("cleanup")]
+    public async Task<ActionResult> UpdateCleanupSettings(
+        [FromBody] UpdateCleanupSettingsRequest request,
+        CancellationToken ct)
+    {
+        if (request.DatabaseCleanupIntervalHours is < 0 or > 720)
+            return BadRequest("Cleanup interval must be between 0 (disabled) and 720 hours.");
+
+        var setting = await GetOrCreateRowAsync(ct);
+        setting.DatabaseCleanupIntervalHours = request.DatabaseCleanupIntervalHours;
+        setting.VacuumOnCleanup = request.VacuumOnCleanup;
+
+        await db.SaveChangesAsync(ct);
+        settingsProvider.Invalidate();
+        return NoContent();
+    }
+
+    private async Task<UserSetting> GetOrCreateRowAsync(CancellationToken ct)
+    {
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+        return setting;
     }
 
     [HttpPut("outbound-path")]
@@ -97,9 +191,6 @@ public class SettingsController(
         [FromBody] UpdateAprsIsSettingsRequest request,
         CancellationToken ct)
     {
-        if (request.AprsIsPort is < 1 or > 65535)
-            return BadRequest("Port must be between 1 and 65535.");
-
         if (string.IsNullOrWhiteSpace(request.AprsIsHost))
             return BadRequest("Server hostname is required.");
 
@@ -115,7 +206,6 @@ public class SettingsController(
 
         setting.AprsIsEnabled = request.AprsIsEnabled;
         setting.AprsIsHost = request.AprsIsHost.Trim();
-        setting.AprsIsPort = request.AprsIsPort;
         // The override is a write-only secret: only change it when explicitly
         // provided or explicitly cleared.
         if (request.ClearAprsIsPasscodeOverride)

@@ -29,6 +29,14 @@ public class FindMatchingRadioTests
         KissChannel = kissChannel,
     };
 
+    private static DbPacket OwnPacket(string callsign, int kissChannel = 0) => new()
+    {
+        StationCallsign = callsign,
+        RawPacket = $"{callsign}>APRS:!data",
+        Source = PacketSource.Own,
+        KissChannel = kissChannel,
+    };
+
     private static DbPacket AprsIsPacket(string callsign) => new()
     {
         StationCallsign = callsign,
@@ -44,6 +52,35 @@ public class FindMatchingRadioTests
         Ssid = ssid,
         ChannelNumber = channel,
     };
+
+    // Own source — KISS-originated like RF, so channel is the primary key
+
+    [Test]
+    public void Own_ChannelAndCallsignMatch_ReturnsRadio()
+    {
+        var radio = MakeRadio("W3UWU", channel: 0);
+        var packet = OwnPacket("W3UWU", kissChannel: 0);
+
+        Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.SameAs(radio));
+    }
+
+    [Test]
+    public void Own_ChannelMatchesButWrongCallsign_ReturnsNull()
+    {
+        var radio = MakeRadio("W3UWU", channel: 0);
+        var packet = OwnPacket("K9OTHER", kissChannel: 0);
+
+        Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.Null);
+    }
+
+    [Test]
+    public void Own_WrongChannel_ReturnsNull()
+    {
+        var radio = MakeRadio("W3UWU", channel: 1);
+        var packet = OwnPacket("W3UWU", kissChannel: 0);
+
+        Assert.That(CallsignMatcher.FindMatchingRadio(packet, [radio]), Is.Null);
+    }
 
     // RF source — KISS channel is the primary key
 

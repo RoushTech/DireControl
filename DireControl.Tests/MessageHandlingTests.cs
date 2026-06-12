@@ -305,7 +305,6 @@ public sealed class MessageHandlingTests
             ReceivedAt = DateTime.UtcNow,
             IsRead = false,
             AckSent = ackSent,
-            ReplySent = false,
             RetryState = retryState,
             MaxRetries = 5,
             NextRetryAt = nextRetryAt,

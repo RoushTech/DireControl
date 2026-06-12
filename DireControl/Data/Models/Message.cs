@@ -15,7 +15,6 @@ public class Message : IEntityTypeConfiguration<Message>
     public DateTime ReceivedAt { get; set; }
     public bool IsRead { get; set; }
     public bool AckSent { get; set; }
-    public bool ReplySent { get; set; }
 
     /// <summary>
     /// VIA path used when this message was originally sent.

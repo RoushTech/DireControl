@@ -16,7 +16,6 @@ export interface InboxMessageDto {
   receivedAt: string
   isRead: boolean
   ackSent: boolean
-  replySent: boolean
   retryCount: number
   maxRetries: number
   nextRetryAt: string | null

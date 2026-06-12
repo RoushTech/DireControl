@@ -98,10 +98,34 @@ export async function updateOutboundPath(outboundPath: string): Promise<void> {
   await http.put('/api/v0/settings/outbound-path', { outboundPath })
 }
 
+export async function updateStationSettings(payload: {
+  ourCallsign: string
+  homeLat: number | null
+  homeLon: number | null
+  maxRetryAttempts: number
+  initialRetryDelaySeconds: number
+}): Promise<void> {
+  await http.put('/api/v0/settings/station', payload)
+}
+
+export async function updateQrzCredentials(payload: {
+  username: string | null
+  password: string | null
+  clearPassword: boolean
+}): Promise<void> {
+  await http.put('/api/v0/settings/qrz', payload)
+}
+
+export async function updateCleanupSettings(payload: {
+  databaseCleanupIntervalHours: number
+  vacuumOnCleanup: boolean
+}): Promise<void> {
+  await http.put('/api/v0/settings/cleanup', payload)
+}
+
 export async function updateAprsIsSettings(payload: {
   aprsIsEnabled: boolean
   aprsIsHost: string
-  aprsIsPort: number
   aprsIsPasscodeOverride: number | null
   clearAprsIsPasscodeOverride: boolean
   aprsIsFilter: string

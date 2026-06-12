@@ -23,7 +23,7 @@ public sealed class PacketReprocessingService(
     IHostApplicationLifetime lifetime,
     AprsPacketParsingService parser,
     DatabaseMaintenanceService maintenance,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     ILogger<PacketReprocessingService> logger)
 {
     private const int BatchSize = 500;
@@ -99,7 +99,7 @@ public sealed class PacketReprocessingService(
     private async Task<ReprocessResult> RunCoreAsync(ReprocessFilter filter, CancellationToken ct)
     {
         var startedAt = DateTime.UtcNow;
-        var ourCallsign = options.Value.OurCallsign.Trim();
+        var ourCallsign = (await settingsProvider.GetAsync(ct)).OurCallsign.Trim();
 
         using (var countScope = scopeFactory.CreateScope())
         {

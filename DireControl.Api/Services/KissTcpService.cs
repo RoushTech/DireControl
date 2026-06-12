@@ -2,9 +2,13 @@ using System.Text;
 using System.Threading.Channels;
 using AprsSharp.KissTnc;
 using AprsSharp.Shared;
+using DireControl.Api.Controllers.Models;
+using DireControl.Api.Hubs;
 using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
+using DireControl.PathParsing;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -23,6 +27,7 @@ public sealed class KissTcpService(
     IOptions<DirewolfOptions> options,
     IServiceScopeFactory scopeFactory,
     KissConnectionHolder connectionHolder,
+    IHubContext<PacketHub> hubContext,
     ILogger<KissTcpService> logger) : BackgroundService
 {
     private static readonly TimeSpan SettingsCacheTtl = TimeSpan.FromSeconds(30);
@@ -36,6 +41,9 @@ public sealed class KissTcpService(
 
     private int _cachedDedupWindowSeconds = 60;
     private DateTime _dedupWindowFetchedAt = DateTime.MinValue;
+
+    private List<Radio> _cachedActiveRadios = [];
+    private DateTime _radiosFetchedAt = DateTime.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -104,6 +112,7 @@ public sealed class KissTcpService(
         const byte tncPort = 0;
         using var tnc = new TcpTnc(tcpConnection, tncPort);
         connectionHolder.SetTnc(tnc);
+        await BroadcastDirewolfStateAsync(connected: true);
 
         try
         {
@@ -122,6 +131,21 @@ public sealed class KissTcpService(
         finally
         {
             connectionHolder.SetTnc(null);
+            await BroadcastDirewolfStateAsync(connected: false);
+        }
+    }
+
+    private async Task BroadcastDirewolfStateAsync(bool connected)
+    {
+        try
+        {
+            await hubContext.Clients.All.SendAsync(
+                PacketHub.DirewolfStateChangedMethod,
+                new DirewolfStateDto { Connected = connected });
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to broadcast Direwolf state.");
         }
     }
 
@@ -173,6 +197,18 @@ public sealed class KissTcpService(
         }
         var dedupWindow = DateTime.UtcNow.AddSeconds(-_cachedDedupWindowSeconds);
 
+        if (DateTime.UtcNow - _radiosFetchedAt > SettingsCacheTtl)
+        {
+            _cachedActiveRadios = await db.Radios.AsNoTracking().Where(r => r.IsActive).ToListAsync(ct);
+            _radiosFetchedAt = DateTime.UtcNow;
+        }
+
+        // Frames transmitted by one of our own radios (same KISS channel and callsign)
+        // are tagged Own so retention can treat them separately and the UI can mark them.
+        var isOwn = _cachedActiveRadios.Any(r =>
+            r.ChannelNumber == kissChannel && CallsignMatcher.Matches(r, callsign));
+        var source = isOwn ? PacketSource.Own : PacketSource.Rf;
+
         // If an APRS-IS copy arrived first, upgrade it to RF rather than inserting a duplicate.
         var existingAprsIs = await db.Packets
             .Where(p =>
@@ -185,7 +221,7 @@ public sealed class KissTcpService(
 
         if (existingAprsIs is not null)
         {
-            existingAprsIs.Source = PacketSource.Rf;
+            existingAprsIs.Source = source;
             var rfStation = await db.Stations.FindAsync(new object[] { callsign }, ct);
             if (rfStation is not null)
             {
@@ -222,7 +258,7 @@ public sealed class KissTcpService(
             StationCallsign = callsign,
             ReceivedAt = DateTime.UtcNow,
             RawPacket = rawPacket,
-            Source = PacketSource.Rf,
+            Source = source,
             InfoField = infoField,
             KissChannel = kissChannel,
             // Direwolf's standard KISS TCP interface carries only the raw AX.25 frame

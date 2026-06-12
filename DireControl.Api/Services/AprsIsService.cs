@@ -18,7 +18,7 @@ public sealed class AprsIsService(
     IServiceScopeFactory scopeFactory,
     IAprsIsStatusService statusService,
     AprsIsReconnectTrigger reconnectTrigger,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     ILogger<AprsIsService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -90,8 +90,9 @@ public sealed class AprsIsService(
 
     private async Task ConnectAndReceiveAsync(UserSetting settings, CancellationToken ct)
     {
+        var ourCallsign = (await settingsProvider.GetAsync(ct)).OurCallsign;
         var passcode = settings.AprsIsPasscode
-            ?? AprsPasscodeHelper.GeneratePasscode(options.Value.OurCallsign);
+            ?? AprsPasscodeHelper.GeneratePasscode(ourCallsign);
 
         logger.LogInformation("Connecting to APRS-IS at {Host}…", settings.AprsIsHost);
 
@@ -134,7 +135,7 @@ public sealed class AprsIsService(
         inactivityCts.CancelAfter(InactivityTimeout);
 
         var receiveTask = client.Receive(
-            options.Value.OurCallsign,
+            ourCallsign,
             passcode.ToString(),
             settings.AprsIsHost,
             settings.AprsIsFilter);
@@ -168,7 +169,7 @@ public sealed class AprsIsService(
                         statusService.SetState(AprsIsConnectionState.Connected, serverName);
                         logger.LogInformation(
                             "Connected to APRS-IS server {Server} as {Callsign} (filter: {Filter}).",
-                            serverName ?? "(unknown)", options.Value.OurCallsign,
+                            serverName ?? "(unknown)", ourCallsign,
                             string.IsNullOrEmpty(settings.AprsIsFilter) ? "(none)" : settings.AprsIsFilter);
                     }
                     continue;

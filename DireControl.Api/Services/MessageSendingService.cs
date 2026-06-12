@@ -13,7 +13,7 @@ namespace DireControl.Api.Services;
 public sealed class MessageSendingService(
     KissConnectionHolder connectionHolder,
     IServiceScopeFactory scopeFactory,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     ILogger<MessageSendingService> logger)
 {
     private static int _msgIdCounter;
@@ -43,7 +43,8 @@ public sealed class MessageSendingService(
         string path,
         CancellationToken ct = default)
     {
-        var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
+        var settings = await settingsProvider.GetAsync(ct);
+        var ourCallsign = settings.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildMessageInfo(toCallsign, body, messageId);
         var frame = Ax25Frame.BuildUiFrame(ourCallsign, info, path);
 
@@ -74,12 +75,11 @@ public sealed class MessageSendingService(
             ReceivedAt = DateTime.UtcNow,
             IsRead = true,
             AckSent = false,
-            ReplySent = false,
             RetryCount = 0,
-            MaxRetries = options.Value.MaxRetryAttempts,
+            MaxRetries = settings.MaxRetryAttempts,
             RetryState = RetryState.Retrying,
             LastSentAt = DateTime.UtcNow,
-            NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds),
+            NextRetryAt = DateTime.UtcNow.AddSeconds(settings.InitialRetryDelaySeconds),
         };
 
         storeDb.Messages.Add(message);
@@ -93,9 +93,10 @@ public sealed class MessageSendingService(
     /// for setting <c>AckSent = true</c> on the corresponding
     /// <see cref="Message"/> record.
     /// </summary>
-    public void SendAck(string toCallsign, string originalMessageId)
+    public async Task SendAckAsync(string toCallsign, string originalMessageId, string? sourceCallsign = null, CancellationToken ct = default)
     {
-        var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
+        var ourCallsign = sourceCallsign?.Trim().ToUpperInvariant()
+            ?? (await settingsProvider.GetAsync(ct)).OurCallsign.Trim().ToUpperInvariant();
         var info = BuildAckInfo(toCallsign, originalMessageId);
         var frame = Ax25Frame.BuildUiFrame(ourCallsign, info, path: string.Empty);
 
@@ -116,9 +117,9 @@ public sealed class MessageSendingService(
     /// Returns <see langword="true"/> if sent successfully,
     /// <see langword="false"/> if there is no active connection.
     /// </summary>
-    public Task<bool> RetransmitAsync(Message message, CancellationToken ct = default)
+    public async Task<bool> RetransmitAsync(Message message, CancellationToken ct = default)
     {
-        var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
+        var ourCallsign = (await settingsProvider.GetAsync(ct)).OurCallsign.Trim().ToUpperInvariant();
         var info = BuildMessageInfo(message.ToCallsign, message.Body, message.MessageId);
         var frame = Ax25Frame.BuildUiFrame(ourCallsign, info, message.PathUsed ?? string.Empty);
 
@@ -135,7 +136,7 @@ public sealed class MessageSendingService(
                 string.IsNullOrEmpty(message.PathUsed) ? "(direct)" : message.PathUsed,
                 message.RetryCount + 1);
 
-        return Task.FromResult(sent);
+        return sent;
     }
 
     /// <summary>

@@ -11,9 +11,10 @@ namespace DireControl.Api.Services;
 /// <list type="bullet">
 ///   <item>0 — pre-versioning rows (includes the third-party AX.25 StationCallsign bug).</item>
 ///   <item>1 — StationCallsign derived from the TNC2 header.</item>
+///   <item>2 — GridSquare derived from packet positions; telemetry packets populate TelemetryData.</item>
 /// </list>
 /// </summary>
 public static class ParserVersionInfo
 {
-    public const int Current = 1;
+    public const int Current = 2;
 }

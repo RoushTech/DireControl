@@ -2,6 +2,15 @@ using DireControl.Enums;
 
 namespace DireControl.Api.Services;
 
+/// <summary>
+/// Bootstrap configuration, bound from appsettings (override locally via
+/// appsettings.local.json). The split with the <c>UserSetting</c> table is
+/// deliberate: values here define the station's identity and host environment
+/// (callsign, home position, Direwolf endpoint, retry/cleanup policy) and
+/// require a restart; everything a user tunes at runtime (APRS-IS connection,
+/// retention, weather keys, outbound path) lives in <c>UserSetting</c> and is
+/// editable live from the Settings page.
+/// </summary>
 public class DireControlOptions
 {
     public const string Section = "DireControl";

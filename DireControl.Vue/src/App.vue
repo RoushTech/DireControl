@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter, useRoute } from 'vue-router'
 import { useTheme } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useUiStore } from '@/stores/uiStore'
-import { getStatus } from '@/api/statusApi'
+import { useStatusStore } from '@/stores/statusStore'
 import { getAbout } from '@/api/aboutApi'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
@@ -17,13 +18,17 @@ const messagesStore = useMessagesStore()
 const alertsStore = useAlertsStore()
 const uiStore = useUiStore()
 
+const statusStore = useStatusStore()
+const {
+  apiOffline,
+  direwolfDisconnected,
+  aprsIsState,
+  aprsIsServerName,
+  aprsIsFilter,
+  aprsIsSessionPacketCount,
+} = storeToRefs(statusStore)
+
 const isDark = ref(theme.global.current.value.dark)
-const apiOffline = ref(false)
-const direwolfDisconnected = ref(false)
-const aprsIsState = ref('Disabled')
-const aprsIsServerName = ref<string | null>(null)
-const aprsIsFilter = ref('')
-const aprsIsSessionPacketCount = ref(0)
 const showShortcutsDialog = ref(false)
 const version = ref<string | null>(null)
 const mobileDrawerOpen = ref(false)
@@ -46,9 +51,6 @@ function toggleTheme() {
   isDark.value = !isDark.value
 }
 
-// Status polling
-let statusInterval: ReturnType<typeof setInterval> | null = null
-
 const aprsIsStateColor = computed(() => {
   switch (aprsIsState.value) {
     case 'Connected': return 'success'
@@ -68,21 +70,6 @@ const aprsIsStateLabel = computed(() => {
     default: return 'Disabled'
   }
 })
-
-async function pollStatus() {
-  try {
-    const status = await getStatus()
-    apiOffline.value = false
-    direwolfDisconnected.value = !status.direwolfConnected
-    aprsIsState.value = status.aprsIsState
-    aprsIsServerName.value = status.aprsIsServerName
-    aprsIsFilter.value = status.aprsIsFilter
-    aprsIsSessionPacketCount.value = status.aprsIsSessionPacketCount
-  } catch {
-    apiOffline.value = true
-    direwolfDisconnected.value = false
-  }
-}
 
 // Global keyboard shortcuts
 function onKeydown(e: KeyboardEvent) {
@@ -125,6 +112,7 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(async () => {
   alertsStore.startSignalR()
+  statusStore.start()
 
   try {
     await messagesStore.fetchInbox()
@@ -145,14 +133,10 @@ onMounted(async () => {
     // ignore — version display is non-critical
   }
 
-  await pollStatus()
-  statusInterval = setInterval(pollStatus, 10_000)
-
   window.addEventListener('keydown', onKeydown)
 })
 
 onUnmounted(() => {
-  if (statusInterval !== null) clearInterval(statusInterval)
   window.removeEventListener('keydown', onKeydown)
 })
 </script>

@@ -66,7 +66,6 @@ public sealed class InboxMessageDto
     public DateTime ReceivedAt { get; init; }
     public bool IsRead { get; init; }
     public bool AckSent { get; init; }
-    public bool ReplySent { get; init; }
     public int RetryCount { get; init; }
     public int MaxRetries { get; init; }
     public DateTime? NextRetryAt { get; init; }
@@ -114,18 +113,45 @@ public sealed class SettingsDto
     // APRS-IS settings
     public bool AprsIsEnabled { get; init; }
     public required string AprsIsHost { get; init; }
-    public int AprsIsPort { get; init; }
+    public double? HomeLat { get; init; }
+    public double? HomeLon { get; init; }
+    public double DatabaseCleanupIntervalHours { get; init; }
+    public bool VacuumOnCleanup { get; init; }
+    public string? QrzUsername { get; init; }
+    public bool QrzPasswordConfigured { get; init; }
     public bool AprsIsPasscodeOverrideConfigured { get; init; }
     public int AprsIsPasscodeComputed { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
 }
 
+public sealed class UpdateStationSettingsRequest
+{
+    public required string OurCallsign { get; init; }
+    public double? HomeLat { get; init; }
+    public double? HomeLon { get; init; }
+    public int MaxRetryAttempts { get; init; }
+    public int InitialRetryDelaySeconds { get; init; }
+}
+
+public sealed class UpdateQrzCredentialsRequest
+{
+    public string? Username { get; init; }
+    // Write-only secret: null leaves the stored password unchanged unless ClearPassword is set.
+    public string? Password { get; init; }
+    public bool ClearPassword { get; init; }
+}
+
+public sealed class UpdateCleanupSettingsRequest
+{
+    public double DatabaseCleanupIntervalHours { get; init; }
+    public bool VacuumOnCleanup { get; init; }
+}
+
 public sealed class UpdateAprsIsSettingsRequest
 {
     public bool AprsIsEnabled { get; init; }
     public required string AprsIsHost { get; init; }
-    public int AprsIsPort { get; init; }
     // Write-only secret: null leaves the stored override unchanged unless
     // ClearAprsIsPasscodeOverride is set.
     public int? AprsIsPasscodeOverride { get; init; }
@@ -268,7 +294,6 @@ public sealed class AlertDto
     public string? GeofenceName { get; init; }
     public string? Direction { get; init; }
     public string? RuleName { get; init; }
-    public string? MessageText { get; init; }
 }
 
 public sealed class AlertBroadcastDto
@@ -368,6 +393,11 @@ public sealed class RecentlyHeardDto
     public required string Callsign { get; init; }
     public DateTime FirstSeen { get; init; }
     public StationType StationType { get; init; }
+}
+
+public sealed class DirewolfStateDto
+{
+    public bool Connected { get; init; }
 }
 
 public sealed class StatusDto

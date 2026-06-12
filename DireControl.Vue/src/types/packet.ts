@@ -70,7 +70,7 @@ export interface WeatherData {
 
 export interface TelemetryData {
   sequenceNumber: string | null
-  analogs: number[] | null
+  analogs: (number | null)[] | null
   digitals: boolean[] | null
   comment: string | null
 }

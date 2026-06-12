@@ -36,8 +36,6 @@ function alertDetailText(alert: (typeof alertsStore.alerts)[0]): string {
       return alert.geofenceName
         ? `${alert.direction === 'entered' ? 'Entered' : 'Exited'} geofence "${alert.geofenceName}"`
         : `${alert.direction === 'entered' ? 'Entered' : 'Exited'} geofence`
-    case 'NewMessage':
-      return alert.messageText ? `Message: ${alert.messageText}` : 'New message'
     default:
       return alert.alertTypeName
   }
@@ -66,7 +64,6 @@ function goToStation(callsign: string) {
           { title: 'Watch List', value: 'WatchList' },
           { title: 'Proximity', value: 'Proximity' },
           { title: 'Geofence', value: 'Geofence' },
-          { title: 'New Message', value: 'NewMessage' },
         ]"
         item-title="title"
         item-value="value"

@@ -9,7 +9,6 @@ export interface AlertDto {
   geofenceName: string | null
   direction: string | null
   ruleName: string | null
-  messageText: string | null
 }
 
 export interface AlertBroadcastDto {
@@ -65,5 +64,4 @@ export const ALERT_TYPE_COLORS: Record<string, string> = {
   WatchList: 'amber',
   Proximity: 'blue',
   Geofence: 'green',
-  NewMessage: 'purple',
 }

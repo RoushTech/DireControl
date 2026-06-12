@@ -27,6 +27,14 @@ public static class DatabaseInitializer
         // continuous packet ingest writer. Persistent, but harmless to re-apply.
         await context.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 
+        // The settings row is no longer seeded by the model (its content is a
+        // JSON document); make sure it exists.
+        if (await context.UserSettings.FindAsync(1) is null)
+        {
+            context.UserSettings.Add(new DireControl.Data.Models.UserSetting { Id = 1 });
+            await context.SaveChangesAsync();
+        }
+
         logger.LogInformation("Database ready.");
     }
 }

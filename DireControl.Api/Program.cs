@@ -109,6 +109,7 @@ services
     .AddSingleton<BeaconService>()
     .AddSingleton<MessageSendingService>()
     .AddSingleton<PendingAlertChannel>()
+    .AddSingleton<StationSettingsProvider>()
     .AddSingleton<CallsignLookupService>()
     .AddSingleton<StatisticsService>()
     .AddSingleton<RainViewerRadarProvider>()

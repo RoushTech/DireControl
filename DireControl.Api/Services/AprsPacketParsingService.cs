@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-using AprsSharp.AprsParser;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
 using DireControl.Data;
@@ -22,7 +20,7 @@ namespace DireControl.Api.Services;
 public sealed class AprsPacketParsingService(
     IServiceScopeFactory scopeFactory,
     IHubContext<PacketHub> hubContext,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     MessageSendingService messageSendingService,
     PendingAlertChannel alertChannel,
     ILogger<AprsPacketParsingService> logger) : BackgroundService
@@ -31,14 +29,8 @@ public sealed class AprsPacketParsingService(
     private const int PollIntervalMs = 5_000;
 
     /// <summary>
-    /// Minimum position delta (decimal degrees) treated as meaningful movement.
-    /// ~111 m at the equator; generous enough to absorb GPS jitter.
-    /// </summary>
-    private const double MovementThresholdDeg = 0.001;
-
-    /// <summary>
     /// A station must have position packets spanning at least this many hours,
-    /// all within <see cref="MovementThresholdDeg"/>, before it is classified Fixed.
+    /// all within <see cref="PacketDecoder.MovementThresholdDeg"/>, before it is classified Fixed.
     /// </summary>
     private const int FixedDetectionWindowHours = 4;
 
@@ -47,35 +39,6 @@ public sealed class AprsPacketParsingService(
     /// before the classification fires (avoids single-packet false positives).
     /// </summary>
     private const int FixedDetectionMinPackets = 3;
-
-    /// <summary>
-    /// Two-character APRS symbol strings (table + code) that unambiguously represent
-    /// a mobile platform.  A match immediately classifies the transmitting station
-    /// as <see cref="StationType.Mobile"/> unless a higher-priority type is already set.
-    /// </summary>
-    private static readonly HashSet<string> MobileSymbols = new(StringComparer.Ordinal)
-    {
-        // Primary table (/)
-        "/'",   // Small aircraft
-        "/<",   // Motorcycle
-        "/>",   // Car
-        "/[",   // Jogger / runner
-        "/^",   // Large aircraft
-        "/b",   // Bicycle
-        "/g",   // Glider
-        "/j",   // Jeep
-        "/k",   // Truck
-        "/s",   // Power boat
-        "/u",   // Bus
-        "/v",   // Van / SUV
-        "/X",   // Helicopter
-        "/Y",   // Sailboat (yacht)
-        // Alternate table (\)
-        "\\>",  // Car
-        "\\j",  // Jeep
-        "\\k",  // Truck
-        "\\u",  // Bus
-    };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -125,7 +88,8 @@ public sealed class AprsPacketParsingService(
             .ToList();
         await db.Stations.Where(s => preloadCallsigns.Contains(s.Callsign)).LoadAsync(ct);
 
-        var ourCallsign = options.Value.OurCallsign.Trim();
+        var settings = await settingsProvider.GetAsync(ct);
+        var ourCallsign = settings.OurCallsign.Trim();
 
         // Pre-load active radios so own-beacon detection doesn't need per-packet DB queries.
         var activeRadios = await db.Radios.Where(r => r.IsActive).ToListAsync(ct);
@@ -136,8 +100,9 @@ public sealed class AprsPacketParsingService(
             var effects = new List<MessageEffect>();
             try
             {
-                await ParsePacketAsync(packet, db, ourCallsign, effects, ct);
-                await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct);
+                await PacketDecoder.DecodeAsync(packet, db, ourCallsign, effects, ct, activeRadios: activeRadios);
+                await PacketDecoder.ResolvePathCoordinatesAsync(
+                    packet, db, ourCallsign, settings.HomeLat, settings.HomeLon, ct);
                 parsed.Add((packet, effects));
             }
             catch (Exception ex)
@@ -170,7 +135,7 @@ public sealed class AprsPacketParsingService(
                 ReceivedAt = packet.ReceivedAt,
                 Latitude = packet.Latitude,
                 Longitude = packet.Longitude,
-                Summary = BuildSummary(packet),
+                Summary = PacketDecoder.BuildSummary(packet),
                 HopCount = packet.HopCount,
                 ResolvedPath = packet.ResolvedPath,
             };
@@ -224,9 +189,11 @@ public sealed class AprsPacketParsingService(
     /// </summary>
     public async Task ReprocessOneAsync(DbPacket packet, DireControlContext db, string ourCallsign, CancellationToken ct)
     {
+        var settings = await settingsProvider.GetAsync(ct);
         var discardedEffects = new List<MessageEffect>();
-        await ParsePacketAsync(packet, db, ourCallsign, discardedEffects, ct, reprocess: true);
-        await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct, reprocess: true);
+        await PacketDecoder.DecodeAsync(packet, db, ourCallsign, discardedEffects, ct, reprocess: true);
+        await PacketDecoder.ResolvePathCoordinatesAsync(
+            packet, db, ourCallsign, settings.HomeLat, settings.HomeLon, ct, reprocess: true);
     }
 
     private async Task ApplyMessageEffectsAsync(
@@ -239,8 +206,8 @@ public sealed class AprsPacketParsingService(
         {
             if (effect.IsNewInboxMessage)
             {
-                // Send auto-ACK and mark AckSent = true
-                messageSendingService.SendAck(effect.PeerCallsign, effect.MessageId);
+                // Send auto-ACK (sourced from the callsign the message was addressed to)
+                await messageSendingService.SendAckAsync(effect.PeerCallsign, effect.MessageId, effect.AddresseeCallsign, ct);
 
                 var msg = db.Messages.Local.FirstOrDefault(m =>
                     m.FromCallsign == effect.PeerCallsign &&
@@ -276,102 +243,8 @@ public sealed class AprsPacketParsingService(
             {
                 // Remote station retransmitted because our earlier ACK was lost.
                 // Re-send the ACK so it stops retrying; no new inbox entry is created.
-                messageSendingService.SendAck(effect.PeerCallsign, effect.MessageId);
+                await messageSendingService.SendAckAsync(effect.PeerCallsign, effect.MessageId, effect.AddresseeCallsign, ct);
             }
-        }
-    }
-
-    private async Task ParsePacketAsync(DbPacket packet, DireControlContext db, string ourCallsign, List<MessageEffect> effects, CancellationToken ct, bool reprocess = false)
-    {
-        var aprs = new AprsSharp.AprsParser.Packet(packet.RawPacket);
-
-        packet.ParsedType = MapPacketType(aprs.InfoField);
-
-        // Extract path from the raw TNC2 string.  ParseTnc2Header reads directly
-        // from RawPacket so asterisk markers from the AX.25 H-bit are preserved;
-        // the returned RawPath already excludes the TOCALL.
-        var (source, tocall, rawPath) = AprsPathParser.ParseTnc2Header(packet.RawPacket);
-
-        // When reprocessing, re-derive StationCallsign from the TNC2 header (the outer
-        // source) to repair rows whose value was corrupted by older parsers. The live
-        // path leaves StationCallsign exactly as ingest stored it (the preloaded Station
-        // and FK depend on it), so live behaviour is unchanged.
-        if (reprocess && !string.IsNullOrWhiteSpace(source) && packet.RawPacket.Contains('>'))
-            packet.StationCallsign = source;
-
-        packet.ParserVersion = ParserVersionInfo.Current;
-
-        packet.Path = rawPath;   // e.g. "WE4MB-3*,WIDE2" — TOCALL absent, asterisks intact
-
-        List<string> pathList = new List<string> { tocall };
-        if (!string.IsNullOrEmpty(rawPath))
-        {
-            pathList.AddRange(rawPath.Split(',', StringSplitOptions.RemoveEmptyEntries));
-        }
-
-        // Full ResolvedPath (with source + home + coordinates) is built in ResolvePathCoordinatesAsync.
-        var (viaHops, hopCount) = AprsPathParser.ExtractViaHops(pathList);
-        packet.HopCount = hopCount;
-        packet.ResolvedPath = viaHops;
-
-        switch (aprs.InfoField)
-        {
-            case WeatherInfo weather:
-                HandleWeather(packet, weather, db, reprocess);
-                break;
-
-            case PositionlessWeatherInfo plWx:
-                HandlePositionlessWeather(packet, plWx, db, reprocess);
-                break;
-
-            case MicEInfo micE:
-                HandleMicE(packet, micE, db, reprocess);
-                break;
-
-            case ObjectInfo obj:
-                HandleObjectOrItem(packet, obj.Comment, obj.Position);
-                break;
-
-            case ItemInfo item:
-                HandleObjectOrItem(packet, item.Comment, item.Position);
-                break;
-
-            case PositionInfo position:
-                HandlePosition(packet, position, db, reprocess);
-                break;
-
-            case MessageInfo message:
-                await HandleMessageAsync(packet, message, db, ourCallsign, effects, ct, reprocess: reprocess);
-                break;
-
-            case StatusInfo status:
-                packet.Comment = status.Comment ?? string.Empty;
-                break;
-
-            case ThirdPartyTrafficInfo thirdParty:
-                await HandleThirdPartyAsync(packet, thirdParty, db, ourCallsign, effects, ct, reprocess);
-                break;
-        }
-
-        // Mode / frequency / gateway detection
-        // Skipped when reprocessing: these mutate live Station state from the packet,
-        // and replaying historical packets must not overwrite a station's current mode.
-        var mode = DetectMode(tocall, packet.Comment);
-        var freq = ParseFrequency(packet.Comment);
-
-        if (!reprocess && (mode != null || freq != null))
-        {
-            UpdateStation(db, packet.StationCallsign, s =>
-            {
-                if (mode != null) s.LastMode = mode;
-                if (freq != null) s.LastFrequencyMhz = freq;
-
-                if (IsGatewayTocall(tocall) &&
-                    s.StationType is StationType.Unknown or StationType.Fixed)
-                {
-                    s.StationType = StationType.Gateway;
-                }
-            });
         }
     }
 
@@ -526,8 +399,8 @@ public sealed class AprsPacketParsingService(
                             var refLon = recentPositions[0].Longitude!.Value;
 
                             var allWithinThreshold = recentPositions.All(p =>
-                                Math.Abs(p.Latitude!.Value - refLat) <= MovementThresholdDeg &&
-                                Math.Abs(p.Longitude!.Value - refLon) <= MovementThresholdDeg);
+                                Math.Abs(p.Latitude!.Value - refLat) <= PacketDecoder.MovementThresholdDeg &&
+                                Math.Abs(p.Longitude!.Value - refLon) <= PacketDecoder.MovementThresholdDeg);
 
                             if (allWithinThreshold)
                                 station.StationType = StationType.Fixed;
@@ -545,377 +418,6 @@ public sealed class AprsPacketParsingService(
         await db.SaveChangesAsync(ct);
     }
 
-    private void HandlePosition(DbPacket packet, PositionInfo info, DireControlContext db, bool reprocess = false)
-    {
-        packet.Comment = info.Comment ?? string.Empty;
-
-        if (info.Position is { } pos)
-        {
-            var coord = pos.Coordinates;
-            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
-            {
-                packet.Latitude = coord.Latitude;
-                packet.Longitude = coord.Longitude;
-            }
-
-            // Reprocessing must not replay this packet's position/symbol onto the live
-            // Station record — only the packet's own fields above are re-derived.
-            if (reprocess)
-                return;
-
-            var symbol = $"{pos.SymbolTableIdentifier}{pos.SymbolCode}";
-
-            UpdateStation(db, packet.StationCallsign, station =>
-            {
-                // Mobile detection
-                // Check BEFORE updating LastLat/LastLon so we compare old vs new.
-                //
-                // Two independent signals both upgrade a station to Mobile:
-                //   1. Symbol — the station is transmitting a known vehicle icon.
-                //   2. Movement — the position differs from the last known position
-                //      by more than the GPS-jitter threshold (~111 m).
-                //
-                // Only Unknown and Fixed stations may be promoted to Mobile.
-                // Fixed → Mobile is intentionally allowed (station started moving).
-                // Mobile → Fixed is NOT allowed (handled by time-based detection).
-                // Weather / Digipeater / IGate are never overwritten here.
-                var isMobileSymbol = MobileSymbols.Contains(symbol);
-                var hasMoved = station.LastLat is not null
-                    && station.LastLon is not null
-                    && !double.IsNaN(coord.Latitude)
-                    && !double.IsNaN(coord.Longitude)
-                    && (Math.Abs(coord.Latitude - station.LastLat.Value) > MovementThresholdDeg
-                     || Math.Abs(coord.Longitude - station.LastLon.Value) > MovementThresholdDeg);
-
-                if ((isMobileSymbol || hasMoved) &&
-                    station.StationType is StationType.Unknown or StationType.Fixed)
-                {
-                    station.StationType = StationType.Mobile;
-                }
-
-                if (!double.IsNaN(coord.Latitude)) station.LastLat = coord.Latitude;
-                if (!double.IsNaN(coord.Longitude)) station.LastLon = coord.Longitude;
-                station.Symbol = symbol;
-            });
-        }
-    }
-
-    private void HandleWeather(DbPacket packet, WeatherInfo info, DireControlContext db, bool reprocess = false)
-    {
-        HandlePosition(packet, info, db, reprocess);
-
-        // Rainfall fields in AprsSharp are in 100ths of an inch; convert to inches.
-        // Pressure in AprsSharp is in tenths of mb; convert to mb.
-        logger.LogDebug("APRSSharp pressure={Pressure} for packet {Raw}", info.BarometricPressure, packet.RawPacket);
-        packet.WeatherData = new WeatherData
-        {
-            TemperatureF = (double?)info.Temperature,
-            WindSpeedMph = (double?)info.WindSpeed,
-            WindDirectionDeg = info.WindDirection,
-            WindGustMph = (double?)info.WindGust,
-            HumidityPercent = info.Humidity,
-            PressureMbar = (double?)info.BarometricPressure / 10.0,
-            RainfallLastHourIn = info.Rainfall1Hour.HasValue ? info.Rainfall1Hour.Value / 100.0 : null,
-            RainfallLast24hIn = info.Rainfall24Hour.HasValue ? info.Rainfall24Hour.Value / 100.0 : null,
-            RainfallSinceMidnightIn = info.RainfallSinceMidnight.HasValue ? info.RainfallSinceMidnight.Value / 100.0 : null,
-        };
-
-        if (reprocess)
-            return;
-
-        UpdateStation(db, packet.StationCallsign, s =>
-        {
-            s.IsWeatherStation = true;
-            s.StationType = StationType.Weather;
-        });
-    }
-
-    private void HandlePositionlessWeather(DbPacket packet, PositionlessWeatherInfo info, DireControlContext db, bool reprocess = false)
-    {
-        logger.LogDebug("APRSSharp positionless weather pressure={Pressure} for packet {Raw}", info.BarometricPressure, packet.RawPacket);
-        packet.Comment = info.Comment ?? string.Empty;
-        packet.WeatherData = new WeatherData
-        {
-            TemperatureF = (double?)info.Temperature,
-            WindSpeedMph = (double?)info.WindSpeed,
-            WindDirectionDeg = info.WindDirection,
-            WindGustMph = (double?)info.WindGust,
-            HumidityPercent = info.Humidity,
-            PressureMbar = (double?)info.BarometricPressure / 10.0,
-            RainfallLastHourIn = info.Rainfall1Hour.HasValue ? info.Rainfall1Hour.Value / 100.0 : null,
-            RainfallLast24hIn = info.Rainfall24Hour.HasValue ? info.Rainfall24Hour.Value / 100.0 : null,
-            RainfallSinceMidnightIn = info.RainfallSinceMidnight.HasValue ? info.RainfallSinceMidnight.Value / 100.0 : null,
-        };
-
-        if (reprocess)
-            return;
-
-        UpdateStation(db, packet.StationCallsign, s =>
-        {
-            s.IsWeatherStation = true;
-            s.StationType = StationType.Weather;
-        });
-    }
-
-    private void HandleMicE(DbPacket packet, MicEInfo info, DireControlContext db, bool reprocess = false)
-    {
-        packet.Comment = info.Comment ?? string.Empty;
-
-        if (info.Position is { } pos)
-        {
-            var coord = pos.Coordinates;
-            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
-            {
-                packet.Latitude = coord.Latitude;
-                packet.Longitude = coord.Longitude;
-            }
-
-            // Reprocessing must not replay this packet's position/symbol onto the live
-            // Station record — only the packet's own fields above are re-derived.
-            if (reprocess)
-                return;
-
-            var symbol = $"{pos.SymbolTableIdentifier}{pos.SymbolCode}";
-
-            UpdateStation(db, packet.StationCallsign, station =>
-            {
-                var isMobileSymbol = MobileSymbols.Contains(symbol);
-                var hasMoved = station.LastLat is not null
-                    && station.LastLon is not null
-                    && !double.IsNaN(coord.Latitude)
-                    && !double.IsNaN(coord.Longitude)
-                    && (Math.Abs(coord.Latitude - station.LastLat.Value) > MovementThresholdDeg
-                     || Math.Abs(coord.Longitude - station.LastLon.Value) > MovementThresholdDeg);
-
-                if ((isMobileSymbol || hasMoved) &&
-                    station.StationType is StationType.Unknown or StationType.Fixed)
-                {
-                    station.StationType = StationType.Mobile;
-                }
-
-                if (!double.IsNaN(coord.Latitude)) station.LastLat = coord.Latitude;
-                if (!double.IsNaN(coord.Longitude)) station.LastLon = coord.Longitude;
-                if (info.Course is { } heading) station.LastHeading = heading;
-                if (info.Speed is { } speed) station.LastSpeed = speed * 1.15078; // knots → mph
-                station.Symbol = symbol;
-            });
-        }
-    }
-
-    private static void HandleObjectOrItem(DbPacket packet, string? comment, Position? position)
-    {
-        packet.Comment = comment ?? string.Empty;
-
-        if (position is { } pos)
-        {
-            var coord = pos.Coordinates;
-            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
-            {
-                packet.Latitude = coord.Latitude;
-                packet.Longitude = coord.Longitude;
-            }
-        }
-    }
-
-    private async Task HandleThirdPartyAsync(
-        DbPacket packet,
-        ThirdPartyTrafficInfo info,
-        DireControlContext db,
-        string ourCallsign,
-        List<MessageEffect> effects,
-        CancellationToken ct,
-        bool reprocess = false)
-    {
-        if (info.InnerPacket?.InfoField is MessageInfo innerMsg)
-        {
-            packet.ParsedType = OurPacketType.Message;
-            var innerSender = info.InnerPacket.Sender ?? packet.StationCallsign;
-            await HandleMessageAsync(packet, innerMsg, db, ourCallsign, effects, ct,
-                senderCallsignOverride: innerSender, reprocess: reprocess);
-        }
-    }
-
-    private async Task HandleMessageAsync(
-        DbPacket packet,
-        MessageInfo info,
-        DireControlContext db,
-        string ourCallsign,
-        List<MessageEffect> effects,
-        CancellationToken ct,
-        string? senderCallsignOverride = null,
-        bool reprocess = false)
-    {
-        var fromCallsign = senderCallsignOverride ?? packet.StationCallsign;
-        var addressee = info.Addressee ?? string.Empty;
-        var body = info.Content ?? string.Empty;
-        var messageId = info.Id ?? string.Empty;
-
-        packet.MessageData = new MessageData
-        {
-            Addressee = addressee,
-            Text = body,
-            MessageId = messageId,
-        };
-
-        // Everything below mutates external state (inbox rows, auto-ACK/send effects).
-        // When reprocessing historical packets we only re-derive the row's fields above
-        // and must not replay those side effects.
-        if (reprocess)
-            return;
-
-        if (string.IsNullOrWhiteSpace(ourCallsign))
-            return;
-
-        if (!addressee.Trim().Equals(ourCallsign, StringComparison.OrdinalIgnoreCase))
-            return;
-
-        // Detect ACK receipts: body is "ackXXXX" where XXXX is the original message ID.
-        if (MessageHandlingLogic.TryParseAck(body, out var originalMsgId))
-        {
-            effects.Add(new MessageEffect(
-                IsNewInboxMessage: false,
-                IsAckReceived: true,
-                PeerCallsign: fromCallsign,
-                MessageId: messageId,
-                OriginalMsgId: originalMsgId));
-            return;
-        }
-
-        // Dedup: if we already have a message from this sender with this ID, the
-        // remote station is retransmitting because our ACK never reached it.
-        // Re-queue an ACK but skip adding a duplicate inbox entry.
-        if (!string.IsNullOrWhiteSpace(messageId))
-        {
-            var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-                fromCallsign, messageId, db, ct);
-
-            if (isDuplicate)
-            {
-                effects.Add(new MessageEffect(
-                    IsNewInboxMessage: false,
-                    IsAckReceived: false,
-                    PeerCallsign: fromCallsign,
-                    MessageId: messageId,
-                    IsDuplicateInboxMessage: true));
-                return;
-            }
-        }
-
-        // Regular message addressed to us — add to inbox.
-        db.Messages.Add(new Message
-        {
-            FromCallsign = fromCallsign,
-            ToCallsign = addressee.Trim(),
-            Body = body,
-            MessageId = messageId,
-            ReceivedAt = packet.ReceivedAt,
-            IsRead = false,
-            AckSent = false,
-            ReplySent = false,
-        });
-
-        if (!string.IsNullOrWhiteSpace(messageId))
-        {
-            effects.Add(new MessageEffect(
-                IsNewInboxMessage: true,
-                IsAckReceived: false,
-                PeerCallsign: fromCallsign,
-                MessageId: messageId));
-        }
-    }
-
-    /// <summary>
-    /// Builds the complete <see cref="DbPacket.ResolvedPath"/> for a packet:
-    /// <list type="bullet">
-    ///   <item>HopIndex 0 — originating station (position from packet or Station table)</item>
-    ///   <item>HopIndex 1…n-1 — intermediate digipeater hops (already populated by ParsePacket)</item>
-    ///   <item>HopIndex n — our own station (home position from settings)</item>
-    /// </list>
-    /// Coordinates are resolved from <see cref="DireControlContext.Stations"/> and
-    /// <see cref="DireControlOptions.HomeLat"/> / <see cref="DireControlOptions.HomeLon"/>.
-    /// </summary>
-    private async Task ResolvePathCoordinatesAsync(
-        DbPacket packet,
-        DireControlContext db,
-        string ourCallsign,
-        CancellationToken ct,
-        bool reprocess = false)
-    {
-        var opts = options.Value;
-
-        // Hop 0: originating station
-        double? srcLat = packet.Latitude;
-        double? srcLon = packet.Longitude;
-        if (srcLat == null || srcLon == null)
-        {
-            var srcStation = db.Stations.Local.FirstOrDefault(s => s.Callsign == packet.StationCallsign)
-                ?? await db.Stations.FindAsync(new object?[] { packet.StationCallsign }, ct);
-            srcLat = srcStation?.LastLat;
-            srcLon = srcStation?.LastLon;
-        }
-
-        var sourceEntry = new ResolvedPathEntry
-        {
-            Callsign = packet.StationCallsign,
-            Latitude = srcLat,
-            Longitude = srcLon,
-            Known = srcLat != null && srcLon != null,
-            HopIndex = 0,
-        };
-
-        // Intermediate hops (already extracted by ParsePacket, HopIndex 1+)
-        foreach (var hop in packet.ResolvedPath)
-        {
-            if (AprsPathParser.IsGenericAlias(hop.Callsign))
-            {
-                hop.Known = false;
-                continue;
-            }
-
-            var station = db.Stations.Local.FirstOrDefault(s => s.Callsign == hop.Callsign)
-                ?? await db.Stations.FindAsync(new object?[] { hop.Callsign }, ct);
-
-            // Classify the station based on its role in this packet's path.
-            // Skipped during reprocessing — promoting station types from replayed
-            // historical packets would mutate current station state.
-            if (!reprocess && station != null)
-            {
-                if (hop.IsIgate &&
-                    station.StationType is StationType.Unknown or StationType.Digipeater)
-                {
-                    station.StationType = StationType.IGate;
-                }
-                else if (!hop.IsIgate && station.StationType == StationType.Unknown)
-                {
-                    station.StationType = StationType.Digipeater;
-                }
-            }
-
-            if (station?.LastLat != null && station.LastLon != null)
-            {
-                hop.Latitude = station.LastLat;
-                hop.Longitude = station.LastLon;
-                hop.Known = true;
-            }
-        }
-
-        packet.UnknownHopCount = packet.ResolvedPath.Count(e => !e.Known);
-
-        // Final hop: our own station
-        var homeEntry = new ResolvedPathEntry
-        {
-            Callsign = ourCallsign,
-            Latitude = opts.HomeLat,
-            Longitude = opts.HomeLon,
-            Known = opts.HomeLat != null && opts.HomeLon != null,
-            HopIndex = packet.ResolvedPath.Count + 1,
-        };
-
-        // Prepend source and append home so the list is fully ordered
-        packet.ResolvedPath.Insert(0, sourceEntry);
-        packet.ResolvedPath.Add(homeEntry);
-    }
-
     private static InboxMessageDto ToInboxDto(Message m) => new()
     {
         Id = m.Id,
@@ -926,65 +428,12 @@ public sealed class AprsPacketParsingService(
         ReceivedAt = m.ReceivedAt,
         IsRead = m.IsRead,
         AckSent = m.AckSent,
-        ReplySent = m.ReplySent,
         RetryCount = m.RetryCount,
         MaxRetries = m.MaxRetries,
         NextRetryAt = m.NextRetryAt,
         RetryState = m.RetryState,
         LastSentAt = m.LastSentAt,
     };
-
-    private static void UpdateStation(DireControlContext db, string callsign, Action<Station> update)
-    {
-        var station = db.Stations.Local.FirstOrDefault(s => s.Callsign == callsign);
-        if (station is not null)
-            update(station);
-    }
-
-    private static OurPacketType MapPacketType(AprsSharp.AprsParser.InfoField? infoField) => infoField switch
-    {
-        WeatherInfo => OurPacketType.Weather,
-        PositionlessWeatherInfo => OurPacketType.Weather,
-        MicEInfo => OurPacketType.Position,
-        PositionInfo => OurPacketType.Position,
-        ObjectInfo => OurPacketType.Object,
-        ItemInfo => OurPacketType.Item,
-        MessageInfo => OurPacketType.Message,
-        StatusInfo => OurPacketType.Status,
-        TelemetryInfo => OurPacketType.Telemetry,
-        ThirdPartyTrafficInfo => OurPacketType.Unparseable, // overridden if inner packet is a message
-        _ => OurPacketType.Unparseable,
-    };
-
-    private static string BuildSummary(DbPacket packet)
-    {
-        return packet.ParsedType switch
-        {
-            OurPacketType.Position => packet.Latitude is not null && packet.Longitude is not null
-                ? $"Position at {packet.Latitude:F5}, {packet.Longitude:F5}"
-                : "Position packet",
-
-            OurPacketType.Message => packet.MessageData is not null
-                ? $"Message to {packet.MessageData.Addressee}: {packet.MessageData.Text}"
-                : "Message packet",
-
-            OurPacketType.Weather => packet.WeatherData?.TemperatureF is { } t
-                ? $"Weather report, temperature {t:F1}°F"
-                : "Weather packet",
-
-            OurPacketType.Telemetry => "Telemetry packet",
-            OurPacketType.Object => "Object packet",
-            OurPacketType.Item => "Item packet",
-
-            OurPacketType.Status => string.IsNullOrWhiteSpace(packet.Comment)
-                ? "Status packet"
-                : $"Status: {packet.Comment}",
-
-            _ => string.IsNullOrWhiteSpace(packet.RawPacket)
-                ? "Unrecognized packet"
-                : $"Raw: {packet.RawPacket}"
-        };
-    }
 
     private async Task CheckOwnBeaconAsync(
         DbPacket packet,
@@ -1211,98 +660,4 @@ public sealed class AprsPacketParsingService(
             radio.FullCallsign, digiCallsign, secondsAfter);
     }
 
-    private static readonly Regex FrequencyRegex = new(
-        @"(\d{2,3}\.\d{3,5})\s*MHz",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    /// <summary>
-    /// Known TOCALL prefixes for digital voice gateway software.
-    /// Each entry is matched as a prefix of the TOCALL field.
-    /// </summary>
-    private static readonly (string Prefix, string Mode)[] GatewayTocallPrefixes =
-    [
-        ("APDG",  "D-Star"),   // D-Star gateways (ircDDB Gateway, …)
-        ("APDS",  "D-Star"),   // D-Star (dstar.is)
-        ("APDP",  "D-Star"),   // D-PRS (D-Star position reporting)
-        ("APDMR", "DMR"),      // DMR gateways
-        ("APBM",  "DMR"),      // BrandMeister DMR
-        ("APRX",  "DMR"),      // DMR repeaters (various)
-        ("APYSF", "YSF"),      // Yaesu System Fusion
-        ("APWIR", "WIRES-X"),  // Yaesu WIRES-X
-    ];
-
-    /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="tocall"/> matches
-    /// a known digital voice gateway TOCALL prefix.
-    /// </summary>
-    internal static bool IsGatewayTocall(string? tocall)
-    {
-        if (string.IsNullOrEmpty(tocall)) return false;
-        foreach (var (prefix, _) in GatewayTocallPrefixes)
-        {
-            if (tocall.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Detects the operating mode from the TOCALL prefix and/or comment text.
-    /// Returns null when mode cannot be determined.
-    /// </summary>
-    internal static string? DetectMode(string? tocall, string? comment)
-    {
-        // 1. Check TOCALL prefix first — most reliable signal.
-        if (!string.IsNullOrEmpty(tocall))
-        {
-            foreach (var (prefix, mode) in GatewayTocallPrefixes)
-            {
-                if (tocall.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    return mode;
-            }
-        }
-
-        // 2. Fall back to comment text keywords.
-        if (!string.IsNullOrEmpty(comment))
-        {
-            if (comment.Contains("D-Star", StringComparison.OrdinalIgnoreCase) ||
-                comment.Contains("DStar", StringComparison.OrdinalIgnoreCase))
-                return "D-Star";
-            if (comment.Contains("DMR", StringComparison.OrdinalIgnoreCase))
-                return "DMR";
-            if (comment.Contains("YSF", StringComparison.OrdinalIgnoreCase) ||
-                comment.Contains("System Fusion", StringComparison.OrdinalIgnoreCase))
-                return "YSF";
-            if (comment.Contains("WIRES", StringComparison.OrdinalIgnoreCase))
-                return "WIRES-X";
-            if (comment.Contains("AllStar", StringComparison.OrdinalIgnoreCase) ||
-                comment.Contains("EchoLink", StringComparison.OrdinalIgnoreCase))
-                return "AllStar";
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Extracts the first frequency (in MHz) from a packet comment.
-    /// Returns the numeric string (e.g. "144.96000") or null.
-    /// </summary>
-    internal static string? ParseFrequency(string? comment)
-    {
-        if (string.IsNullOrEmpty(comment)) return null;
-        var match = FrequencyRegex.Match(comment);
-        return match.Success ? match.Groups[1].Value : null;
-    }
 }
-
-/// <summary>
-/// Describes a messaging side-effect that needs to be processed after
-/// the packet has been parsed and saved.
-/// </summary>
-internal sealed record MessageEffect(
-    bool IsNewInboxMessage,
-    bool IsAckReceived,
-    string PeerCallsign,
-    string MessageId,
-    string? OriginalMsgId = null,
-    bool IsDuplicateInboxMessage = false);

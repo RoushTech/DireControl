@@ -4,17 +4,20 @@ import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
 import { createHubConnection, type HubHandle } from '@/composables/useSignalR'
-import { getStations, getStationTrack, getStationPackets, getSettings } from '@/api/stationsApi'
+import { getStations, getSettings } from '@/api/stationsApi'
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
-import { getWeatherManifest, getWeatherStatus, type WeatherManifest } from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
-import type { PacketBroadcastDto, ResolvedPathEntry, TrackPointDto } from '@/types/packet'
-import type { TileProviderConfig } from '@/types/map'
+import type { PacketBroadcastDto } from '@/types/packet'
+import { TILE_PROVIDERS } from '@/config/tileProviders'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
-import { estimatePosition } from '@/utils/estimatedPosition'
+import { escapeHtml } from '@/utils/escapeHtml'
 import { useUnits } from '@/composables/useUnits'
 import { useMapPrefs } from '@/composables/useMapPrefs'
+import { useWeatherOverlays } from '@/composables/useWeatherOverlays'
+import { useTracks } from '@/composables/useTracks'
+import { useGhostMarkers } from '@/composables/useGhostMarkers'
+import { usePacketPaths } from '@/composables/usePacketPaths'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
 // Async: keeps chart.js (used only inside the panel) out of the eager map bundle.
 const StationDetailPanel = defineAsyncComponent(() => import('@/components/StationDetailPanel.vue'))
@@ -25,100 +28,6 @@ import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRadiosStore } from '@/stores/radiosStore'
 import type { OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto } from '@/types/radio'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
-
-const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
-  // Light
-  osm: {
-    name: 'OpenStreetMap',
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    theme: 'light',
-    group: 'light',
-  },
-  stadiaAlidadeSmooth: {
-    name: 'Stadia Alidade Smooth',
-    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png',
-    attribution:
-      '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    theme: 'light',
-    group: 'light',
-  },
-  cartoLight: {
-    name: 'Carto Light',
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
-    theme: 'light',
-    group: 'light',
-  },
-  topo: {
-    name: 'OpenTopoMap',
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution:
-      '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
-    theme: 'light',
-    group: 'light',
-  },
-  esriTopo: {
-    name: 'Esri World Topo',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-    attribution:
-      'Esri, HERE, Garmin, Intermap, &copy; OpenStreetMap contributors',
-    theme: 'light',
-    group: 'light',
-  },
-  // Dark
-  cartoDark: {
-    name: 'Carto Dark Matter',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
-    theme: 'dark',
-    group: 'dark',
-  },
-  stadiaAlidadeDark: {
-    name: 'Stadia Alidade Dark',
-    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
-    attribution:
-      '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    theme: 'dark',
-    group: 'dark',
-  },
-  jawgDark: {
-    name: 'Jawg Dark',
-    url: 'https://tile.jawg.io/jawg-dark/{z}/{x}/{y}{r}.png?access-token={apiKey}',
-    attribution:
-      '&copy; <a href="https://www.jawg.io">Jawg Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    theme: 'dark',
-    group: 'dark',
-    requiresApiKey: true,
-    apiKeyParam: 'jawg',
-  },
-  // Satellite
-  satellite: {
-    name: 'Esri World Imagery',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution:
-      '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
-    theme: 'dark',
-    group: 'satellite',
-  },
-  // Specialist
-  openRailwayMap: {
-    name: 'OpenRailwayMap',
-    url: 'https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Style: &copy; <a href="https://www.openrailwaymap.org/">OpenRailwayMap</a>',
-    theme: 'light',
-    group: 'specialist',
-  },
-}
-
-const HOP_SEGMENT_COLORS = ['#4A90D9', '#7B68EE', '#DA70D6'] // blue, purple, orchid
-const HOP_COLOR_FALLBACK = '#FF8C00'  // dark orange for hop 3+
-const UNKNOWN_SEGMENT_COLOR = '#999999'  // grey for dashed unknown segments
-const FINAL_HOP_COLOR = '#2ECC71'       // green for the last hop to our station
 
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
@@ -200,26 +109,6 @@ const mobileStationSheetOpen = ref(false)
 let highlightMarker: L.CircleMarker | null = null
 let highlightTimeout: ReturnType<typeof setTimeout> | null = null
 
-// Movement tracks state.
-// Each entry keeps the rendered layer group plus the raw points so the trail
-// can be re-rendered (older points fading and dropping off) as time passes —
-// without re-hitting the API. Points older than TRACK_WINDOW_MS age out, so a
-// station that stops beaconing has its trail shrink and vanish rather than
-// stay drawn forever.
-const TRACK_WINDOW_MS = 60 * 60 * 1000 // 60 min — matches the track API's default window
-type TrackEntry = {
-  group: L.LayerGroup
-  points: TrackPointDto[]
-  segments: { line: L.Polyline; toReceivedAt: string }[]
-  circles: { circle: L.CircleMarker; receivedAt: string }[]
-}
-const trackLayers = new Map<string, TrackEntry>()
-let trackAgeInterval: ReturnType<typeof setInterval> | null = null
-// Live positions extend cached tracks locally; the API is hit only when no
-// cached track exists, at most once per station per window.
-const trackFetchLast = new Map<string, number>()
-const TRACK_FETCH_THROTTLE_MS = 10_000
-
 // Leading+trailing throttle: fires immediately, then at most once per `ms`,
 // with a trailing call so the last event in a burst still lands.
 function throttleTrailing(fn: () => void, ms: number): () => void {
@@ -240,15 +129,6 @@ function throttleTrailing(fn: () => void, ms: number): () => void {
   }
 }
 
-// Packet path visualisation state
-// Each entry holds the map layer group, an optional fade timer, and whether
-// the path is "persistent" (user-selected) or "auto" (fades after 8 s).
-type PathEntry = { group: L.LayerGroup; fadeTimer: ReturnType<typeof setTimeout> | null; persistent: boolean; resolvedPath: ResolvedPathEntry[] }
-const activePaths = new Map<string, PathEntry>()
-
-// Estimated position (ghost marker) state
-const ghostLayers = new Map<string, L.LayerGroup>()
-let ghostUpdateInterval: ReturnType<typeof setInterval> | null = null
 let staleDecayInterval: ReturnType<typeof setInterval> | null = null
 
 // Stale station state
@@ -307,41 +187,69 @@ const coverageLoading = ref(false)
 let coverageLayerGroup: L.LayerGroup | null = null
 let coverageData: CoverageGridSquareDto[] | null = null
 
-// Weather overlay state
-interface WeatherLayerStatus {
-  available: boolean
-  frameCount?: number
-  lastUpdated?: string
-  reason?: string
-}
-interface WeatherStatus {
-  radar: WeatherLayerStatus
-  wind: WeatherLayerStatus
-  lightning: WeatherLayerStatus
-}
-let radarManifest: WeatherManifest | null = null
-const weatherStatus = shallowRef<WeatherStatus | null>(null)
-let radarFrameLayers: L.TileLayer[] = []
-let radarFrameMeta: { time: number }[] = []
-let radarFrameReady: boolean[] = []
-let currentRadarFrame = 0
-let radarAnimTimeout: ReturnType<typeof setTimeout> | null = null
-let radarRefreshInterval: ReturnType<typeof setInterval> | null = null
-const radarPlaying = ref(false)
-const radarTimestamp = ref('')
-const radarFrameCount = ref(0)
-const radarCurrentIdx = ref(0)
-const radarLoading = ref(false)
-const radarFrameInterval = ref(500)  // ms between frames
-const radarControlsVisible = ref(false)
-const windControlsVisible = ref(false)
-const lightningControlsVisible = ref(false)
-let radarControlsHideTimer: ReturnType<typeof setTimeout> | null = null
-let windControlsHideTimer: ReturnType<typeof setTimeout> | null = null
-let lightningControlsHideTimer: ReturnType<typeof setTimeout> | null = null
-let windLayer: L.TileLayer | null = null
-let lightningLayer: L.TileLayer | null = null
-let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
+// Weather overlay subsystem (radar / wind / lightning) — see useWeatherOverlays
+const {
+  weatherStatus,
+  radarPlaying,
+  radarTimestamp,
+  radarFrameCount,
+  radarCurrentIdx,
+  radarLoading,
+  radarFrameInterval,
+  radarControlsVisible,
+  windControlsVisible,
+  lightningControlsVisible,
+  fetchWeatherStatus,
+  enableRadar,
+  enableWind,
+  enableLightning,
+  toggleRadar,
+  toggleWind,
+  toggleLightning,
+  playRadar,
+  pauseRadar,
+  stepRadarFrame,
+  keepRadarControlsVisible,
+  keepWindControlsVisible,
+  keepLightningControlsVisible,
+  cleanup: weatherCleanup,
+} = useWeatherOverlays(map, {
+  showRadar,
+  showWind,
+  showLightning,
+  radarOpacity,
+  windOpacity,
+  lightningOpacity,
+})
+
+// Movement-track subsystem — see useTracks
+const {
+  appendTrackPoint,
+  removeTrack,
+  toggleTracks,
+  loadTracksForMobileStations,
+  startTrackAging,
+  cleanup: tracksCleanup,
+} = useTracks(map, { showTracks, stationCache, isMobileStation, formatTime })
+
+// Estimated-position (ghost marker) subsystem — see useGhostMarkers
+const {
+  removeGhostLayer,
+  updateGhostLayers,
+  toggleGhostMarkers,
+  startGhostUpdates,
+  cleanup: ghostsCleanup,
+} = useGhostMarkers(map, { showGhostMarkers, stationCache, isMobileStation })
+
+// Packet-path visualisation subsystem — see usePacketPaths
+const {
+  removePath,
+  clearAllPaths,
+  redrawAllPaths,
+  drawAutoPath,
+  drawPersistentPath,
+  showPacketPath,
+} = usePacketPaths(map, { stationCache, staleStationCache, formatTime })
 
 let hub: HubHandle | null = null
 
@@ -352,11 +260,6 @@ function invalidateSizeAfterTransition() {
 function formatTime(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleTimeString()
-}
-
-// Leaflet popup/tooltip strings are injected as innerHTML; escape anything RF-derived.
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 }
 
 function popupContent(callsign: string, lastSeen: string, lat: number, lon: number): string {
@@ -554,16 +457,6 @@ async function ensureSettings(): Promise<SettingsDto | null> {
     }
   }
   return settingsCache
-}
-
-async function fetchWeatherStatus(): Promise<WeatherStatus | null> {
-  try {
-    weatherStatus.value = await getWeatherStatus()
-    return weatherStatus.value
-  } catch (err) {
-    console.error('Failed to fetch weather status:', err)
-    return null
-  }
 }
 
 function clearHomeMarker() {
@@ -776,288 +669,6 @@ async function toggleCoverage() {
   }
 }
 
-// Weather Overlays
-
-function ensureWeatherPane() {
-  if (!map.value) return
-  if (!map.value.getPane('weatherPane')) {
-    const pane = map.value.createPane('weatherPane')
-    pane.style.zIndex = '450'  // above overlayPane (400), below markerPane (600)
-    pane.style.pointerEvents = 'none'
-  }
-}
-
-// RainViewer
-
-async function fetchRadarManifest(): Promise<WeatherManifest | null> {
-  try {
-    return await getWeatherManifest()
-  } catch (err) {
-    console.error('Failed to fetch radar manifest:', err)
-    return null
-  }
-}
-
-function buildRadarLayer(framePath: string, manifest: WeatherManifest): L.TileLayer {
-  const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
-  const zoomOffset = manifest.tileSize === 512 ? -1 : 0
-  return L.tileLayer(
-    `/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`,
-    { opacity: 0, tileSize: manifest.tileSize, zoomOffset, zIndex: 10, pane: 'weatherPane', maxNativeZoom: manifest.maxNativeZoom, maxZoom: 19 },
-  )
-}
-
-function formatRadarTime(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' local'
-}
-
-function showRadarFrame(idx: number) {
-  if (!map.value || radarFrameLayers.length === 0) return
-  const clampedIdx = Math.max(0, Math.min(idx, radarFrameLayers.length - 1))
-  radarFrameLayers.forEach((layer, i) => {
-    if (i === clampedIdx) {
-      if (!map.value!.hasLayer(layer)) layer.addTo(map.value!)
-      layer.setOpacity(radarOpacity.value)
-    } else if (map.value!.hasLayer(layer)) {
-      // Fade to transparent rather than removing — prevents the blank-frame flicker
-      // caused by Leaflet's per-tile CSS fade-in when re-adding a layer.
-      layer.setOpacity(0)
-    }
-  })
-  currentRadarFrame = clampedIdx
-  radarCurrentIdx.value = clampedIdx
-  if (radarFrameMeta[clampedIdx]) {
-    radarTimestamp.value = formatRadarTime(radarFrameMeta[clampedIdx]!.time)
-  }
-}
-
-async function playRadar() {
-  if (radarPlaying.value) return
-  radarPlaying.value = true
-  keepRadarControlsVisible()
-
-  const advance = async () => {
-    if (!radarPlaying.value || radarFrameLayers.length === 0) return
-    const next = (currentRadarFrame + 1) % radarFrameLayers.length
-    const layer = radarFrameLayers[next]!
-    // Add the next frame to the map invisibly so its tiles start loading
-    if (!map.value!.hasLayer(layer)) {
-      layer.addTo(map.value!)
-      layer.setOpacity(0)
-    }
-    // Wait for all visible tiles on that frame to finish loading (up to 3 s)
-    if (!radarFrameReady[next]) {
-      await new Promise<void>(resolve => {
-        const done = () => {
-          radarFrameReady[next] = true
-          clearTimeout(loadTimeout)
-          // Wait for Leaflet's per-tile opacity fade-in (200 ms) to complete before
-          // revealing the frame, otherwise tiles appear partially transparent on first play.
-          setTimeout(resolve, 250)
-        }
-        layer.once('load', done)
-        const loadTimeout = setTimeout(() => { layer.off('load', done); resolve() }, 3000)
-      })
-    }
-    if (!radarPlaying.value) return
-    showRadarFrame(next)
-    radarAnimTimeout = setTimeout(advance, radarFrameInterval.value)
-  }
-
-  radarAnimTimeout = setTimeout(advance, radarFrameInterval.value)
-}
-
-function pauseRadar() {
-  radarPlaying.value = false
-  if (radarAnimTimeout) {
-    clearTimeout(radarAnimTimeout)
-    radarAnimTimeout = null
-  }
-}
-
-function stepRadarFrame(delta: -1 | 1) {
-  pauseRadar()
-  const next = (currentRadarFrame + delta + radarFrameLayers.length) % radarFrameLayers.length
-  showRadarFrame(next)
-  keepRadarControlsVisible()
-}
-
-// Weather controls auto-hide
-
-function keepRadarControlsVisible() {
-  if (!showRadar.value) return
-  radarControlsVisible.value = true
-  if (radarControlsHideTimer) clearTimeout(radarControlsHideTimer)
-  radarControlsHideTimer = setTimeout(() => { radarControlsVisible.value = false }, 5000)
-}
-
-function keepWindControlsVisible() {
-  if (!showWind.value) return
-  windControlsVisible.value = true
-  if (windControlsHideTimer) clearTimeout(windControlsHideTimer)
-  windControlsHideTimer = setTimeout(() => { windControlsVisible.value = false }, 5000)
-}
-
-function keepLightningControlsVisible() {
-  if (!showLightning.value) return
-  lightningControlsVisible.value = true
-  if (lightningControlsHideTimer) clearTimeout(lightningControlsHideTimer)
-  lightningControlsHideTimer = setTimeout(() => { lightningControlsVisible.value = false }, 5000)
-}
-
-function clearRadarLayers() {
-  pauseRadar()
-  for (const layer of radarFrameLayers) {
-    layer.remove()
-  }
-  radarFrameLayers = []
-  radarFrameMeta = []
-  radarFrameReady = []
-  radarFrameCount.value = 0
-  radarTimestamp.value = ''
-  radarCurrentIdx.value = 0
-}
-
-async function enableRadar() {
-  if (!map.value) return
-  radarLoading.value = true
-  ensureWeatherPane()
-  try {
-    radarManifest = await fetchRadarManifest()
-    if (!radarManifest) { showRadar.value = false; return }
-    const allFrames = [
-      ...radarManifest.radar.past,
-      ...(radarManifest.radar.nowcast ?? []),
-    ]
-    radarFrameMeta = allFrames.map(f => ({ time: f.time }))
-    radarFrameReady = Array.from({ length: allFrames.length }, () => false)
-    radarFrameLayers = allFrames.map(f => buildRadarLayer(f.path, radarManifest!))
-    radarFrameCount.value = radarFrameLayers.length
-    // Start on the last historical frame so we see the most recent real data first
-    showRadarFrame(radarManifest.radar.past.length - 1)
-    keepRadarControlsVisible()
-    radarRefreshInterval = setInterval(async () => {
-      if (!showRadar.value) return
-      const wasPlaying = radarPlaying.value
-      pauseRadar()
-      clearRadarLayers()
-      radarManifest = await fetchRadarManifest()
-      if (!radarManifest) return
-      const refreshedFrames = [
-        ...radarManifest.radar.past,
-        ...(radarManifest.radar.nowcast ?? []),
-      ]
-      radarFrameMeta = refreshedFrames.map(f => ({ time: f.time }))
-      radarFrameReady = Array.from({ length: refreshedFrames.length }, () => false)
-      radarFrameLayers = refreshedFrames.map(f => buildRadarLayer(f.path, radarManifest!))
-      radarFrameCount.value = radarFrameLayers.length
-      showRadarFrame(radarManifest.radar.past.length - 1)
-      if (wasPlaying) playRadar()
-    }, 5 * 60 * 1000)
-  } finally {
-    radarLoading.value = false
-  }
-}
-
-function disableRadar() {
-  pauseRadar()
-  clearRadarLayers()
-  if (radarRefreshInterval) {
-    clearInterval(radarRefreshInterval)
-    radarRefreshInterval = null
-  }
-  radarManifest = null
-  radarControlsVisible.value = false
-  if (radarControlsHideTimer) { clearTimeout(radarControlsHideTimer); radarControlsHideTimer = null }
-}
-
-async function toggleRadar() {
-  showRadar.value = !showRadar.value
-  if (showRadar.value) {
-    await enableRadar()
-  } else {
-    disableRadar()
-  }
-}
-
-// Wind (OpenWeatherMap)
-
-function enableWind() {
-  if (!map.value) return
-  disableWind()
-  ensureWeatherPane()
-  windLayer = L.tileLayer(
-    '/api/weather/wind/tile/{z}/{x}/{y}',
-    { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane', maxNativeZoom: 18, maxZoom: 19 },
-  ).addTo(map.value)
-  keepWindControlsVisible()
-}
-
-function disableWind() {
-  if (windLayer) {
-    windLayer.remove()
-    windLayer = null
-  }
-  windControlsVisible.value = false
-  if (windControlsHideTimer) { clearTimeout(windControlsHideTimer); windControlsHideTimer = null }
-}
-
-async function toggleWind() {
-  showWind.value = !showWind.value
-  if (showWind.value && weatherStatus.value?.wind.available) {
-    enableWind()
-  } else {
-    showWind.value = false
-    disableWind()
-  }
-}
-
-// Lightning (Tomorrow.io)
-
-function buildLightningLayer(): L.TileLayer {
-  return L.tileLayer(
-    '/api/weather/lightning/tile/{z}/{x}/{y}',
-    { opacity: lightningOpacity.value, zIndex: 12, pane: 'weatherPane', maxNativeZoom: 6, maxZoom: 19 },
-  )
-}
-
-function enableLightning() {
-  if (!map.value) return
-  disableLightning()
-  ensureWeatherPane()
-  lightningLayer = buildLightningLayer().addTo(map.value)
-  keepLightningControlsVisible()
-  // Refresh every 5 minutes so Leaflet fetches fresh tiles from the backend cache
-  lightningRefreshInterval = setInterval(() => {
-    if (!showLightning.value || !map.value) return
-    lightningLayer?.remove()
-    lightningLayer = buildLightningLayer().addTo(map.value!)
-  }, 5 * 60 * 1000)
-}
-
-function disableLightning() {
-  if (lightningLayer) {
-    lightningLayer.remove()
-    lightningLayer = null
-  }
-  if (lightningRefreshInterval) {
-    clearInterval(lightningRefreshInterval)
-    lightningRefreshInterval = null
-  }
-  lightningControlsVisible.value = false
-  if (lightningControlsHideTimer) { clearTimeout(lightningControlsHideTimer); lightningControlsHideTimer = null }
-}
-
-async function toggleLightning() {
-  showLightning.value = !showLightning.value
-  if (showLightning.value && weatherStatus.value?.lightning.available) {
-    enableLightning()
-  } else {
-    showLightning.value = false
-    disableLightning()
-  }
-}
-
 // Sidebar & Panel
 
 function toggleSidebar() {
@@ -1108,526 +719,6 @@ function onHighlightPosition(lat: number, lon: number) {
     }
     highlightTimeout = null
   }, 5000)
-}
-
-// Movement Tracks
-
-async function fetchAndDrawTrack(callsign: string) {
-  if (!map.value) return
-  try {
-    const points = await getStationTrack(callsign)
-    renderTrack(callsign, points)
-  } catch (err) {
-    console.error(`Failed to fetch track for ${callsign}:`, err)
-  }
-}
-
-// (Re)draw a station's track from raw points, fading and dropping points by age.
-// Each point's brightness/thickness scales with how recent it is; points older
-// than TRACK_WINDOW_MS are discarded so the trail trails off and eventually
-// disappears once the station stops transmitting. Called both on fetch and on
-// the periodic aging tick.
-function renderTrack(callsign: string, points: TrackPointDto[]) {
-  if (!map.value) return
-
-  const now = Date.now()
-  const fresh = points.filter(p => now - new Date(p.receivedAt).getTime() <= TRACK_WINDOW_MS)
-
-  // Swap out any existing layer group for this callsign.
-  const previous = trackLayers.get(callsign)
-  if (previous) previous.group.remove()
-
-  if (fresh.length < 2) {
-    trackLayers.delete(callsign)
-    return
-  }
-
-  // Fade factor for a point: 1.0 when just received, → 0 as it nears the window edge.
-  const ageFrac = (receivedAt: string) =>
-    Math.max(0, Math.min(1, 1 - (now - new Date(receivedAt).getTime()) / TRACK_WINDOW_MS))
-
-  const group = L.layerGroup()
-  const segments: TrackEntry['segments'] = []
-  const circles: TrackEntry['circles'] = []
-  for (let i = 0; i < fresh.length - 1; i++) {
-    const from = fresh[i]!
-    const to = fresh[i + 1]!
-    const frac = ageFrac(to.receivedAt)
-    const opacity = 0.15 + (0.85 * frac)
-    const weight = 2 + Math.round(2 * frac)
-    const segment = L.polyline(
-      [[from.latitude, from.longitude], [to.latitude, to.longitude]],
-      { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
-    )
-    segments.push({ line: segment, toReceivedAt: to.receivedAt })
-    group.addLayer(segment)
-  }
-  for (const pt of fresh) {
-    const opacity = 0.2 + (0.8 * ageFrac(pt.receivedAt))
-    const circle = L.circleMarker([pt.latitude, pt.longitude], {
-      radius: 4,
-      color: '#1976D2',
-      fillColor: '#1976D2',
-      fillOpacity: opacity,
-      weight: 1,
-      opacity,
-    })
-    const speedStr = pt.speed != null ? `${pt.speed.toFixed(1)} knots` : 'N/A'
-    circle.bindPopup(
-      `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
-    )
-    circles.push({ circle, receivedAt: pt.receivedAt })
-    group.addLayer(circle)
-  }
-
-  trackLayers.set(callsign, { group, points: fresh, segments, circles })
-  if (showTracks.value) {
-    group.addTo(map.value)
-  }
-}
-
-// Extends a station's cached track with a live position instead of refetching
-// the whole track per packet; falls back to a throttled fetch when no cache.
-function appendTrackPoint(callsign: string, latitude: number, longitude: number, receivedAt: string) {
-  const entry = trackLayers.get(callsign)
-  if (entry) {
-    entry.points.push({ latitude, longitude, receivedAt, speed: null, heading: null })
-    renderTrack(callsign, entry.points)
-    return
-  }
-  const last = trackFetchLast.get(callsign) ?? 0
-  if (Date.now() - last < TRACK_FETCH_THROTTLE_MS) return
-  trackFetchLast.set(callsign, Date.now())
-  fetchAndDrawTrack(callsign)
-}
-
-// Periodic pass: fade points in place; rebuild a track only when points age
-// out of the window, and drop tracks whose station is gone.
-function ageTracks() {
-  const now = Date.now()
-  for (const callsign of trackLayers.keys()) {
-    if (!stationCache.has(callsign)) {
-      removeTrack(callsign)
-      continue
-    }
-    const entry = trackLayers.get(callsign)
-    if (!entry) continue
-
-    if (entry.points.some(p => now - new Date(p.receivedAt).getTime() > TRACK_WINDOW_MS)) {
-      renderTrack(callsign, entry.points)
-      continue
-    }
-    if (!showTracks.value) continue
-
-    const ageFrac = (receivedAt: string) =>
-      Math.max(0, Math.min(1, 1 - (now - new Date(receivedAt).getTime()) / TRACK_WINDOW_MS))
-    for (const seg of entry.segments) {
-      const frac = ageFrac(seg.toReceivedAt)
-      seg.line.setStyle({ opacity: 0.15 + (0.85 * frac), weight: 2 + Math.round(2 * frac) })
-    }
-    for (const c of entry.circles) {
-      const o = 0.2 + (0.8 * ageFrac(c.receivedAt))
-      c.circle.setStyle({ opacity: o, fillOpacity: o })
-    }
-  }
-}
-
-function removeTrack(callsign: string) {
-  const existing = trackLayers.get(callsign)
-  if (existing) {
-    existing.group.remove()
-    trackLayers.delete(callsign)
-  }
-}
-
-function toggleTracks() {
-  showTracks.value = !showTracks.value
-  if (!map.value) return
-  if (showTracks.value) {
-    for (const [callsign, station] of stationCache) {
-      if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
-        const existing = trackLayers.get(callsign)
-        if (existing) {
-          existing.group.addTo(map.value)
-        } else {
-          fetchAndDrawTrack(callsign)
-        }
-      }
-    }
-  } else {
-    for (const entry of trackLayers.values()) {
-      entry.group.remove()
-    }
-  }
-}
-
-async function loadTracksForMobileStations() {
-  if (!showTracks.value) return
-  for (const [callsign, station] of stationCache) {
-    if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
-      if (!trackLayers.has(callsign)) {
-        await fetchAndDrawTrack(callsign)
-      }
-    }
-  }
-}
-
-// Estimated Position (Ghost Markers)
-
-function removeGhostLayer(callsign: string) {
-  const existing = ghostLayers.get(callsign)
-  if (existing) {
-    existing.remove()
-    ghostLayers.delete(callsign)
-  }
-}
-
-function updateGhostLayers() {
-  if (!map.value) return
-  // Skip the rebuild entirely while ghosts are hidden; toggling them back on
-  // calls this directly.
-  if (!showGhostMarkers.value) return
-  for (const [callsign, station] of stationCache) {
-    if (!isMobileStation(station) || station.lastLat == null || station.lastLon == null) {
-      removeGhostLayer(callsign)
-      continue
-    }
-    const est = estimatePosition(
-      station.lastLat,
-      station.lastLon,
-      station.lastHeading,
-      station.lastSpeed,
-      station.lastSeen,
-    )
-    if (!est) {
-      removeGhostLayer(callsign)
-      continue
-    }
-    // Rebuild ghost layer for this station
-    removeGhostLayer(callsign)
-    const group = L.layerGroup()
-
-    // Dashed connector: real position → estimated position
-    L.polyline(
-      [[station.lastLat, station.lastLon], [est.lat, est.lon]],
-      { color: '#9E9E9E', weight: 2, dashArray: '6 5', opacity: 0.7 },
-    ).addTo(group)
-
-    // Uncertainty circle around estimated position
-    L.circle([est.lat, est.lon], {
-      radius: est.uncertaintyRadiusMeters,
-      color: '#9E9E9E',
-      weight: 1,
-      dashArray: '4 4',
-      fillOpacity: 0.05,
-      opacity: 0.5,
-    }).addTo(group)
-
-    // Ghost marker: faded APRS icon
-    const { table, code } = parseAprsSymbol(station.symbol)
-    const ghostIcon = createAprsIcon(table, code, station.lastHeading, false, 0.45, false)
-    const elapsedStr = est.elapsedMinutes < 1 ? '<1m' : `${Math.round(est.elapsedMinutes)}m`
-    L.marker([est.lat, est.lon], { icon: ghostIcon })
-      .bindTooltip(`Est. — ${elapsedStr} ago`, {
-        permanent: true,
-        direction: 'top',
-        className: 'ghost-label',
-        offset: [0, -14],
-      })
-      .addTo(group)
-
-    ghostLayers.set(callsign, group)
-    if (showGhostMarkers.value) {
-      group.addTo(map.value)
-    }
-  }
-}
-
-function toggleGhostMarkers() {
-  showGhostMarkers.value = !showGhostMarkers.value
-  if (!map.value) return
-  if (showGhostMarkers.value) {
-    updateGhostLayers()
-  } else {
-    for (const group of ghostLayers.values()) {
-      group.remove()
-    }
-    ghostLayers.clear()
-  }
-}
-
-// Packet Path Visualisation
-
-function removePath(callsign: string) {
-  const entry = activePaths.get(callsign)
-  if (!entry) {
-    console.warn('[Path] No activePaths entry to remove for', callsign, '— map has', activePaths.size, 'entries:', [...activePaths.keys()])
-    return
-  }
-  if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
-  entry.group.remove()
-  activePaths.delete(callsign)
-}
-
-function clearAllPaths() {
-  for (const [, entry] of activePaths) {
-    if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
-    entry.group.remove()
-  }
-  activePaths.clear()
-}
-
-function redrawAllPaths() {
-  if (!map.value) return
-  for (const [, entry] of activePaths) {
-    entry.group.clearLayers()
-    drawPathLayers(entry.group, entry.resolvedPath)
-  }
-}
-
-function schedulePathFade(callsign: string) {
-  const entry = activePaths.get(callsign)
-  if (!entry || entry.persistent) return
-
-  // Begin CSS opacity fade at 5 s; fully remove layers at 8 s (3 s transition).
-  entry.fadeTimer = setTimeout(() => {
-    const e = activePaths.get(callsign)
-    if (!e) return
-    e.group.eachLayer(layer => {
-      if (layer instanceof L.Polyline) {
-        const el = (layer as unknown as { _path?: SVGPathElement })._path
-        if (el) {
-          el.style.transition = 'opacity 3s ease-out'
-          el.style.opacity = '0'
-        }
-      } else if (layer instanceof L.Marker) {
-        const el = layer.getElement()
-        if (el) {
-          el.style.transition = 'opacity 3s ease-out'
-          el.style.opacity = '0'
-        }
-      }
-    })
-    e.fadeTimer = setTimeout(() => removePath(callsign), 3000)
-  }, 5000)
-}
-
-// Identifies generic APRS path aliases that do not represent a specific station.
-const GENERIC_ALIAS_RE = /^(WIDE|RELAY|TRACE|NCA|GATE|ECHO|IGATE)(\d(-\d)?)?$/i
-function isGenericAlias(callsign: string): boolean {
-  return GENERIC_ALIAS_RE.test(callsign)
-}
-
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLon = (lon2 - lon1) * Math.PI / 180
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-
-function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const dLon = (lon2 - lon1) * Math.PI / 180
-  const la1 = lat1 * Math.PI / 180
-  const la2 = lat2 * Math.PI / 180
-  const y = Math.sin(dLon) * Math.cos(la2)
-  const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon)
-  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
-}
-
-function addPathArrow(
-  group: L.LayerGroup,
-  fromLat: number, fromLon: number,
-  toLat: number, toLon: number,
-  color: string,
-) {
-  const midLat = (fromLat + toLat) / 2
-  const midLon = (fromLon + toLon) / 2
-  const bearing = bearingDeg(fromLat, fromLon, toLat, toLon)
-  const arrowIcon = L.divIcon({
-    html: `<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid ${color};transform:rotate(${bearing}deg);transform-origin:6px 6px;pointer-events:none;"></div>`,
-    className: '',
-    iconSize: [12, 12],
-    iconAnchor: [6, 6],
-  })
-  group.addLayer(L.marker([midLat, midLon], { icon: arrowIcon, interactive: false, zIndexOffset: -50 }))
-}
-
-type PathSegment = {
-  fromLat: number
-  fromLon: number
-  toLat: number
-  toLon: number
-  fromCallsign: string
-  toCallsign: string
-  hopIndexFrom: number
-  isLastHop: boolean
-  unknownsBetween: ResolvedPathEntry[]
-}
-
-function buildPathSegments(path: ResolvedPathEntry[]): PathSegment[] {
-  const segments: PathSegment[] = []
-  let lastKnownIdx = -1
-
-  for (let i = 0; i < path.length; i++) {
-    const entry = path[i]!
-    if (!(entry.known ?? false) || entry.latitude == null || entry.longitude == null) continue
-
-    if (lastKnownIdx >= 0) {
-      const from = path[lastKnownIdx]!
-      const unknownsBetween = path.slice(lastKnownIdx + 1, i).filter(e => !(e.known ?? false))
-      segments.push({
-        fromLat: from.latitude!,
-        fromLon: from.longitude!,
-        toLat: entry.latitude,
-        toLon: entry.longitude,
-        fromCallsign: from.callsign,
-        toCallsign: entry.callsign,
-        hopIndexFrom: from.hopIndex ?? 0,
-        isLastHop: i === path.length - 1,
-        unknownsBetween,
-      })
-    }
-    lastKnownIdx = i
-  }
-
-  return segments
-}
-
-function unknownHopLabel(unknowns: ResolvedPathEntry[]): string {
-  if (unknowns.length === 0) return ''
-  const allGeneric = unknowns.every(e => isGenericAlias(e.callsign))
-  if (allGeneric) {
-    const aliases = [...new Set(unknowns.map(e => escapeHtml(e.callsign)))].join(', ')
-    return `Via ${aliases} (path not traced)`
-  }
-  return unknowns.length === 1 ? '1 unknown hop' : `${unknowns.length} unknown hops`
-}
-
-function hopSegmentColor(hopIndexFrom: number, isLastHop: boolean, isUnknown: boolean): string {
-  if (isUnknown) return UNKNOWN_SEGMENT_COLOR
-  if (isLastHop) return FINAL_HOP_COLOR
-  return HOP_SEGMENT_COLORS[hopIndexFrom] ?? HOP_COLOR_FALLBACK
-}
-
-/** Populate a Leaflet LayerGroup with polylines and arrowheads for a resolved path. */
-function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) {
-  const segments = buildPathSegments(resolvedPath)
-  if (segments.length === 0) return false
-
-  const totalHops = resolvedPath.length - 1  // excludes source entry (hopIndex 0)
-
-  for (const seg of segments) {
-    const isUnknown = seg.unknownsBetween.length > 0
-    const color = hopSegmentColor(seg.hopIndexFrom, seg.isLastHop, isUnknown)
-    const distKm = haversineKm(seg.fromLat, seg.fromLon, seg.toLat, seg.toLon)
-    const distStr = formatDistance(distKm)
-
-    const line = L.polyline(
-      [[seg.fromLat, seg.fromLon], [seg.toLat, seg.toLon]],
-      {
-        color,
-        weight: 3,
-        opacity: 1,
-        dashArray: isUnknown ? '8 6' : undefined,
-        lineCap: 'round',
-      },
-    )
-
-    if (isUnknown) {
-      const label = unknownHopLabel(seg.unknownsBetween)
-      line.bindTooltip(
-        `<strong>${escapeHtml(seg.fromCallsign)} → ${escapeHtml(seg.toCallsign)}</strong> (${label})<br>${distStr}`,
-        { sticky: true, direction: 'top' },
-      )
-    } else {
-      const hopNum = seg.hopIndexFrom + 1
-      const toStation = stationCache.get(seg.toCallsign) ?? staleStationCache.get(seg.toCallsign)
-      const lastSeenStr = toStation ? ` · ${formatTime(toStation.lastSeen)}` : ''
-      line.bindTooltip(
-        `<strong>${escapeHtml(seg.fromCallsign)} → ${escapeHtml(seg.toCallsign)}</strong><br>Hop ${hopNum} of ${totalHops}${lastSeenStr}<br>${distStr}`,
-        { sticky: true, direction: 'top' },
-      )
-    }
-
-    group.addLayer(line)
-
-    if (isUnknown) {
-      const label = unknownHopLabel(seg.unknownsBetween)
-      const midLat = (seg.fromLat + seg.toLat) / 2
-      const midLon = (seg.fromLon + seg.toLon) / 2
-      const midMarker = L.marker([midLat, midLon], {
-        icon: L.divIcon({ html: '', className: '', iconSize: [0, 0], iconAnchor: [0, 0] }),
-        interactive: false,
-        zIndexOffset: -100,
-      })
-      midMarker.bindTooltip(label, { permanent: true, className: 'path-unknown-label', direction: 'top' })
-      group.addLayer(midMarker)
-    }
-
-    addPathArrow(group, seg.fromLat, seg.fromLon, seg.toLat, seg.toLon, color)
-  }
-
-  return true
-}
-
-/**
- * Auto-draw a path from a SignalR broadcast packet.  Fades out after 8 s.
- * If the station is currently selected (persistent path), the auto-draw is
- * skipped — the persistent path already shows from the API fetch.
- */
-function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
-  if (!map.value || resolvedPath.length < 2) return
-  if (callsign === selectionStore.selectedCallsign) return
-
-  // Clear any existing auto-path for this callsign (reset timer on re-beacon)
-  removePath(callsign)
-
-  const group = L.layerGroup()
-  if (!drawPathLayers(group, resolvedPath)) return
-
-  group.addTo(map.value)
-  const entry: PathEntry = { group, fadeTimer: null, persistent: false, resolvedPath }
-  activePaths.set(callsign, entry)
-  schedulePathFade(callsign)
-}
-
-/**
- * Draw a station's path persistently from an already-known resolved path
- * (e.g. straight from a SignalR broadcast — no HTTP round trip).
- * The path stays until the station is deselected.
- */
-function drawPersistentPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
-  if (!map.value) return
-  // Clear any existing path (auto or persistent) for this callsign
-  removePath(callsign)
-  if (resolvedPath.length < 2) return
-
-  const group = L.layerGroup()
-  if (!drawPathLayers(group, resolvedPath)) return
-
-  group.addTo(map.value)
-  activePaths.set(callsign, { group, fadeTimer: null, persistent: true, resolvedPath })
-}
-
-/**
- * Fetch the most recent packet for a station and draw its path persistently.
- * Used when the user explicitly selects a station (click or sidebar).
- */
-async function showPacketPath(callsign: string) {
-  if (!map.value) return
-  try {
-    const { items } = await getStationPackets(callsign, 1, 1)
-    // Guard: station may have been deselected while the fetch was in flight
-    if (selectionStore.selectedCallsign !== callsign) {
-      return
-    }
-    drawPersistentPath(callsign, items[0]?.resolvedPath ?? [])
-  } catch (err) {
-    console.error(`Failed to show packet path for ${callsign}:`, err)
-  }
 }
 
 function onMarkerClick(callsign: string) {
@@ -1957,11 +1048,6 @@ watch(() => theme.global.current.value.dark, (dark) => {
   }
 })
 
-// Watch: weather overlay opacity — apply immediately to live layers
-watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
-watch(windOpacity, (v) => windLayer?.setOpacity(v))
-watch(lightningOpacity, (v) => lightningLayer?.setOpacity(v))
-
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
   if (callsign && callsign !== prev) {
@@ -2050,15 +1136,14 @@ onMounted(async () => {
   }
 
   // Initial ghost render + periodic update every 30 s
-  updateGhostLayers()
-  ghostUpdateInterval = setInterval(updateGhostLayers, 30_000)
+  startGhostUpdates()
 
   // Initial stale decay pass + periodic update every 60 s
   updateStaleDecayClasses()
   staleDecayInterval = setInterval(updateStaleDecayClasses, 60_000)
 
   // Age movement tracks every 30 s so old points fade out and drop off
-  trackAgeInterval = setInterval(ageTracks, 30_000)
+  startTrackAging()
 
   // Restore persisted layer states (issue #32 item 2)
   if (showRings.value) await drawRings()
@@ -2116,26 +1201,12 @@ onUnmounted(async () => {
     await hub.stop()
     hub = null
   }
-  if (ghostUpdateInterval) {
-    clearInterval(ghostUpdateInterval)
-    ghostUpdateInterval = null
-  }
   if (staleDecayInterval) {
     clearInterval(staleDecayInterval)
     staleDecayInterval = null
   }
-  if (trackAgeInterval) {
-    clearInterval(trackAgeInterval)
-    trackAgeInterval = null
-  }
-  for (const group of ghostLayers.values()) {
-    group.remove()
-  }
-  ghostLayers.clear()
-  for (const entry of trackLayers.values()) {
-    entry.group.remove()
-  }
-  trackLayers.clear()
+  ghostsCleanup()
+  tracksCleanup()
   for (const marker of staleMarkers.values()) {
     marker.remove()
   }
@@ -2151,12 +1222,7 @@ onUnmounted(async () => {
   }
   clearHeatmap()
   clearCoverage()
-  disableRadar()
-  disableWind()
-  disableLightning()
-  if (radarControlsHideTimer) clearTimeout(radarControlsHideTimer)
-  if (windControlsHideTimer) clearTimeout(windControlsHideTimer)
-  if (lightningControlsHideTimer) clearTimeout(lightningControlsHideTimer)
+  weatherCleanup()
   heatmapPositions = null
   coverageData = null
   if (highlightTimeout) clearTimeout(highlightTimeout)

@@ -17,7 +17,7 @@ public sealed class MessageRetryService(
     IServiceScopeFactory scopeFactory,
     IHubContext<PacketHub> hubContext,
     MessageSendingService messageSendingService,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     ILogger<MessageRetryService> logger) : BackgroundService
 {
     private const int PollIntervalMs = 10_000;
@@ -62,6 +62,8 @@ public sealed class MessageRetryService(
 
         logger.LogDebug("Processing {Count} due message retries.", due.Count);
 
+        var settings = await settingsProvider.GetAsync(ct);
+
         // Mutate all due messages, save once, then broadcast.
         var failed = new List<MessageFailedDto>();
         var retried = new List<MessageRetriedDto>();
@@ -90,7 +92,7 @@ public sealed class MessageRetryService(
             }
             else
             {
-                var delaySeconds = options.Value.InitialRetryDelaySeconds * Math.Pow(2, message.RetryCount - 1);
+                var delaySeconds = settings.InitialRetryDelaySeconds * Math.Pow(2, message.RetryCount - 1);
                 message.NextRetryAt = DateTime.UtcNow.AddSeconds(delaySeconds);
 
                 retried.Add(new MessageRetriedDto

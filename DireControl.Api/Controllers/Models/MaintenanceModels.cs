@@ -8,7 +8,7 @@ public sealed class MaintenanceStatusDto
     public required bool IsRunning { get; init; }
     public required long DatabaseSizeBytes { get; init; }
     public required RetentionDto Retention { get; init; }
-    public required int CleanupIntervalHours { get; init; }
+    public required double CleanupIntervalHours { get; init; }
     public required bool VacuumOnCleanup { get; init; }
     public CleanupResult? LastResult { get; init; }
 }

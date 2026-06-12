@@ -50,7 +50,6 @@ export const useAlertsStore = defineStore('alerts', () => {
       geofenceName: dto.geofenceName ?? null,
       direction: dto.direction ?? null,
       ruleName: dto.ruleName ?? null,
-      messageText: null,
     }
     alerts.value.unshift(provisional)
 
@@ -124,8 +123,6 @@ function buildToastMessage(dto: AlertBroadcastDto): string {
         : `${dto.callsign} entered proximity zone`
     case 'Geofence':
       return `${dto.callsign} ${dto.direction} geofence "${dto.geofenceName}"`
-    case 'NewMessage':
-      return `New message from ${dto.callsign}`
     default:
       return `Alert: ${dto.alertTypeName} from ${dto.callsign}`
   }

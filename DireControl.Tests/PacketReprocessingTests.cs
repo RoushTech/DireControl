@@ -69,7 +69,7 @@ public sealed class PacketReprocessingTests
         await db.SaveChangesAsync();
 
         var packet = await db.Packets.SingleAsync(p => p.Id == 1);
-        var service = CreateService();
+        var service = CreateService(connection);
 
         await service.ReprocessOneAsync(packet, db, "N0CALL-10", default);
 
@@ -92,25 +92,38 @@ public sealed class PacketReprocessingTests
     }
 
     // Builds an AprsPacketParsingService with throwaway dependencies. ReprocessOneAsync
-    // only uses the DbContext (passed in), options, and logger — the hub, scope factory,
-    // alert channel, and message-sending service are never invoked in reprocess mode, so
-    // throwing stubs are sufficient and assert that fact.
-    private static AprsPacketParsingService CreateService()
+    // only uses the DbContext (passed in), the settings provider, and the logger — the
+    // hub, alert channel, and message-sending service are never invoked in reprocess
+    // mode, so throwing stubs are sufficient and assert that fact. The settings provider
+    // needs a real scope factory over the test connection to read UserSettings.
+    private static AprsPacketParsingService CreateService(SqliteConnection connection)
     {
-        var options = Options.Create(new DireControlOptions { OurCallsign = "N0CALL-10" });
+        var settingsProvider = CreateSettingsProvider(connection);
         var messageSending = new MessageSendingService(
             new KissConnectionHolder(),
             new ThrowingScopeFactory(),
-            options,
+            settingsProvider,
             NullLogger<MessageSendingService>.Instance);
 
         return new AprsPacketParsingService(
             new ThrowingScopeFactory(),
             new ThrowingHubContext(),
-            options,
+            settingsProvider,
             messageSending,
             new PendingAlertChannel(),
             NullLogger<AprsPacketParsingService>.Instance);
+    }
+
+    private static StationSettingsProvider CreateSettingsProvider(SqliteConnection connection)
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<DireControlContext>(o => o.UseSqlite(connection));
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        return new StationSettingsProvider(
+            scopeFactory,
+            Options.Create(new DireControlOptions { OurCallsign = "N0CALL-10" }),
+            Options.Create(new QrzOptions()));
     }
 
     // =========================================================================

@@ -21,7 +21,7 @@ public static class CallsignMatcher
     /// matching strategy for each <see cref="PacketSource"/>:
     /// <list type="bullet">
     ///   <item>
-    ///     <term><see cref="PacketSource.Rf"/></term>
+    ///     <term><see cref="PacketSource.Rf"/> / <see cref="PacketSource.Own"/> (KISS-originated)</term>
     ///     <description>
     ///       Match by KISS channel number, then verify the packet's source callsign
     ///       matches the radio's configured callsign. Returns <see langword="null"/> if
@@ -40,7 +40,7 @@ public static class CallsignMatcher
     /// <returns>The matching <see cref="Radio"/>, or <see langword="null"/> if none.</returns>
     public static Radio? FindMatchingRadio(Packet packet, IEnumerable<Radio> activeRadios)
     {
-        if (packet.Source == PacketSource.Rf)
+        if (packet.Source is PacketSource.Rf or PacketSource.Own)
         {
             var byChannel = activeRadios.FirstOrDefault(r => r.ChannelNumber == packet.KissChannel);
             if (byChannel is null)

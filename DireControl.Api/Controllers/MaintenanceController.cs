@@ -13,13 +13,14 @@ namespace DireControl.Api.Controllers;
 public class MaintenanceController(
     DatabaseMaintenanceService maintenance,
     PacketReprocessingService reprocessor,
-    IOptions<DireControlOptions> options,
+    StationSettingsProvider settingsProvider,
     DireControlContext db) : ControllerBase
 {
     [HttpGet("status")]
     public async Task<ActionResult<MaintenanceStatusDto>> GetStatus(CancellationToken ct)
     {
-        var settings = await db.UserSettings.FindAsync([1], ct) ?? new UserSetting { Id = 1 };
+        var row = await db.UserSettings.FindAsync([1], ct) ?? new UserSetting { Id = 1 };
+        var effective = await settingsProvider.GetAsync(ct);
 
         return Ok(new MaintenanceStatusDto
         {
@@ -27,12 +28,12 @@ public class MaintenanceController(
             DatabaseSizeBytes = await maintenance.GetCurrentSizeBytesAsync(ct),
             Retention = new RetentionDto
             {
-                RfDays = settings.PacketRetentionRfDays,
-                AprsIsDays = settings.PacketRetentionAprsIsDays,
-                OwnDays = settings.PacketRetentionOwnDays,
+                RfDays = row.PacketRetentionRfDays,
+                AprsIsDays = row.PacketRetentionAprsIsDays,
+                OwnDays = row.PacketRetentionOwnDays,
             },
-            CleanupIntervalHours = options.Value.DatabaseCleanupIntervalHours,
-            VacuumOnCleanup = options.Value.VacuumOnCleanup,
+            CleanupIntervalHours = effective.DatabaseCleanupIntervalHours,
+            VacuumOnCleanup = effective.VacuumOnCleanup,
             LastResult = maintenance.LastResult,
         });
     }
@@ -62,9 +63,9 @@ public class MaintenanceController(
 
     /// <summary>Triggers a cleanup run (prune + VACUUM) in the background.</summary>
     [HttpPost("cleanup")]
-    public ActionResult RunCleanup()
+    public async Task<ActionResult> RunCleanup(CancellationToken ct)
     {
-        if (!maintenance.TryStart(options.Value.VacuumOnCleanup))
+        if (!maintenance.TryStart((await settingsProvider.GetAsync(ct)).VacuumOnCleanup))
             return Conflict("A cleanup run is already in progress.");
 
         return Accepted();

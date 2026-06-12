@@ -5,10 +5,9 @@ import { getGeofences, createGeofence, deleteGeofence, getProximityRules, create
 import type { GeofenceDto, ProximityRuleDto } from '@/types/alert'
 import { getRadios, createRadio, updateRadio, deleteRadio, toggleRadioActive } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
-import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys, RadarProvider } from '@/api/stationsApi'
+import { getSettings, updateOutboundPath, updateAprsIsSettings, updateWeatherApiKeys, updateStationSettings, updateQrzCredentials, updateCleanupSettings, RadarProvider } from '@/api/stationsApi'
 import { getWeatherStatus } from '@/api/weatherApi'
 import { getMaintenanceStatus, updateRetention, runCleanup, type CleanupResult } from '@/api/maintenanceApi'
-import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 import { getSymbolStyle } from '@/utils/aprsIcon'
 import AprsSymbolPicker from '@/components/AprsSymbolPicker.vue'
@@ -16,8 +15,88 @@ import AprsSymbolPicker from '@/components/AprsSymbolPicker.vue'
 // Units
 const { distanceUnit, formatDistance, setDistanceUnit } = useUnits()
 
-// Retry settings (read-only display)
-const retrySettings = ref<Pick<SettingsDto, 'maxRetryAttempts' | 'initialRetryDelaySeconds'> | null>(null)
+// Station settings
+const stationCallsign = ref('')
+const stationHomeLat = ref<number | null>(null)
+const stationHomeLon = ref<number | null>(null)
+const stationMaxRetries = ref(5)
+const stationRetryDelay = ref(30)
+const stationSaving = ref(false)
+const stationSaveError = ref('')
+const stationSaveSuccess = ref(false)
+
+async function saveStationSettings() {
+  stationSaving.value = true
+  stationSaveError.value = ''
+  stationSaveSuccess.value = false
+  try {
+    await updateStationSettings({
+      ourCallsign: stationCallsign.value.trim().toUpperCase(),
+      homeLat: typeof stationHomeLat.value === 'number' ? stationHomeLat.value : null,
+      homeLon: typeof stationHomeLon.value === 'number' ? stationHomeLon.value : null,
+      maxRetryAttempts: stationMaxRetries.value,
+      initialRetryDelaySeconds: stationRetryDelay.value,
+    })
+    stationSaveSuccess.value = true
+    setTimeout(() => { stationSaveSuccess.value = false }, 3000)
+  } catch {
+    stationSaveError.value = 'Failed to save station settings — check callsign and coordinate values.'
+  } finally {
+    stationSaving.value = false
+  }
+}
+
+// QRZ lookup credentials
+const qrzUsername = ref('')
+const qrzPassword = ref('')
+const qrzPasswordConfigured = ref(false)
+const clearQrzPassword = ref(false)
+const showQrzPassword = ref(false)
+const qrzSaving = ref(false)
+const qrzSaveError = ref('')
+const qrzSaveSuccess = ref(false)
+
+async function saveQrzCredentials() {
+  qrzSaving.value = true
+  qrzSaveError.value = ''
+  qrzSaveSuccess.value = false
+  try {
+    await updateQrzCredentials({
+      username: qrzUsername.value.trim() || null,
+      password: clearQrzPassword.value ? null : (qrzPassword.value || null),
+      clearPassword: clearQrzPassword.value,
+    })
+    if (clearQrzPassword.value) qrzPasswordConfigured.value = false
+    else if (qrzPassword.value) qrzPasswordConfigured.value = true
+    qrzPassword.value = ''
+    clearQrzPassword.value = false
+    qrzSaveSuccess.value = true
+    setTimeout(() => { qrzSaveSuccess.value = false }, 3000)
+  } catch {
+    qrzSaveError.value = 'Failed to save QRZ credentials.'
+  } finally {
+    qrzSaving.value = false
+  }
+}
+
+// Cleanup schedule
+const cleanupScheduleSaving = ref(false)
+const cleanupScheduleError = ref('')
+
+async function saveCleanupSettings() {
+  cleanupScheduleSaving.value = true
+  cleanupScheduleError.value = ''
+  try {
+    await updateCleanupSettings({
+      databaseCleanupIntervalHours: cleanupIntervalHours.value,
+      vacuumOnCleanup: vacuumOnCleanup.value,
+    })
+  } catch {
+    cleanupScheduleError.value = 'Failed to save cleanup schedule.'
+  } finally {
+    cleanupScheduleSaving.value = false
+  }
+}
 
 // Messaging settings
 const outboundPath = ref('')
@@ -53,7 +132,6 @@ function schedulePathSave() {
 // APRS-IS settings
 const aprsIsEnabled = ref(false)
 const aprsIsHost = ref('rotate.aprs2.net')
-const aprsIsPort = ref(14580)
 const aprsIsPasscodeOverride = ref<number | null>(null)
 const aprsIsPasscodeOverrideConfigured = ref(false)
 const clearPasscodeOverride = ref(false)
@@ -72,7 +150,6 @@ async function saveAprsIsSettings() {
     await updateAprsIsSettings({
       aprsIsEnabled: aprsIsEnabled.value,
       aprsIsHost: aprsIsHost.value.trim(),
-      aprsIsPort: aprsIsPort.value,
       aprsIsPasscodeOverride:
         !clearPasscodeOverride.value && typeof aprsIsPasscodeOverride.value === 'number'
           ? aprsIsPasscodeOverride.value
@@ -399,11 +476,16 @@ async function runCleanupNow() {
 onMounted(async () => {
   try {
     const s = await getSettings()
-    retrySettings.value = s
+    stationCallsign.value = s.ourCallsign
+    stationHomeLat.value = s.homeLat
+    stationHomeLon.value = s.homeLon
+    stationMaxRetries.value = s.maxRetryAttempts
+    stationRetryDelay.value = s.initialRetryDelaySeconds
+    qrzUsername.value = s.qrzUsername ?? ''
+    qrzPasswordConfigured.value = s.qrzPasswordConfigured
     outboundPath.value = s.outboundPath
     aprsIsEnabled.value = s.aprsIsEnabled
     aprsIsHost.value = s.aprsIsHost
-    aprsIsPort.value = s.aprsIsPort
     aprsIsPasscodeOverrideConfigured.value = s.aprsIsPasscodeOverrideConfigured
     aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
     aprsIsFilter.value = s.aprsIsFilter
@@ -1039,27 +1121,112 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
-    <!-- Message Retry -->
+    <!-- Station -->
     <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Message Retry</span>
+      <span class="text-h6">Station</span>
+      <v-progress-circular v-if="stationSaving" indeterminate size="16" width="2" class="ml-3" />
+    </div>
+
+    <v-card variant="outlined" class="mb-6 pa-4">
+      <v-text-field
+        v-model="stationCallsign"
+        label="Callsign (with optional SSID)"
+        density="compact"
+        class="mb-2"
+        style="max-width: 360px"
+        hint="Used for APRS-IS login and message identity — saving reconnects APRS-IS"
+        persistent-hint
+      />
+      <div class="d-flex ga-2 mb-2 mt-3">
+        <v-text-field
+          v-model.number="stationHomeLat"
+          label="Home latitude"
+          type="number"
+          density="compact"
+          style="max-width: 200px"
+        />
+        <v-text-field
+          v-model.number="stationHomeLon"
+          label="Home longitude"
+          type="number"
+          density="compact"
+          style="max-width: 200px"
+        />
+      </div>
+      <div class="d-flex ga-2 mb-2">
+        <v-text-field
+          v-model.number="stationMaxRetries"
+          label="Max retry attempts"
+          type="number"
+          density="compact"
+          style="max-width: 200px"
+        />
+        <v-text-field
+          v-model.number="stationRetryDelay"
+          label="Initial retry delay (s)"
+          type="number"
+          density="compact"
+          style="max-width: 200px"
+        />
+      </div>
+      <v-btn color="primary" size="small" variant="tonal" :loading="stationSaving" @click="saveStationSettings">
+        Save
+      </v-btn>
+      <v-alert v-if="stationSaveError" type="error" variant="tonal" density="compact" class="mt-2">
+        {{ stationSaveError }}
+      </v-alert>
+      <v-alert v-if="stationSaveSuccess" type="success" variant="tonal" density="compact" class="mt-2">
+        Station settings saved.
+      </v-alert>
+      <div class="text-caption text-medium-emphasis mt-3">
+        Values from <code>appsettings</code> apply until saved here; once saved, these take precedence.
+      </div>
+    </v-card>
+
+    <!-- QRZ Lookups -->
+    <div class="section-header d-flex align-center mb-2 mt-6">
+      <span class="text-h6">QRZ Lookups</span>
+      <v-progress-circular v-if="qrzSaving" indeterminate size="16" width="2" class="ml-3" />
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
       <div class="text-body-2 text-medium-emphasis mb-3">
-        Configure via <code>appsettings.json</code> or <code>appsettings.local.json</code> under the <code>DireControl</code> section.
+        Optional QRZ.com credentials for callsign lookups when HamDB has no result.
       </div>
-      <v-table density="compact">
-        <tbody>
-          <tr>
-            <td class="text-body-2 font-weight-medium" style="width: 260px">Max retry attempts</td>
-            <td class="text-body-2">{{ retrySettings?.maxRetryAttempts ?? '—' }}</td>
-          </tr>
-          <tr>
-            <td class="text-body-2 font-weight-medium">Initial retry delay</td>
-            <td class="text-body-2">{{ retrySettings != null ? `${retrySettings.initialRetryDelaySeconds} seconds` : '—' }}</td>
-          </tr>
-        </tbody>
-      </v-table>
+      <v-text-field
+        v-model="qrzUsername"
+        label="QRZ username"
+        density="compact"
+        class="mb-2"
+        style="max-width: 360px"
+      />
+      <v-text-field
+        v-model="qrzPassword"
+        :label="qrzPasswordConfigured ? 'QRZ password (configured — leave blank to keep)' : 'QRZ password'"
+        :type="showQrzPassword ? 'text' : 'password'"
+        :append-inner-icon="showQrzPassword ? 'mdi-eye-off' : 'mdi-eye'"
+        density="compact"
+        class="mb-1"
+        style="max-width: 360px"
+        @click:append-inner="showQrzPassword = !showQrzPassword"
+      />
+      <v-checkbox
+        v-if="qrzPasswordConfigured"
+        v-model="clearQrzPassword"
+        label="Clear stored password"
+        density="compact"
+        hide-details
+        class="mb-2"
+      />
+      <v-btn color="primary" size="small" variant="tonal" :loading="qrzSaving" @click="saveQrzCredentials">
+        Save
+      </v-btn>
+      <v-alert v-if="qrzSaveError" type="error" variant="tonal" density="compact" class="mt-2">
+        {{ qrzSaveError }}
+      </v-alert>
+      <v-alert v-if="qrzSaveSuccess" type="success" variant="tonal" density="compact" class="mt-2">
+        QRZ credentials saved.
+      </v-alert>
     </v-card>
 
     <!-- Messaging -->
@@ -1123,21 +1290,12 @@ async function confirmDelete() {
         class="mb-4"
       />
 
-      <div class="d-flex ga-2 mb-2">
-        <v-text-field
-          v-model="aprsIsHost"
-          label="Server"
-          density="compact"
-          style="flex: 3"
-        />
-        <v-text-field
-          v-model.number="aprsIsPort"
-          label="Port"
-          density="compact"
-          type="number"
-          style="flex: 1"
-        />
-      </div>
+      <v-text-field
+        v-model="aprsIsHost"
+        label="Server"
+        density="compact"
+        class="mb-2"
+      />
 
       <div class="text-body-2 text-medium-emphasis mb-1">
         Passcode (auto-computed: <strong>{{ aprsIsPasscodeComputed }}</strong>)
@@ -1282,7 +1440,30 @@ async function confirmDelete() {
         {{ retentionSaveError }}
       </v-alert>
 
-      <div class="text-caption text-medium-emphasis mt-3">
+      <div class="d-flex ga-3 align-center mt-3 flex-wrap">
+        <v-text-field
+          v-model.number="cleanupIntervalHours"
+          label="Cleanup interval (hours, 0 = manual only)"
+          type="number"
+          density="compact"
+          hide-details
+          style="max-width: 280px"
+        />
+        <v-switch
+          v-model="vacuumOnCleanup"
+          label="VACUUM after pruning"
+          density="compact"
+          hide-details
+          color="primary"
+        />
+        <v-btn size="small" variant="tonal" color="primary" :loading="cleanupScheduleSaving" @click="saveCleanupSettings">
+          Save schedule
+        </v-btn>
+      </div>
+      <v-alert v-if="cleanupScheduleError" type="error" variant="tonal" density="compact" class="mt-2">
+        {{ cleanupScheduleError }}
+      </v-alert>
+      <div class="text-caption text-medium-emphasis mt-2">
         Cleanup runs automatically
         <template v-if="cleanupIntervalHours > 0">every {{ cleanupIntervalHours }}h</template>
         <template v-else>only when triggered manually</template>,

@@ -16,7 +16,7 @@ namespace DireControl.Api.Services;
 public sealed partial class CallsignLookupService(
     IHttpClientFactory httpClientFactory,
     IServiceScopeFactory scopeFactory,
-    IOptions<QrzOptions> qrzOptions,
+    StationSettingsProvider settingsProvider,
     ILogger<CallsignLookupService> logger)
 {
     // Valid amateur radio callsigns: 1–3 prefix chars, district digit, 1–3 suffix letters,
@@ -58,7 +58,7 @@ public sealed partial class CallsignLookupService(
         // Live lookup — HamDB first, QRZ fallback
         var result = await QueryHamDbAsync(callsign, ct);
 
-        if (result is null && qrzOptions.Value.IsConfigured)
+        if (result is null)
             result = await QueryQrzAsync(callsign, ct);
 
         // Persist the result even if station is not yet in our DB (station may arrive later)
@@ -120,8 +120,8 @@ public sealed partial class CallsignLookupService(
     {
         try
         {
-            var opts = qrzOptions.Value;
-            if (!opts.IsConfigured)
+            var settings = await settingsProvider.GetAsync(ct);
+            if (settings.QrzUsername is null || settings.QrzPassword is null)
                 return null;
 
             var http = httpClientFactory.CreateClient("QRZ");
@@ -129,8 +129,8 @@ public sealed partial class CallsignLookupService(
             if (_qrzSessionKey is null)
             {
                 var loginResp = await http.GetAsync(
-                    $"https://xmldata.qrz.com/xml/current/?username={Uri.EscapeDataString(opts.Username!)}" +
-                    $"&password={Uri.EscapeDataString(opts.Password!)}&agent=DireControl", ct);
+                    $"https://xmldata.qrz.com/xml/current/?username={Uri.EscapeDataString(settings.QrzUsername)}" +
+                    $"&password={Uri.EscapeDataString(settings.QrzPassword)}&agent=DireControl", ct);
 
                 if (!loginResp.IsSuccessStatusCode)
                     return null;

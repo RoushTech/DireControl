@@ -760,7 +760,7 @@ public class ModeFrequencyDetectionTests
     [TestCase("APBM1A", null, "DMR")]
     public void DetectMode_FromTocall_ReturnsExpectedMode(string tocall, string? comment, string expected)
     {
-        var mode = AprsPacketParsingService.DetectMode(tocall, comment);
+        var mode = PacketDecoder.DetectMode(tocall, comment);
         Assert.That(mode, Is.EqualTo(expected));
     }
 
@@ -772,23 +772,23 @@ public class ModeFrequencyDetectionTests
     [TestCase("APRS", "EchoLink Node active", "AllStar")]
     public void DetectMode_FromComment_ReturnsExpectedMode(string tocall, string comment, string expected)
     {
-        var mode = AprsPacketParsingService.DetectMode(tocall, comment);
+        var mode = PacketDecoder.DetectMode(tocall, comment);
         Assert.That(mode, Is.EqualTo(expected));
     }
 
     [Test]
     public void DetectMode_UnknownTocall_NoModeKeywords_ReturnsNull()
     {
-        var mode = AprsPacketParsingService.DetectMode("APRS", "SKYWARN SE TN DIGI");
+        var mode = PacketDecoder.DetectMode("APRS", "SKYWARN SE TN DIGI");
         Assert.That(mode, Is.Null);
     }
 
     [Test]
     public void DetectMode_NullInputs_ReturnsNull()
     {
-        Assert.That(AprsPacketParsingService.DetectMode(null, null), Is.Null);
-        Assert.That(AprsPacketParsingService.DetectMode(null, ""), Is.Null);
-        Assert.That(AprsPacketParsingService.DetectMode("", null), Is.Null);
+        Assert.That(PacketDecoder.DetectMode(null, null), Is.Null);
+        Assert.That(PacketDecoder.DetectMode(null, ""), Is.Null);
+        Assert.That(PacketDecoder.DetectMode("", null), Is.Null);
     }
 
     // ParseFrequency
@@ -799,15 +799,15 @@ public class ModeFrequencyDetectionTests
     [TestCase("DMR Repeater 442.55000MHz +5.0000MHz", "442.55000")]
     public void ParseFrequency_ExtractsFirstFrequencyWithMhzSuffix(string comment, string? expected)
     {
-        var freq = AprsPacketParsingService.ParseFrequency(comment);
+        var freq = PacketDecoder.ParseFrequency(comment);
         Assert.That(freq, Is.EqualTo(expected));
     }
 
     [Test]
     public void ParseFrequency_NullOrEmpty_ReturnsNull()
     {
-        Assert.That(AprsPacketParsingService.ParseFrequency(null), Is.Null);
-        Assert.That(AprsPacketParsingService.ParseFrequency(""), Is.Null);
+        Assert.That(PacketDecoder.ParseFrequency(null), Is.Null);
+        Assert.That(PacketDecoder.ParseFrequency(""), Is.Null);
     }
 
     // IsGatewayTocall
@@ -823,7 +823,7 @@ public class ModeFrequencyDetectionTests
     [TestCase("", false)]
     public void IsGatewayTocall_ClassifiesCorrectly(string? tocall, bool expected)
     {
-        Assert.That(AprsPacketParsingService.IsGatewayTocall(tocall), Is.EqualTo(expected));
+        Assert.That(PacketDecoder.IsGatewayTocall(tocall), Is.EqualTo(expected));
     }
 
     // Full packet round-trip
@@ -853,11 +853,11 @@ public class ModeFrequencyDetectionTests
         Assert.That(pos, Is.Not.Null);
         Assert.That(pos, Is.AssignableTo<PositionInfo>());
 
-        var mode = AprsPacketParsingService.DetectMode(tocall, pos!.Comment);
-        var freq = AprsPacketParsingService.ParseFrequency(pos.Comment);
+        var mode = PacketDecoder.DetectMode(tocall, pos!.Comment);
+        var freq = PacketDecoder.ParseFrequency(pos.Comment);
 
         Assert.That(mode, Is.EqualTo("D-Star"));
         Assert.That(freq, Is.EqualTo("144.96000"));
-        Assert.That(AprsPacketParsingService.IsGatewayTocall(tocall), Is.True);
+        Assert.That(PacketDecoder.IsGatewayTocall(tocall), Is.True);
     }
 }

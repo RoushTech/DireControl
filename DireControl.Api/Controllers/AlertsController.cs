@@ -40,7 +40,6 @@ public class AlertsController(DireControlContext db) : ControllerBase
             GeofenceName = a.Detail.GeofenceName,
             Direction = a.Detail.Direction,
             RuleName = a.Detail.RuleName,
-            MessageText = a.Detail.MessageText,
         }).ToList();
 
         return Ok(dtos);
