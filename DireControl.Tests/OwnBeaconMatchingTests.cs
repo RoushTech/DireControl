@@ -19,7 +19,7 @@ namespace DireControl.Tests;
 [TestFixture]
 public class FindMatchingRadioTests
 {
-    // ── helpers ────────────────────────────────────────────────────────────────
+    // helpers
 
     private static DbPacket RfPacket(string callsign, int kissChannel = 0) => new()
     {
@@ -45,7 +45,7 @@ public class FindMatchingRadioTests
         ChannelNumber = channel,
     };
 
-    // ── RF source — KISS channel is the primary key ────────────────────────────
+    // RF source — KISS channel is the primary key
 
     [Test]
     public void Rf_ChannelAndCallsignMatch_ReturnsRadio()
@@ -114,7 +114,7 @@ public class FindMatchingRadioTests
         Assert.That(CallsignMatcher.FindMatchingRadio(packet, []), Is.Null);
     }
 
-    // ── APRS-IS source — callsign only, channel is irrelevant ─────────────────
+    // APRS-IS source — callsign only, channel is irrelevant
 
     [Test]
     public void AprsIs_MatchingCallsign_ReturnsRadio()
@@ -192,7 +192,7 @@ public class AprsPacketTypeParsingTests
     private static AprsPacketType? Parse(string tnc2)
         => new AprsSharp.AprsParser.Packet(tnc2).InfoField?.Type;
 
-    // ── Position packets ──────────────────────────────────────────────────────
+    // Position packets
 
     [Test]
     public void Bang_PositionWithoutTimestampNoMessaging()
@@ -228,7 +228,7 @@ public class AprsPacketTypeParsingTests
             Is.EqualTo(AprsPacketType.PositionWithTimestampNoMessaging));
     }
 
-    // ── Status ────────────────────────────────────────────────────────────────
+    // Status
 
     [Test]
     public void GreaterThan_Status()
@@ -238,7 +238,7 @@ public class AprsPacketTypeParsingTests
             Is.EqualTo(AprsPacketType.Status));
     }
 
-    // ── Message ───────────────────────────────────────────────────────────────
+    // Message
 
     [Test]
     public void Colon_InboxMessage()
@@ -257,7 +257,7 @@ public class AprsPacketTypeParsingTests
             Is.EqualTo(AprsPacketType.Message));
     }
 
-    // ── Weather ───────────────────────────────────────────────────────────────
+    // Weather
 
     [Test]
     public void Underscore_WeatherReport()
@@ -267,7 +267,7 @@ public class AprsPacketTypeParsingTests
             Is.EqualTo(AprsPacketType.WeatherReport));
     }
 
-    // ── Object / Item ─────────────────────────────────────────────────────────
+    // Object / Item
 
     [Test]
     public void Semicolon_Object()

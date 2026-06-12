@@ -14,7 +14,7 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// </summary>
     public string OutboundPath { get; set; } = "WIDE1-1,WIDE2-1";
 
-    // ─── APRS-IS settings ────────────────────────────────────────────────────
+    // APRS-IS settings
 
     /// <summary>Whether the DireControl APRS-IS client is enabled.</summary>
     public bool AprsIsEnabled { get; set; } = false;
@@ -42,7 +42,7 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// </summary>
     public int DeduplicationWindowSeconds { get; set; } = 60;
 
-    // ─── Packet retention (database cleanup) ─────────────────────────────────
+    // Packet retention (database cleanup)
 
     /// <summary>
     /// Days of RF-received packet history to keep. 0 (the default) means keep
@@ -59,7 +59,7 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>Days of own-transmitted packet history to keep. 0 = keep forever.</summary>
     public int PacketRetentionOwnDays { get; set; } = 0;
 
-    // ─── Weather overlay API keys ─────────────────────────────────────────────
+    // Weather overlay API keys
 
     /// <summary>OpenWeatherMap API key used for the wind tile overlay.</summary>
     public string? OpenWeatherMapApiKey { get; set; }

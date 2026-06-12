@@ -52,7 +52,6 @@ public sealed partial class CallsignLookupService(
 
         var station = await db.Stations.FirstOrDefaultAsync(s => s.Callsign == callsign, ct);
 
-        // Return cached data immediately
         if (station?.QrzLookupData is not null)
             return station.QrzLookupData;
 
@@ -71,10 +70,6 @@ public sealed partial class CallsignLookupService(
 
         return result;
     }
-
-    // -------------------------------------------------------------------------
-    // HamDB
-    // -------------------------------------------------------------------------
 
     private async Task<QrzLookupData?> QueryHamDbAsync(string callsign, CancellationToken ct)
     {
@@ -120,10 +115,6 @@ public sealed partial class CallsignLookupService(
             return null;
         }
     }
-
-    // -------------------------------------------------------------------------
-    // QRZ XML
-    // -------------------------------------------------------------------------
 
     private async Task<QrzLookupData?> QueryQrzAsync(string callsign, CancellationToken ct)
     {

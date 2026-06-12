@@ -33,66 +33,11 @@ public class PacketsController(DireControlContext db) : ControllerBase
         var p = await db.Packets
             .AsNoTracking()
             .Where(x => x.Id == id)
-            .Select(x => new PacketDto
-            {
-                Id = x.Id,
-                StationCallsign = x.StationCallsign,
-                ReceivedAt = x.ReceivedAt,
-                RawPacket = x.RawPacket,
-                ParsedType = x.ParsedType,
-                Source = x.Source,
-                Latitude = x.Latitude,
-                Longitude = x.Longitude,
-                Path = x.Path,
-                ResolvedPath = x.ResolvedPath,
-                HopCount = x.HopCount,
-                UnknownHopCount = x.UnknownHopCount,
-                IsDirectHeard = x.HopCount == 0,
-                Comment = x.Comment,
-                WeatherData = x.WeatherData,
-                TelemetryData = x.TelemetryData,
-                MessageData = x.MessageData,
-                SignalData = x.SignalData,
-                GridSquare = x.GridSquare,
-            })
+            .Select(PacketProjections.ToPacketDto)
             .FirstOrDefaultAsync(ct);
 
         if (p is null) return NotFound();
         return Ok(p);
-    }
-
-    [HttpGet("recent")]
-    public async Task<ActionResult<IReadOnlyList<PacketDto>>> GetRecent(CancellationToken ct)
-    {
-        var packets = await db.Packets
-            .AsNoTracking()
-            .OrderByDescending(p => p.ReceivedAt)
-            .Take(100)
-            .Select(p => new PacketDto
-            {
-                Id = p.Id,
-                StationCallsign = p.StationCallsign,
-                ReceivedAt = p.ReceivedAt,
-                RawPacket = p.RawPacket,
-                ParsedType = p.ParsedType,
-                Source = p.Source,
-                Latitude = p.Latitude,
-                Longitude = p.Longitude,
-                Path = p.Path,
-                ResolvedPath = p.ResolvedPath,
-                HopCount = p.HopCount,
-                UnknownHopCount = p.UnknownHopCount,
-                IsDirectHeard = p.HopCount == 0,
-                Comment = p.Comment,
-                WeatherData = p.WeatherData,
-                TelemetryData = p.TelemetryData,
-                MessageData = p.MessageData,
-                SignalData = p.SignalData,
-                GridSquare = p.GridSquare,
-            })
-            .ToListAsync(ct);
-
-        return Ok(packets);
     }
 
     [HttpGet]
@@ -114,28 +59,7 @@ public class PacketsController(DireControlContext db) : ControllerBase
         var packets = await query
             .OrderBy(p => p.ReceivedAt)
             .Take(Math.Min(limit, 500))
-            .Select(p => new PacketDto
-            {
-                Id = p.Id,
-                StationCallsign = p.StationCallsign,
-                ReceivedAt = p.ReceivedAt,
-                RawPacket = p.RawPacket,
-                ParsedType = p.ParsedType,
-                Source = p.Source,
-                Latitude = p.Latitude,
-                Longitude = p.Longitude,
-                Path = p.Path,
-                ResolvedPath = p.ResolvedPath,
-                HopCount = p.HopCount,
-                UnknownHopCount = p.UnknownHopCount,
-                IsDirectHeard = p.HopCount == 0,
-                Comment = p.Comment,
-                WeatherData = p.WeatherData,
-                TelemetryData = p.TelemetryData,
-                MessageData = p.MessageData,
-                SignalData = p.SignalData,
-                GridSquare = p.GridSquare,
-            })
+            .Select(PacketProjections.ToPacketDto)
             .ToListAsync(ct);
 
         return Ok(packets);

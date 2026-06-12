@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { createHubConnection } from '@/composables/useSignalR'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { getPacketsSince } from '@/api/stationsApi'
@@ -27,8 +23,10 @@ const selectionStore = useStationSelectionStore()
 
 const filterFieldRef = ref<{ focus: () => void } | null>(null)
 
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+const hub = createHubConnection('/hubs/packets', {
+  packetReceived: (packet: PacketBroadcastDto) => store.addPacket(packet),
+})
+const connectionStatus = hub.status
 
 const inspectedPacketId = ref<number | null>(null)
 
@@ -92,41 +90,14 @@ async function seedFromApi() {
   }
 }
 
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
-
-  connection.on('packetReceived', (packet: PacketBroadcastDto) => {
-    store.addPacket(packet)
-  })
-
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
-
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
-  }
-}
-
 onMounted(async () => {
   await seedFromApi()
-  await connectSignalR()
+  await hub.start()
   window.addEventListener('shortcut:focus-search', onShortcutFocusSearch)
 })
 
 onUnmounted(async () => {
-  if (connection) {
-    await connection.stop()
-    connection = null
-  }
+  await hub.stop()
   window.removeEventListener('shortcut:focus-search', onShortcutFocusSearch)
 })
 
@@ -256,7 +227,7 @@ function openPopOut() {
     >
       <template #default="{ item: p }">
         <div
-          :key="`${p.callsign}-${p.receivedAt}`"
+          :key="p.id"
           class="beacon-row"
           @click="openInspectDialog(p.id)"
         >

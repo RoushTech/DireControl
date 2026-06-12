@@ -18,14 +18,6 @@ export enum HeardVia {
   IgateRfDigi = 6,
 }
 
-export enum AprsIsConnectionState {
-  Disabled = 'Disabled',
-  Connecting = 'Connecting',
-  Connected = 'Connected',
-  AuthFailed = 'AuthFailed',
-  Disconnected = 'Disconnected',
-}
-
 export interface QrzLookupData {
   name: string | null;
   city: string | null;

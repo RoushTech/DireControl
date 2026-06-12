@@ -73,7 +73,6 @@ public sealed class KissTcpService(
                     TaskContinuationOptions.OnlyOnFaulted);
             };
 
-            // Poll until disconnected or cancelled
             while (!ct.IsCancellationRequested && tcpConnection.Connected)
                 await Task.Delay(500, ct);
 
@@ -124,7 +123,6 @@ public sealed class KissTcpService(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
 
-        // Load dedup window
         var setting = await db.UserSettings.FindAsync(new object[] { 1 }, ct);
         var dedupWindowSeconds = setting?.DeduplicationWindowSeconds ?? 60;
         var dedupWindow = DateTime.UtcNow.AddSeconds(-dedupWindowSeconds);

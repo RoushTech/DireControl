@@ -7,7 +7,6 @@ public sealed class LightningCache(IHttpClientFactory httpClientFactory, ILogger
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(10);
 
     private string _currentTimestamp = "";
-    private DateTime _periodStart = DateTime.MinValue;
 
     private readonly ConcurrentDictionary<string, (byte[] Data, DateTime FetchedAt)> _tiles = new();
 
@@ -18,7 +17,6 @@ public sealed class LightningCache(IHttpClientFactory httpClientFactory, ILogger
             now.Year, now.Month, now.Day,
             now.Hour, (now.Minute / 5) * 5, 0, DateTimeKind.Utc)
             .ToString("yyyy-MM-ddTHH:mm:ssZ");
-        _periodStart = DateTime.UtcNow;
 
         var cutoff = DateTime.UtcNow - Ttl;
         foreach (var key in _tiles.Keys)
@@ -50,7 +48,4 @@ public sealed class LightningCache(IHttpClientFactory httpClientFactory, ILogger
         logger.LogDebug("Tomorrow.io lightning tile fetched: {Z}/{X}/{Y} @ {Ts}", z, x, y, _currentTimestamp);
         return data;
     }
-
-    public string CurrentTimestamp => _currentTimestamp;
-    public DateTime PeriodStart => _periodStart;
 }

@@ -36,11 +36,6 @@ export async function getStationPackets(
   return data;
 }
 
-export async function getRecentPackets(): Promise<PacketDto[]> {
-  const { data } = await http.get<PacketDto[]>("/api/v0/packets/recent");
-  return data;
-}
-
 export async function getPacketsSince(since: string, limit = 200): Promise<PacketDto[]> {
   const { data } = await http.get<PacketDto[]>("/api/v0/packets", {
     params: { since, limit },
@@ -68,11 +63,6 @@ export async function getStationWeather(
     { params: from != null || to != null ? { from, to } : undefined },
   );
   return data;
-}
-
-export async function getWatchList(): Promise<StationDto[]> {
-  const { data } = await http.get<StationDto[]>('/api/v0/stations/watchlist')
-  return data
 }
 
 export async function toggleWatch(callsign: string): Promise<void> {

@@ -284,48 +284,6 @@ public sealed class MessageHandlingTests
     }
 
     // =========================================================================
-    // TryExtractThirdPartyInner — raw TNC2 → (innerRaw, innerSender)
-    // =========================================================================
-
-    // Real-world packet: igate W3UWU forwarding a message from W3UWU-9
-    [TestCase(
-        "W3UWU>APDW18,WE4MB-3*,WIDE1*,WIDE2-1:}W3UWU-9>APDR16,TCPIP,W3UWU*::W3UWU    :Hiii{3",
-        true,
-        "W3UWU-9>APDR16,TCPIP,W3UWU*::W3UWU    :Hiii{3",
-        "W3UWU-9")]
-    // Minimal well-formed third-party frame
-    [TestCase(
-        "IGATE>APRS:}W1ABC>APRS::W3UWU   :Hello{1",
-        true,
-        "W1ABC>APRS::W3UWU   :Hello{1",
-        "W1ABC")]
-    // Not a third-party packet (no '}' after the colon)
-    [TestCase(
-        "W1ABC>APRS,WIDE2-1:=4903.50N/07201.75W-Test",
-        false,
-        "",
-        "")]
-    // Empty string
-    [TestCase("", false, "", "")]
-    // Colon present but followed by a non-'}' character
-    [TestCase("W1ABC>APRS:Hello world", false, "", "")]
-    // Third-party prefix with nothing after '}' (empty inner content)
-    [TestCase("W1ABC>APRS:}", false, "", "")]
-    public void TryExtractThirdPartyInner_ParsesCorrectly(
-        string rawPacket,
-        bool expectedSuccess,
-        string expectedInnerRaw,
-        string expectedInnerSender)
-    {
-        var success = MessageHandlingLogic.TryExtractThirdPartyInner(
-            rawPacket, out var innerRaw, out var innerSender);
-
-        Assert.That(success, Is.EqualTo(expectedSuccess));
-        Assert.That(innerRaw, Is.EqualTo(expectedInnerRaw));
-        Assert.That(innerSender, Is.EqualTo(expectedInnerSender));
-    }
-
-    // =========================================================================
     // Helpers
     // =========================================================================
 

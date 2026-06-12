@@ -38,8 +38,9 @@ public sealed class AprsIsService(
                 if (!settings.AprsIsEnabled)
                 {
                     statusService.SetState(AprsIsConnectionState.Disabled);
+                    // Completes only via OperationCanceledException when the reconnect
+                    // trigger fires (settings change) or the host shuts down.
                     await Task.Delay(Timeout.Infinite, ct);
-                    continue;
                 }
 
                 statusService.SetState(AprsIsConnectionState.Connecting);
@@ -210,7 +211,6 @@ public sealed class AprsIsService(
 
         var dedupWindow = DateTime.UtcNow.AddSeconds(-dedupWindowSeconds);
 
-        // Check for duplicate within window.
         var duplicate = await db.Packets
             .Where(p =>
                 p.StationCallsign == callsign &&
@@ -268,8 +268,6 @@ public sealed class AprsIsService(
                ?? new UserSetting { Id = 1 };
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
-
     private static string ExtractCallsign(string tnc2)
     {
         var idx = tnc2.IndexOf('>');
@@ -281,8 +279,6 @@ public sealed class AprsIsService(
         var idx = tnc2.IndexOf(':');
         return idx >= 0 ? tnc2[(idx + 1)..] : string.Empty;
     }
-
-    // ─── Private exception ────────────────────────────────────────────────────
 
     private sealed class AuthFailedException : Exception
     {

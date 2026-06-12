@@ -11,7 +11,6 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/radios")]
 public class RadiosController(DireControlContext db, BeaconService beaconService) : ControllerBase
 {
-    // ─── List ──────────────────────────────────────────────────────────────────
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<RadioDto>>> GetRadios(CancellationToken ct)
@@ -62,8 +61,6 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         return Ok(radios.Select(r => ToDto(r, lastBeaconMap, confirmMap, beaconMap, now)));
     }
 
-    // ─── Create ────────────────────────────────────────────────────────────────
-
     [HttpPost]
     public async Task<ActionResult<RadioDto>> CreateRadio(
         [FromBody] CreateRadioRequest request,
@@ -91,46 +88,8 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         await db.SaveChangesAsync(ct);
 
         var now = DateTime.UtcNow;
-        return CreatedAtAction(nameof(GetRadio), new { id = radio.Id },
-            ToDto(radio, [], [], [], now));
+        return Created($"/api/v0/radios/{radio.Id}", ToDto(radio, [], [], [], now));
     }
-
-    // ─── Single ────────────────────────────────────────────────────────────────
-
-    [HttpGet("{id}")]
-    public async Task<ActionResult<RadioDto>> GetRadio(string id, CancellationToken ct)
-    {
-        var radio = await db.Radios.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
-        if (radio is null) return NotFound();
-
-        var lastBeacon = await db.OwnBeacons
-            .AsNoTracking()
-            .Where(b => b.RadioId == id)
-            .OrderByDescending(b => b.BeaconedAt)
-            .Select(b => (DateTime?)b.BeaconedAt)
-            .FirstOrDefaultAsync(ct);
-
-        var confirmCount = await db.DigiConfirmations
-            .AsNoTracking()
-            .Join(db.OwnBeacons.Where(b => b.RadioId == id),
-                  c => c.OwnBeaconId,
-                  b => b.Id,
-                  (c, b) => c.Id)
-            .CountAsync(ct);
-
-        var beaconCount = await db.OwnBeacons.CountAsync(b => b.RadioId == id, ct);
-
-        var now = DateTime.UtcNow;
-        var lastBeaconMap = lastBeacon.HasValue
-            ? new Dictionary<string, DateTime> { [id] = lastBeacon.Value }
-            : new Dictionary<string, DateTime>();
-        var confirmMap = new Dictionary<string, int> { [id] = confirmCount };
-        var beaconMap = new Dictionary<string, int> { [id] = beaconCount };
-
-        return Ok(ToDto(radio, lastBeaconMap, confirmMap, beaconMap, now));
-    }
-
-    // ─── Update ────────────────────────────────────────────────────────────────
 
     [HttpPut("{id}")]
     public async Task<ActionResult<RadioDto>> UpdateRadio(
@@ -169,8 +128,6 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         return Ok(ToDto(radio, lastBeaconMap, [], [], now));
     }
 
-    // ─── Delete ────────────────────────────────────────────────────────────────
-
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteRadio(string id, CancellationToken ct)
     {
@@ -181,8 +138,6 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         await db.SaveChangesAsync(ct);
         return NoContent();
     }
-
-    // ─── Toggle active ─────────────────────────────────────────────────────────
 
     [HttpPatch("{id}/active")]
     public async Task<ActionResult<RadioDto>> ToggleActive(string id, CancellationToken ct)
@@ -196,8 +151,6 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         var now = DateTime.UtcNow;
         return Ok(ToDto(radio, [], [], [], now));
     }
-
-    // ─── Beacon now ────────────────────────────────────────────────────────────
 
     [HttpPost("{id}/beacon")]
     public async Task<IActionResult> BeaconNow(string id, CancellationToken ct)
@@ -213,8 +166,6 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
                 detail: "Beacon could not be sent. Check that Direwolf is connected and home position is configured.")
             : NoContent();
     }
-
-    // ─── Last beacon ───────────────────────────────────────────────────────────
 
     [HttpGet("{id}/lastbeacon")]
     public async Task<ActionResult<LastBeaconDto>> GetLastBeacon(string id, CancellationToken ct)
@@ -242,22 +193,9 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
             PathUsed = beacon?.PathUsed,
             Comment = beacon?.Comment,
             Heard = beacon?.Heard ?? true,
-            Confirmations = beacon?.Confirmations
-                .OrderBy(c => c.SecondsAfterBeacon)
-                .Select(c => new DigiConfirmationDto
-                {
-                    Digipeater = c.DigipeaterCallsign,
-                    ConfirmedAt = c.ConfirmedAt,
-                    SecondsAfterBeacon = c.SecondsAfterBeacon,
-                    Lat = c.DigipeaterLat,
-                    Lon = c.DigipeaterLon,
-                    AliasUsed = c.AliasUsed,
-                })
-                .ToList() ?? [],
+            Confirmations = beacon is not null ? ToConfirmationDtos(beacon.Confirmations) : [],
         });
     }
-
-    // ─── Beacon history ────────────────────────────────────────────────────────
 
     [HttpGet("{id}/beaconhistory")]
     public async Task<ActionResult<IReadOnlyList<OwnBeaconHistoryItemDto>>> GetBeaconHistory(
@@ -287,22 +225,23 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
             PathUsed = b.PathUsed,
             HopCount = b.HopCount,
             Heard = b.Heard,
-            Confirmations = b.Confirmations
-                .OrderBy(c => c.SecondsAfterBeacon)
-                .Select(c => new DigiConfirmationDto
-                {
-                    Digipeater = c.DigipeaterCallsign,
-                    ConfirmedAt = c.ConfirmedAt,
-                    SecondsAfterBeacon = c.SecondsAfterBeacon,
-                    Lat = c.DigipeaterLat,
-                    Lon = c.DigipeaterLon,
-                    AliasUsed = c.AliasUsed,
-                })
-                .ToList(),
+            Confirmations = ToConfirmationDtos(b.Confirmations),
         }));
     }
 
-    // ─── Helper ────────────────────────────────────────────────────────────────
+    private static List<DigiConfirmationDto> ToConfirmationDtos(IEnumerable<DigiConfirmation> confirmations) =>
+        confirmations
+            .OrderBy(c => c.SecondsAfterBeacon)
+            .Select(c => new DigiConfirmationDto
+            {
+                Digipeater = c.DigipeaterCallsign,
+                ConfirmedAt = c.ConfirmedAt,
+                SecondsAfterBeacon = c.SecondsAfterBeacon,
+                Lat = c.DigipeaterLat,
+                Lon = c.DigipeaterLon,
+                AliasUsed = c.AliasUsed,
+            })
+            .ToList();
 
     private static RadioDto ToDto(
         Radio radio,
@@ -311,7 +250,7 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         Dictionary<string, int> beaconMap,
         DateTime now)
     {
-        lastBeaconMap.TryGetValue(radio.Id, out var lastBeaconedAt);
+        var hasBeacon = lastBeaconMap.TryGetValue(radio.Id, out var lastBeaconedAt);
         return new RadioDto
         {
             Id = radio.Id,
@@ -326,10 +265,8 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
             BeaconComment = radio.BeaconComment,
             IsActive = radio.IsActive,
             ExpectedIntervalSeconds = radio.ExpectedIntervalSeconds,
-            LastBeaconedAt = lastBeaconMap.ContainsKey(radio.Id) ? lastBeaconedAt : null,
-            SecondsSinceBeacon = lastBeaconMap.ContainsKey(radio.Id)
-                ? (int)(now - lastBeaconedAt).TotalSeconds
-                : null,
+            LastBeaconedAt = hasBeacon ? lastBeaconedAt : null,
+            SecondsSinceBeacon = hasBeacon ? (int)(now - lastBeaconedAt).TotalSeconds : null,
             ConfirmationCount = confirmMap.GetValueOrDefault(radio.Id),
             BeaconCount = beaconMap.GetValueOrDefault(radio.Id),
         };

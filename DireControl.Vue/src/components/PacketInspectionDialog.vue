@@ -166,7 +166,7 @@ function heardViaLabel(p: PacketDto): string {
 
         <template v-if="packet && !loading">
 
-          <!-- ── Position ── -->
+          <!-- Position -->
           <template v-if="packet.latitude != null || packet.gridSquare">
             <div class="section-label">Position</div>
             <div class="field-grid">
@@ -189,7 +189,7 @@ function heardViaLabel(p: PacketDto): string {
             </div>
           </template>
 
-          <!-- ── Path ── -->
+          <!-- Path -->
           <template v-if="packet.path">
             <div class="section-label">Path</div>
             <div class="field-grid">
@@ -239,7 +239,7 @@ function heardViaLabel(p: PacketDto): string {
             </template>
           </template>
 
-          <!-- ── Comment / Status ── -->
+          <!-- Comment / Status -->
           <template v-if="packet.comment">
             <div class="section-label">Comment</div>
             <div class="px-3 pb-3">
@@ -247,7 +247,7 @@ function heardViaLabel(p: PacketDto): string {
             </div>
           </template>
 
-          <!-- ── Weather ── -->
+          <!-- Weather -->
           <template v-if="isWeather && packet.weatherData">
             <div class="section-label">Weather</div>
             <div class="field-grid">
@@ -299,7 +299,7 @@ function heardViaLabel(p: PacketDto): string {
             </div>
           </template>
 
-          <!-- ── Message ── -->
+          <!-- Message -->
           <template v-if="isMessage && packet.messageData">
             <div class="section-label">Message</div>
             <div class="field-grid">
@@ -318,7 +318,7 @@ function heardViaLabel(p: PacketDto): string {
             </div>
           </template>
 
-          <!-- ── Telemetry ── -->
+          <!-- Telemetry -->
           <template v-if="isTelemetry && packet.telemetryData">
             <div class="section-label">Telemetry</div>
             <div class="px-3 pb-3">
@@ -326,7 +326,7 @@ function heardViaLabel(p: PacketDto): string {
             </div>
           </template>
 
-          <!-- ── Signal ── -->
+          <!-- Signal -->
           <template v-if="packet.signalData && (packet.signalData.decodeQuality != null || packet.signalData.frequencyOffsetHz != null)">
             <div class="section-label">Signal</div>
             <div class="field-grid">
@@ -343,7 +343,7 @@ function heardViaLabel(p: PacketDto): string {
             </div>
           </template>
 
-          <!-- ── Raw Packet (toggle) ── -->
+          <!-- Raw Packet (toggle) -->
           <div class="raw-toggle-row">
             <v-btn
               size="x-small"

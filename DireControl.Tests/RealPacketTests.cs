@@ -6,9 +6,7 @@ using AprsPacketType = AprsSharp.AprsParser.PacketType;
 
 namespace DireControl.Tests;
 
-// ---------------------------------------------------------------------------
 // Shared corpus
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Unique packet strings drawn from the RawPackets.txt corpus.
@@ -17,7 +15,7 @@ namespace DireControl.Tests;
 /// </summary>
 public static class RealPacketData
 {
-    // ── Weather ──────────────────────────────────────────────────────────────
+    // Weather
 
     // @ + timestamp-z + position + _ weather symbol + full c/s/g/t/r/p/P/h/b fields, via APRS-IS
     public const string Weather_AtPrefix_AllFields =
@@ -39,7 +37,7 @@ public static class RealPacketData
     public const string Weather_UnderscorePrefix_RfDigipeated =
         "AJ4FJ-13>APTW14,KN6RO-13*,WIDE1*,WE4MB-3*,WIDE2-1:_03012207c181s000g000t053r000p000P000h83b10210tRSW";
 
-    // ── Position ─────────────────────────────────────────────────────────────
+    // Position
 
     // ! (no timestamp, no messaging), alternate symbol table S, # digipeater symbol
     public const string Position_BangPrefix_AltTable =
@@ -74,7 +72,7 @@ public static class RealPacketData
     public const string Position_BangPrefix_WxSymbolNoWxData =
         "AJ4FJ-13>APTW14,KN6RO-13*,WIDE1*,WE4MB-3*,WIDE2-1:!3413.75N/08502.50W_WXTrak";
 
-    // ── Objects ── ────────────────────────────────────────────────────────────
+    // Objects
 
     // ; prefix, * live object, timestamp z, human-readable comment
     public const string Object_WithCoords =
@@ -84,7 +82,7 @@ public static class RealPacketData
     public const string Object_RepeaterFrequency =
         "KG4FZR-3>APDW17,WE4MB-3*,WIDE1*:;147.060  *111111z3526.24N/08434.95Wr147.060MHz T141 -060 KG4FZR. .www.mcminnarc.com";
 
-    // ── Status ───────────────────────────────────────────────────────────────
+    // Status
 
     // > prefix, plain text (no grid square, no timestamp)
     public const string Status_PlainText =
@@ -98,7 +96,7 @@ public static class RealPacketData
     public const string Status_WithTimestamp =
         "KC4OJS-3>APU25N,KQ4HOM-1*,WE4MB-3*,WIDE2*:>011545zExpect Winter Weather this weekend";
 
-    // ── Messages ─────────────────────────────────────────────────────────────
+    // Messages
 
     // :: addressee padded to 9 chars, message body, numeric ID
     public const string Message_WithNumericId =
@@ -128,13 +126,13 @@ public static class RealPacketData
     public const string Message_TelemetryBits =
         "KN6RO-13>APMI06,WE4MB-3*,WIDE2-1::KN6RO-13 :BITS.11111111,KN6RO-13 Telemetry";
 
-    // ── Telemetry ────────────────────────────────────────────────────────────
+    // Telemetry
 
     // T# prefix, 5 analog channels + 8-bit digital field
     public const string Telemetry_T_Hash =
         "KN6RO-13>APMI06,AJ4FJ-5*,WE4MB-3*,WIDE2*:T#132,179,076,021,066,000,00000000";
 
-    // ── MIC-E ────────────────────────────────────────────────────────────────
+    // MIC-E
 
     // ` (backtick) prefix = current MIC-E (Kenwood TM-D700/D710A etc.)
     public const string MicE_Current =
@@ -144,7 +142,7 @@ public static class RealPacketData
     public const string MicE_Old_PeetBros =
         "KG4LKY-5>SWPU0Q,KG4LKY-2*,AC4AG-4*,WE4MB-3*,WIDE3*:'oSl _/]PEET BROS ULTIMETER 2100 TM-D710=";
 
-    // ── Gateway / digital voice ──────────────────────────────────────────────
+    // Gateway / digital voice
 
     // D-Star gateway: TOCALL APDG02, overlay 'D', & gateway symbol, frequency + mode in comment
     public const string Position_DStarGateway =
@@ -154,7 +152,7 @@ public static class RealPacketData
     public const string Position_DmrGateway =
         "W4DMR-1>APDMR1,TCPIP*,qAC,T2BC:!3520.00N/08530.00W&DMR Repeater 442.55000MHz +5.0000MHz";
 
-    // ── Unparseable / unusual ─────────────────────────────────────────────────
+    // Unparseable / unusual
 
     // TOCALL is "ID" (not a standard APRS TOCALL); info starts with 'W' (no APRS type byte)
     public const string Unparseable_IdTocall =
@@ -164,7 +162,7 @@ public static class RealPacketData
     public const string Unparseable_ThirdParty =
         "AC4AG-4>APMI06,WE4MB-3*,WIDE2*:}KK4KTV-13>APRS,TCPIP,AC4AG-4*:@020501z3720.22N/08453.10W_042/005g007t038r000p000P000h77b10248L000AmbientCWOP.com";
 
-    // ── Shared TestCaseSource data ──────────────────────────────────────────
+    // Shared TestCaseSource data
 
     /// <summary>
     /// Weather packets → (tempF, windDirDeg, windSpeedMph, windGustMph, humidityPct, pressureMbar).
@@ -281,9 +279,7 @@ public static class RealPacketData
     }
 }
 
-// ---------------------------------------------------------------------------
 // Packet type classification
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Verifies that AprsSharp assigns the expected <see cref="AprsPacketType"/> to
@@ -294,14 +290,14 @@ public class PacketTypeClassificationTests
 {
     private static IEnumerable<TestCaseData> Data()
     {
-        // ── Weather ───────────────────────────────────────────────────────────
+        // Weather
         // AprsSharp 0.4.1: @ prefix weather packets report PositionWithTimestamp*
         // type enum even though InfoField is a WeatherInfo instance.
         yield return new TestCaseData(RealPacketData.Weather_AtPrefix_AllFields, AprsPacketType.PositionWithTimestampWithMessaging);
         yield return new TestCaseData(RealPacketData.Weather_AtPrefix_LuminosityField, AprsPacketType.PositionWithTimestampWithMessaging);
         yield return new TestCaseData(RealPacketData.Weather_AtPrefix_RfDigipeated, AprsPacketType.PositionWithTimestampWithMessaging);
 
-        // ── Position ──────────────────────────────────────────────────────────
+        // Position
         yield return new TestCaseData(RealPacketData.Position_BangPrefix_AltTable, AprsPacketType.PositionWithoutTimestampNoMessaging);
         yield return new TestCaseData(RealPacketData.Position_EqualsPrefix_PrimaryTable, AprsPacketType.PositionWithoutTimestampWithMessaging);
         yield return new TestCaseData(RealPacketData.Position_SlashPrefix_TimestampZ, AprsPacketType.PositionWithTimestampNoMessaging);
@@ -313,25 +309,25 @@ public class PacketTypeClassificationTests
         yield return new TestCaseData(RealPacketData.Position_WxSymbolNoWxData, AprsPacketType.PositionWithoutTimestampWithMessaging);
         yield return new TestCaseData(RealPacketData.Position_BangPrefix_WxSymbolNoWxData, AprsPacketType.PositionWithoutTimestampNoMessaging);
 
-        // ── Objects ───────────────────────────────────────────────────────────
+        // Objects
         yield return new TestCaseData(RealPacketData.Object_WithCoords, AprsPacketType.Object);
         yield return new TestCaseData(RealPacketData.Object_RepeaterFrequency, AprsPacketType.Object);
 
-        // ── Status ────────────────────────────────────────────────────────────
+        // Status
         yield return new TestCaseData(RealPacketData.Status_PlainText, AprsPacketType.Status);
         yield return new TestCaseData(RealPacketData.Status_GridSquare_DxInfo, AprsPacketType.Status);
         yield return new TestCaseData(RealPacketData.Status_WithTimestamp, AprsPacketType.Status);
 
-        // ── Messages ──────────────────────────────────────────────────────────
+        // Messages
         yield return new TestCaseData(RealPacketData.Message_WithNumericId, AprsPacketType.Message);
         yield return new TestCaseData(RealPacketData.Message_AckReply, AprsPacketType.Message);
         // Message_BulletinBln omitted: AprsSharp 0.4.1 throws on construction.
         yield return new TestCaseData(RealPacketData.Message_TelemetryBits, AprsPacketType.Message);
 
-        // ── Telemetry ─────────────────────────────────────────────────────────
+        // Telemetry
         yield return new TestCaseData(RealPacketData.Telemetry_T_Hash, AprsPacketType.TelemetryData);
 
-        // ── MIC-E ─────────────────────────────────────────────────────────────
+        // MIC-E
         // AprsSharp 0.4.1 uses more specific subtypes than the base MIC-E enums.
         yield return new TestCaseData(RealPacketData.MicE_Current, AprsPacketType.CurrentMicEDataNotTMD700);
         yield return new TestCaseData(RealPacketData.MicE_Old_PeetBros, AprsPacketType.OldMicEDataCurrentTMD700);
@@ -361,9 +357,7 @@ public class PacketTypeClassificationTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // ParseTnc2Header — real diverse paths
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates <see cref="AprsPathParser.ParseTnc2Header"/> against real corpus packets,
@@ -387,9 +381,7 @@ public class ParseTnc2HeaderRealPacketTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // ExtractViaHops — real diverse paths
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates <see cref="AprsPathParser.ExtractViaHops"/> against real corpus packets.
@@ -471,9 +463,7 @@ public class HopExtractionRealPacketTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // Weather payload
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates that <see cref="WeatherInfo"/> fields parsed from real weather packets
@@ -525,9 +515,7 @@ public class WeatherPayloadTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // Position payload
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates decoded coordinates from real position packets.
@@ -573,9 +561,7 @@ public class PositionPayloadTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // Message payload
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates addressee, body, and message ID extracted from real message packets.
@@ -621,9 +607,7 @@ public class MessagePayloadTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // Status payload
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates comment text extracted from real status packets.
@@ -674,9 +658,7 @@ public class StatusPayloadTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // Unparseable / unusual packets
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Documents how AprsSharp handles packets that carry no recognised APRS payload type.
@@ -760,9 +742,7 @@ public class UnparseablePacketTests
     }
 }
 
-// ---------------------------------------------------------------------------
 // Mode / frequency / gateway detection
-// ---------------------------------------------------------------------------
 
 /// <summary>
 /// Validates the pure helpers for extracting mode, frequency, and gateway
@@ -771,7 +751,7 @@ public class UnparseablePacketTests
 [TestFixture]
 public class ModeFrequencyDetectionTests
 {
-    // ── DetectMode ────────────────────────────────────────────────────────────
+    // DetectMode
 
     [TestCase("APDG02", null, "D-Star")]
     [TestCase("APDMR1", null, "DMR")]
@@ -811,7 +791,7 @@ public class ModeFrequencyDetectionTests
         Assert.That(AprsPacketParsingService.DetectMode("", null), Is.Null);
     }
 
-    // ── ParseFrequency ───────────────────────────────────────────────────────
+    // ParseFrequency
 
     [TestCase("RNG0001/A=000010 2m Voice (D-Star) 144.96000MHz +0.0000MHz", "144.96000")]
     [TestCase("147.060MHz T141 -060", "147.060")]
@@ -830,7 +810,7 @@ public class ModeFrequencyDetectionTests
         Assert.That(AprsPacketParsingService.ParseFrequency(""), Is.Null);
     }
 
-    // ── IsGatewayTocall ──────────────────────────────────────────────────────
+    // IsGatewayTocall
 
     [TestCase("APDG02", true)]
     [TestCase("APDMR1", true)]
@@ -846,7 +826,7 @@ public class ModeFrequencyDetectionTests
         Assert.That(AprsPacketParsingService.IsGatewayTocall(tocall), Is.EqualTo(expected));
     }
 
-    // ── Full packet round-trip ───────────────────────────────────────────────
+    // Full packet round-trip
 
     [Test]
     public void DStarGatewayPacket_ParsesPositionAndComment()

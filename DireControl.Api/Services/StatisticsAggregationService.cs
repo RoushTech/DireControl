@@ -57,10 +57,6 @@ public sealed class StatisticsAggregationService(
         logger.LogDebug("Statistics aggregation complete.");
     }
 
-    // -------------------------------------------------------------------------
-    // Global statistics
-    // -------------------------------------------------------------------------
-
     private async Task AggregateGlobalStatisticsAsync(DireControlContext db, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
@@ -171,10 +167,6 @@ public sealed class StatisticsAggregationService(
         statisticsService.SetSnapshot(dto);
     }
 
-    // -------------------------------------------------------------------------
-    // Digipeater statistics
-    // -------------------------------------------------------------------------
-
     private async Task AggregateDigipeaterStatisticsAsync(DireControlContext db, CancellationToken ct)
     {
         var cutoff24h = DateTime.UtcNow.AddHours(-24);
@@ -249,10 +241,6 @@ public sealed class StatisticsAggregationService(
 
         await db.SaveChangesAsync(ct);
     }
-
-    // -------------------------------------------------------------------------
-    // Coverage grid statistics
-    // -------------------------------------------------------------------------
 
     private async Task AggregateCoverageStatisticsAsync(DireControlContext db, CancellationToken ct)
     {

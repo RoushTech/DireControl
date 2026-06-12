@@ -10,7 +10,6 @@ const radiosStore = useRadiosStore()
 // Shared singleton tick — no extra setInterval created if already running at 1 s
 const { now } = useTick(1000)
 
-// ─── Modal state ──────────────────────────────────────────────────────────────
 const historyOpen = ref(false)
 const historyRadioId = ref('')
 
@@ -19,7 +18,6 @@ function openHistory(radioId: string) {
   historyOpen.value = true
 }
 
-// ─── Beacon Now ───────────────────────────────────────────────────────────────
 const beaconing = ref<Record<string, boolean>>({})
 const beaconError = ref<Record<string, string>>({})
 
@@ -35,8 +33,6 @@ async function doBeaconNow(radioId: string) {
     beaconing.value[radioId] = false
   }
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function secondsAgo(radioId: string): number | null {
   const lb = radiosStore.getLastBeaconForRadio(radioId)

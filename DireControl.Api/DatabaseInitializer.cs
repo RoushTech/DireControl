@@ -23,6 +23,10 @@ public static class DatabaseInitializer
             await context.Database.EnsureCreatedAsync();
         }
 
+        // WAL lets readers (map loads, statistics) run without blocking the
+        // continuous packet ingest writer. Persistent, but harmless to re-apply.
+        await context.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+
         logger.LogInformation("Database ready.");
     }
 }

@@ -30,8 +30,6 @@ public class WeatherController(
         return (provider, RadarProviderConfig.MaxNativeZoom(p));
     }
 
-    // ── Radar ───────────────────────────────────────────────────────────────
-
     // Route: /api/weather/radar/tile/{z}/{x}/{y}/{**framePath}
     // framePath captures the provider frame identifier (e.g. "v2/radar/1620046800" for
     // RainViewer, or "nexrad-n0q-900913" for IEM) with the leading slash already stripped.
@@ -63,10 +61,15 @@ public class WeatherController(
         });
     }
 
+    // Frame identifiers from both providers are alphanumeric path segments;
+    // anything else (especially "..") could traverse the upstream URL.
+    private static readonly System.Text.RegularExpressions.Regex FramePathPattern =
+        new(@"^[A-Za-z0-9/_-]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     [HttpGet("radar/tile/{z:int}/{x:int}/{y:int}/{**framePath}")]
     public async Task<IActionResult> GetRadarTile(int z, int x, int y, string framePath, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(framePath))
+        if (string.IsNullOrWhiteSpace(framePath) || !FramePathPattern.IsMatch(framePath))
             return BadRequest("framePath is required.");
 
         var setting = await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct);
@@ -108,8 +111,6 @@ public class WeatherController(
         return File(data, "image/png");
     }
 
-    // ── Wind (OpenWeatherMap) ──────────────────────────────────────────────
-
     [HttpGet("wind/tile/{z:int}/{x:int}/{y:int}")]
     public async Task<IActionResult> GetWindTile(int z, int x, int y, CancellationToken ct)
     {
@@ -131,8 +132,6 @@ public class WeatherController(
         return File(data, "image/png");
     }
 
-    // ── Lightning (Tomorrow.io) ────────────────────────────────────────────
-
     [HttpGet("lightning/tile/{z:int}/{x:int}/{y:int}")]
     public async Task<IActionResult> GetLightningTile(int z, int x, int y, CancellationToken ct)
     {
@@ -153,8 +152,6 @@ public class WeatherController(
 
         return File(data, "image/png");
     }
-
-    // ── Status ─────────────────────────────────────────────────────────────
 
     [HttpGet("status")]
     public async Task<ActionResult<WeatherStatusDto>> GetStatus(CancellationToken ct)

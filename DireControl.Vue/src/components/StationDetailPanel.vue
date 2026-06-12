@@ -140,7 +140,7 @@ const currentWeather = computed(() => weatherReadings.value[0] ?? null)
 const tempF = computed(() => currentWeather.value?.temperature ?? null)
 const tempC = computed(() => tempF.value != null ? Math.round((tempF.value - 32) * 5 / 9 * 10) / 10 : null)
 
-// ---- Combined weather chart ----
+// Combined weather chart
 
 const bucketMs = computed(() => (weatherRange.value === '24h' ? 5 * 60 * 1000 : 60 * 60 * 1000))
 const totalBuckets = computed(() => (weatherRange.value === '24h' ? 288 : 168))
@@ -294,7 +294,7 @@ const hasWeatherChartData = computed(() =>
   weatherReadings.value.some(r => r.temperature != null || r.windSpeed != null),
 )
 
-// ---- Packets-per-hour bar chart ----
+// Packets-per-hour bar chart
 
 const hourBarOptions = {
   responsive: true,
@@ -336,7 +336,7 @@ const hourBarData = computed(() => {
   }
 })
 
-// ---- Signal chart ----
+// Signal chart
 
 const signalChartOptions = {
   responsive: true,
@@ -380,7 +380,6 @@ const signalChartData = computed(() => ({
 const latestSignal = computed(() => signalPoints.value[signalPoints.value.length - 1] ?? null)
 const hasDecodeQualityData = computed(() => signalPoints.value.some(p => p.decodeQuality != null))
 
-// ---- Station type label / color ----
 const stationTypeLabel = computed(() => {
   if (!station.value) return ''
   const labels: Record<StationType, string> = {
@@ -440,8 +439,6 @@ const symbolStyle = computed(() => {
   const { table, code } = parseAprsSymbol(station.value.symbol)
   return getSymbolStyle(table, code)
 })
-
-// ---- Data fetching ----
 
 async function fetchStation() {
   if (!props.callsign) return

@@ -13,13 +13,13 @@ import { useUnits } from '@/composables/useUnits'
 import { getSymbolStyle } from '@/utils/aprsIcon'
 import AprsSymbolPicker from '@/components/AprsSymbolPicker.vue'
 
-// ─── Units ────────────────────────────────────────────────────────────────────
+// Units
 const { distanceUnit, formatDistance, setDistanceUnit } = useUnits()
 
-// ─── Retry settings (read-only display) ──────────────────────────────────────
+// Retry settings (read-only display)
 const retrySettings = ref<Pick<SettingsDto, 'maxRetryAttempts' | 'initialRetryDelaySeconds'> | null>(null)
 
-// ─── Messaging settings ───────────────────────────────────────────────────────
+// Messaging settings
 const outboundPath = ref('')
 const outboundPathSaving = ref(false)
 const outboundPathSaveError = ref('')
@@ -50,7 +50,7 @@ function schedulePathSave() {
   }, 600)
 }
 
-// ─── APRS-IS settings ─────────────────────────────────────────────────────────
+// APRS-IS settings
 const aprsIsEnabled = ref(false)
 const aprsIsHost = ref('rotate.aprs2.net')
 const aprsIsPort = ref(14580)
@@ -84,7 +84,7 @@ async function saveAprsIsSettings() {
   }
 }
 
-// ─── Radios ───────────────────────────────────────────────────────────────────
+// Radios
 const radios = ref<RadioDto[]>([])
 const radioDialogOpen = ref(false)
 const editingRadioId = ref<string | null>(null)
@@ -193,7 +193,7 @@ async function toggleActive(id: string) {
   if (idx !== -1) radios.value[idx] = updated
 }
 
-// ─── Delete (shared confirm dialog handles radios too) ────────────────────────
+// Delete (shared confirm dialog handles radios too)
 function promptDeleteRadio(radio: RadioDto) {
   const historyNote = radio.beaconCount > 0
     ? ` This radio has ${radio.beaconCount} beacon records. Deleting will remove all history.`
@@ -206,7 +206,7 @@ function promptDeleteRadio(radio: RadioDto) {
   deleteConfirmOpen.value = true
 }
 
-// ─── API Keys ────────────────────────────────────────────────────────────────
+// API Keys
 const API_KEYS_STORAGE_KEY = 'direcontrol-api-keys'
 
 function readApiKeys(): Record<string, string> {
@@ -233,7 +233,7 @@ function saveApiKeys() {
   setTimeout(() => { apiKeySaved.value = false }, 2500)
 }
 
-// ─── Weather overlay API keys ─────────────────────────────────────────────────
+// Weather overlay API keys
 const owmApiKey = ref('')
 const tomorrowIoApiKey = ref('')
 const owmKeyConfigured = ref(false)
@@ -278,7 +278,7 @@ async function saveWeatherApiKeys() {
   }
 }
 
-// ---- Geofences ----
+// Geofences
 const geofences = ref<GeofenceDto[]>([])
 const showAddGeofence = ref(false)
 const gfName = ref('')
@@ -289,7 +289,7 @@ const gfAlertOnEnter = ref(true)
 const gfAlertOnExit = ref(true)
 const gfSaving = ref(false)
 
-// ---- Proximity Rules ----
+// Proximity Rules
 const rules = ref<ProximityRuleDto[]>([])
 const showAddRule = ref(false)
 const prName = ref('')
@@ -299,13 +299,13 @@ const prLon = ref<number | null>(null)
 const prRadius = ref<number>(1000)
 const prSaving = ref(false)
 
-// ---- Leaflet map for picking coordinates ----
+// Leaflet map for picking coordinates
 let map: L.Map | null = null
 let mapMarker: L.Marker | null = null
 let mapCircle: L.Circle | null = null
 let pickingFor: 'geofence' | 'rule' | null = null
 
-// ─── Database maintenance ─────────────────────────────────────────────────────
+// Database maintenance
 const dbSizeBytes = ref(0)
 const cleanupIntervalHours = ref(0)
 const vacuumOnCleanup = ref(true)
@@ -521,7 +521,7 @@ async function removeRule(id: number) {
   rules.value = rules.value.filter((r) => r.id !== id)
 }
 
-// ─── Confirm delete dialog ────────────────────────────────────────────────────
+// Confirm delete dialog
 const deleteConfirmOpen = ref(false)
 const deleteConfirmMessage = ref('')
 let deleteConfirmAction: (() => Promise<void>) | null = null
@@ -549,9 +549,7 @@ async function confirmDelete() {
   <div class="settings-view pa-4">
     <div class="text-h5 font-weight-bold mb-4">Settings</div>
 
-    <!-- ================================================================ -->
     <!-- Radios -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
       <span class="text-h6">Radios</span>
       <v-spacer />
@@ -720,9 +718,7 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
-    <!-- ================================================================ -->
     <!-- API Keys -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
       <span class="text-h6">Map API Keys</span>
     </div>
@@ -759,9 +755,7 @@ async function confirmDelete() {
       </div>
     </v-card>
 
-    <!-- ================================================================ -->
     <!-- Weather Overlays -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
       <span class="text-h6">Weather Overlays</span>
     </div>
@@ -864,9 +858,7 @@ async function confirmDelete() {
       </div>
     </v-card>
 
-    <!-- ================================================================ -->
     <!-- Units -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
       <span class="text-h6">Units</span>
     </div>
@@ -887,9 +879,7 @@ async function confirmDelete() {
       </div>
     </v-card>
 
-    <!-- ================================================================ -->
     <!-- Geofences -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
       <span class="text-h6">Geofences</span>
       <v-spacer />
@@ -963,9 +953,7 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
-    <!-- ================================================================ -->
     <!-- Proximity Rules -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2">
       <span class="text-h6">Proximity Rules</span>
       <v-spacer />
@@ -1040,9 +1028,7 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
-    <!-- ================================================================ -->
     <!-- Message Retry -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2 mt-6">
       <span class="text-h6">Message Retry</span>
     </div>
@@ -1065,9 +1051,7 @@ async function confirmDelete() {
       </v-table>
     </v-card>
 
-    <!-- ================================================================ -->
     <!-- Messaging -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2 mt-6">
       <span class="text-h6">Messaging</span>
       <v-progress-circular
@@ -1114,9 +1098,7 @@ async function confirmDelete() {
       </v-alert>
     </v-card>
 
-    <!-- ================================================================ -->
     <!-- APRS-IS -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2 mt-6">
       <span class="text-h6">APRS-IS</span>
     </div>
@@ -1205,9 +1187,7 @@ async function confirmDelete() {
       </v-alert>
     </v-card>
 
-    <!-- ================================================================ -->
     <!-- Database maintenance -->
-    <!-- ================================================================ -->
     <div class="section-header d-flex align-center mb-2 mt-6">
       <span class="text-h6">Database Maintenance</span>
     </div>

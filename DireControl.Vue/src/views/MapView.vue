@@ -3,17 +3,13 @@ import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { createHubConnection, type HubHandle } from '@/composables/useSignalR'
 import { getStations, getStationTrack, getStationPackets, getSettings } from '@/api/stationsApi'
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
 import { getWeatherManifest, getWeatherStatus, type WeatherManifest } from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
-import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
+import type { PacketBroadcastDto, ResolvedPathEntry, TrackPointDto } from '@/types/packet'
 import type { TileProviderConfig } from '@/types/map'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
@@ -30,7 +26,7 @@ import type { OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto } from '@/type
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 
 const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
-  // ── Light ──────────────────────────────────────────────────────────────────
+  // Light
   osm: {
     name: 'OpenStreetMap',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -71,7 +67,7 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
     theme: 'light',
     group: 'light',
   },
-  // ── Dark ───────────────────────────────────────────────────────────────────
+  // Dark
   cartoDark: {
     name: 'Carto Dark Matter',
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
@@ -98,7 +94,7 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
     requiresApiKey: true,
     apiKeyParam: 'jawg',
   },
-  // ── Satellite ──────────────────────────────────────────────────────────────
+  // Satellite
   satellite: {
     name: 'Esri World Imagery',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
@@ -107,7 +103,7 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
     theme: 'dark',
     group: 'satellite',
   },
-  // ── Specialist ─────────────────────────────────────────────────────────────
+  // Specialist
   openRailwayMap: {
     name: 'OpenRailwayMap',
     url: 'https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
@@ -203,8 +199,16 @@ const mobileStationSheetOpen = ref(false)
 let highlightMarker: L.CircleMarker | null = null
 let highlightTimeout: ReturnType<typeof setTimeout> | null = null
 
-// Movement tracks state
-const trackLayers = new Map<string, L.LayerGroup>()
+// Movement tracks state.
+// Each entry keeps the rendered layer group plus the raw points so the trail
+// can be re-rendered (older points fading and dropping off) as time passes —
+// without re-hitting the API. Points older than TRACK_WINDOW_MS age out, so a
+// station that stops beaconing has its trail shrink and vanish rather than
+// stay drawn forever.
+const TRACK_WINDOW_MS = 60 * 60 * 1000 // 60 min — matches the track API's default window
+type TrackEntry = { group: L.LayerGroup; points: TrackPointDto[] }
+const trackLayers = new Map<string, TrackEntry>()
+let trackAgeInterval: ReturnType<typeof setInterval> | null = null
 
 // Packet path visualisation state
 // Each entry holds the map layer group, an optional fade timer, and whether
@@ -309,7 +313,7 @@ let windLayer: L.TileLayer | null = null
 let lightningLayer: L.TileLayer | null = null
 let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
 
-let connection: HubConnection | null = null
+let hub: HubHandle | null = null
 
 function invalidateSizeAfterTransition() {
   setTimeout(() => map.value?.invalidateSize(), 320)
@@ -320,8 +324,13 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString()
 }
 
+// Leaflet popup/tooltip strings are injected as innerHTML; escape anything RF-derived.
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+}
+
 function popupContent(callsign: string, lastSeen: string, lat: number, lon: number): string {
-  return `<strong>${callsign}</strong><br>Last seen: ${formatTime(lastSeen)}<br>Coords: ${lat.toFixed(4)}, ${lon.toFixed(4)}`
+  return `<strong>${escapeHtml(callsign)}</strong><br>Last seen: ${formatTime(lastSeen)}<br>Coords: ${lat.toFixed(4)}, ${lon.toFixed(4)}`
 }
 
 function buildIcon(station: StationDto | undefined): L.DivIcon {
@@ -443,7 +452,7 @@ function toggleStaleStations() {
   }
 }
 
-// --- Overlays (Geofences + Proximity Rules) ---
+// Overlays (Geofences + Proximity Rules)
 
 async function loadAndDrawOverlays() {
   if (!map.value) return
@@ -460,7 +469,7 @@ async function loadAndDrawOverlays() {
         fillOpacity: 0.08,
         dashArray: '6 4',
       })
-        .bindTooltip(`Geofence: ${f.name}<br>${formatDistance(f.radiusMeters / 1000)}`, { sticky: true })
+        .bindTooltip(`Geofence: ${escapeHtml(f.name)}<br>${formatDistance(f.radiusMeters / 1000)}`, { sticky: true })
         .addTo(group)
     }
     for (const r of rules) {
@@ -472,7 +481,7 @@ async function loadAndDrawOverlays() {
         fillOpacity: 0.08,
         dashArray: '6 4',
       })
-        .bindTooltip(`Proximity: ${r.name}${r.targetCallsign ? ` (${r.targetCallsign})` : ''}<br>${formatDistance(r.radiusMetres / 1000)}`, { sticky: true })
+        .bindTooltip(`Proximity: ${escapeHtml(r.name)}${r.targetCallsign ? ` (${escapeHtml(r.targetCallsign)})` : ''}<br>${formatDistance(r.radiusMetres / 1000)}`, { sticky: true })
         .addTo(group)
     }
   } catch (err) {
@@ -498,7 +507,7 @@ function toggleOverlays() {
   }
 }
 
-// --- Range Rings ---
+// Range Rings
 
 async function ensureSettings(): Promise<SettingsDto | null> {
   if (!settingsCache) {
@@ -609,7 +618,7 @@ async function drawRings() {
   group.addTo(map.value)
 }
 
-// --- Heatmap ---
+// Heatmap
 
 function clearHeatmap() {
   if (heatmapLayer) {
@@ -645,7 +654,7 @@ async function toggleHeatmap() {
   }
 }
 
-// --- Coverage Map ---
+// Coverage Map
 
 function maidenheadToBounds(grid: string): L.LatLngBounds | null {
   const g = grid.toUpperCase()
@@ -732,7 +741,7 @@ async function toggleCoverage() {
   }
 }
 
-// --- Weather Overlays ---
+// Weather Overlays
 
 function ensureWeatherPane() {
   if (!map.value) return
@@ -743,7 +752,7 @@ function ensureWeatherPane() {
   }
 }
 
-// ── RainViewer ──
+// RainViewer
 
 async function fetchRadarManifest(): Promise<WeatherManifest | null> {
   try {
@@ -838,7 +847,7 @@ function stepRadarFrame(delta: -1 | 1) {
   keepRadarControlsVisible()
 }
 
-// ── Weather controls auto-hide ─────────────────────────────────────────────
+// Weather controls auto-hide
 
 function keepRadarControlsVisible() {
   if (!showRadar.value) return
@@ -936,7 +945,7 @@ async function toggleRadar() {
   }
 }
 
-// ── Wind (OpenWeatherMap) ──
+// Wind (OpenWeatherMap)
 
 function enableWind() {
   if (!map.value) return
@@ -968,7 +977,7 @@ async function toggleWind() {
   }
 }
 
-// ── Lightning (Tomorrow.io) ──
+// Lightning (Tomorrow.io)
 
 function buildLightningLayer(): L.TileLayer {
   return L.tileLayer(
@@ -1014,7 +1023,7 @@ async function toggleLightning() {
   }
 }
 
-// --- Sidebar & Panel ---
+// Sidebar & Panel
 
 function toggleSidebar() {
   showSidebar.value = !showSidebar.value
@@ -1023,7 +1032,6 @@ function toggleSidebar() {
 }
 
 function onSidebarSelectStation(callsign: string) {
-  console.log('[Select] onSidebarSelectStation for', callsign, '— stack:', new Error().stack)
   selectionStore.selectStation(callsign)
   const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
   if (s?.lastLat != null && s?.lastLon != null) {
@@ -1034,7 +1042,6 @@ function onSidebarSelectStation(callsign: string) {
 }
 
 function onDetailClose() {
-  console.log('[Select] onDetailClose called — stack:', new Error().stack)
   const cs = selectionStore.selectedCallsign
   selectionStore.deselect()
   if (cs) removePath(cs)
@@ -1068,57 +1075,95 @@ function onHighlightPosition(lat: number, lon: number) {
   }, 5000)
 }
 
-// --- Movement Tracks ---
+// Movement Tracks
 
 async function fetchAndDrawTrack(callsign: string) {
   if (!map.value) return
-  removeTrack(callsign)
   try {
     const points = await getStationTrack(callsign)
-    if (points.length < 2) return
-    const group = L.layerGroup()
-    const totalPoints = points.length
-    for (let i = 0; i < totalPoints - 1; i++) {
-      const from = points[i]!
-      const to = points[i + 1]!
-      const opacity = 0.2 + (0.8 * (i / (totalPoints - 1)))
-      const weight = 2 + Math.round(2 * (i / (totalPoints - 1)))
-      const segment = L.polyline(
-        [[from.latitude, from.longitude], [to.latitude, to.longitude]],
-        { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
-      )
-      group.addLayer(segment)
-    }
-    for (let i = 0; i < totalPoints; i++) {
-      const pt = points[i]!
-      const opacity = 0.3 + (0.7 * (i / Math.max(totalPoints - 1, 1)))
-      const circle = L.circleMarker([pt.latitude, pt.longitude], {
-        radius: 4,
-        color: '#1976D2',
-        fillColor: '#1976D2',
-        fillOpacity: opacity,
-        weight: 1,
-        opacity,
-      })
-      const speedStr = pt.speed != null ? `${pt.speed.toFixed(1)} knots` : 'N/A'
-      circle.bindPopup(
-        `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
-      )
-      group.addLayer(circle)
-    }
-    trackLayers.set(callsign, group)
-    if (showTracks.value) {
-      group.addTo(map.value)
-    }
+    renderTrack(callsign, points)
   } catch (err) {
     console.error(`Failed to fetch track for ${callsign}:`, err)
+  }
+}
+
+// (Re)draw a station's track from raw points, fading and dropping points by age.
+// Each point's brightness/thickness scales with how recent it is; points older
+// than TRACK_WINDOW_MS are discarded so the trail trails off and eventually
+// disappears once the station stops transmitting. Called both on fetch and on
+// the periodic aging tick.
+function renderTrack(callsign: string, points: TrackPointDto[]) {
+  if (!map.value) return
+
+  const now = Date.now()
+  const fresh = points.filter(p => now - new Date(p.receivedAt).getTime() <= TRACK_WINDOW_MS)
+
+  // Swap out any existing layer group for this callsign.
+  const previous = trackLayers.get(callsign)
+  if (previous) previous.group.remove()
+
+  if (fresh.length < 2) {
+    trackLayers.delete(callsign)
+    return
+  }
+
+  // Fade factor for a point: 1.0 when just received, → 0 as it nears the window edge.
+  const ageFrac = (receivedAt: string) =>
+    Math.max(0, Math.min(1, 1 - (now - new Date(receivedAt).getTime()) / TRACK_WINDOW_MS))
+
+  const group = L.layerGroup()
+  for (let i = 0; i < fresh.length - 1; i++) {
+    const from = fresh[i]!
+    const to = fresh[i + 1]!
+    const frac = ageFrac(to.receivedAt)
+    const opacity = 0.15 + (0.85 * frac)
+    const weight = 2 + Math.round(2 * frac)
+    const segment = L.polyline(
+      [[from.latitude, from.longitude], [to.latitude, to.longitude]],
+      { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
+    )
+    group.addLayer(segment)
+  }
+  for (const pt of fresh) {
+    const opacity = 0.2 + (0.8 * ageFrac(pt.receivedAt))
+    const circle = L.circleMarker([pt.latitude, pt.longitude], {
+      radius: 4,
+      color: '#1976D2',
+      fillColor: '#1976D2',
+      fillOpacity: opacity,
+      weight: 1,
+      opacity,
+    })
+    const speedStr = pt.speed != null ? `${pt.speed.toFixed(1)} knots` : 'N/A'
+    circle.bindPopup(
+      `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
+    )
+    group.addLayer(circle)
+  }
+
+  trackLayers.set(callsign, { group, points: fresh })
+  if (showTracks.value) {
+    group.addTo(map.value)
+  }
+}
+
+// Periodic pass: re-render every track so points fade and age out over time,
+// and drop tracks whose station is gone (icon removed) so lines don't linger.
+function ageTracks() {
+  for (const callsign of trackLayers.keys()) {
+    if (!stationCache.has(callsign)) {
+      removeTrack(callsign)
+      continue
+    }
+    const entry = trackLayers.get(callsign)
+    if (entry) renderTrack(callsign, entry.points)
   }
 }
 
 function removeTrack(callsign: string) {
   const existing = trackLayers.get(callsign)
   if (existing) {
-    existing.remove()
+    existing.group.remove()
     trackLayers.delete(callsign)
   }
 }
@@ -1131,15 +1176,15 @@ function toggleTracks() {
       if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
         const existing = trackLayers.get(callsign)
         if (existing) {
-          existing.addTo(map.value)
+          existing.group.addTo(map.value)
         } else {
           fetchAndDrawTrack(callsign)
         }
       }
     }
   } else {
-    for (const group of trackLayers.values()) {
-      group.remove()
+    for (const entry of trackLayers.values()) {
+      entry.group.remove()
     }
   }
 }
@@ -1155,7 +1200,7 @@ async function loadTracksForMobileStations() {
   }
 }
 
-// --- Estimated Position (Ghost Markers) ---
+// Estimated Position (Ghost Markers)
 
 function removeGhostLayer(callsign: string) {
   const existing = ghostLayers.get(callsign)
@@ -1236,16 +1281,14 @@ function toggleGhostMarkers() {
   }
 }
 
-// --- Packet Path Visualisation ---
+// Packet Path Visualisation
 
 function removePath(callsign: string) {
-  console.log('[Path] removePath called for', callsign, '— stack:', new Error().stack)
   const entry = activePaths.get(callsign)
   if (!entry) {
     console.warn('[Path] No activePaths entry to remove for', callsign, '— map has', activePaths.size, 'entries:', [...activePaths.keys()])
     return
   }
-  console.log('[Path] Removing path group for', callsign, '— persistent:', entry.persistent)
   if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
   entry.group.remove()
   activePaths.delete(callsign)
@@ -1382,7 +1425,7 @@ function unknownHopLabel(unknowns: ResolvedPathEntry[]): string {
   if (unknowns.length === 0) return ''
   const allGeneric = unknowns.every(e => isGenericAlias(e.callsign))
   if (allGeneric) {
-    const aliases = [...new Set(unknowns.map(e => e.callsign))].join(', ')
+    const aliases = [...new Set(unknowns.map(e => escapeHtml(e.callsign)))].join(', ')
     return `Via ${aliases} (path not traced)`
   }
   return unknowns.length === 1 ? '1 unknown hop' : `${unknowns.length} unknown hops`
@@ -1421,7 +1464,7 @@ function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) 
     if (isUnknown) {
       const label = unknownHopLabel(seg.unknownsBetween)
       line.bindTooltip(
-        `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong> (${label})<br>${distStr}`,
+        `<strong>${escapeHtml(seg.fromCallsign)} → ${escapeHtml(seg.toCallsign)}</strong> (${label})<br>${distStr}`,
         { sticky: true, direction: 'top' },
       )
     } else {
@@ -1429,7 +1472,7 @@ function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) 
       const toStation = stationCache.get(seg.toCallsign) ?? staleStationCache.get(seg.toCallsign)
       const lastSeenStr = toStation ? ` · ${formatTime(toStation.lastSeen)}` : ''
       line.bindTooltip(
-        `<strong>${seg.fromCallsign} → ${seg.toCallsign}</strong><br>Hop ${hopNum} of ${totalHops}${lastSeenStr}<br>${distStr}`,
+        `<strong>${escapeHtml(seg.fromCallsign)} → ${escapeHtml(seg.toCallsign)}</strong><br>Hop ${hopNum} of ${totalHops}${lastSeenStr}<br>${distStr}`,
         { sticky: true, direction: 'top' },
       )
     }
@@ -1482,7 +1525,6 @@ function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
  * The path stays until the station is deselected.
  */
 async function showPacketPath(callsign: string) {
-  console.log('[Path] showPacketPath called for', callsign, '— stack:', new Error().stack)
   if (!map.value) return
   // Clear any existing path (auto or persistent) for this callsign
   removePath(callsign)
@@ -1490,7 +1532,6 @@ async function showPacketPath(callsign: string) {
     const { items } = await getStationPackets(callsign, 1, 1)
     // Guard: station may have been deselected while the fetch was in flight
     if (selectionStore.selectedCallsign !== callsign) {
-      console.log('[Path] showPacketPath guard fired — callsign', callsign, 'no longer selected, aborting draw')
       return
     }
     if (items.length === 0) return
@@ -1501,9 +1542,7 @@ async function showPacketPath(callsign: string) {
     if (!drawPathLayers(group, packet.resolvedPath)) return
 
     group.addTo(map.value)
-    console.log('[Path] Drew path for', callsign, '— map container:', map.value.getContainer().id, '— activePaths size before set:', activePaths.size)
     activePaths.set(callsign, { group, fadeTimer: null, persistent: true, resolvedPath: packet.resolvedPath })
-    console.log('[Path] activePaths size after set:', activePaths.size)
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
   }
@@ -1511,12 +1550,10 @@ async function showPacketPath(callsign: string) {
 
 function onMarkerClick(callsign: string) {
   if (selectionStore.selectedCallsign === callsign) {
-    console.log('[Select] onMarkerClick deselect for', callsign, '— stack:', new Error().stack)
     selectionStore.deselect()
     removePath(callsign)
     invalidateSizeAfterTransition()
   } else {
-    console.log('[Select] onMarkerClick select for', callsign, '— stack:', new Error().stack)
     selectionStore.selectStation(callsign)
     // Do NOT call removePath(prev) or showPacketPath here — the selectedCallsign
     // watcher is the single caller for both, preventing duplicate draws.
@@ -1524,7 +1561,7 @@ function onMarkerClick(callsign: string) {
   }
 }
 
-// --- Beacon Flash & Stale Decay ---
+// Beacon Flash & Stale Decay
 
 function packetTypeFlashClass(parsedType: string): string {
   switch (parsedType) {
@@ -1597,7 +1634,7 @@ function updateStaleDecayClasses() {
   }
 }
 
-// --- Marker Management ---
+// Marker Management
 
 function addOrUpdateMarker(callsign: string, lat: number, lon: number, lastSeen: string) {
   if (!map.value) return
@@ -1635,7 +1672,7 @@ function setTileProvider(key: string) {
   // Substitute API key placeholder if present
   if (resolvedProvider.requiresApiKey && resolvedProvider.apiKeyParam) {
     const apiKey = apiKeys.value[resolvedProvider.apiKeyParam] ?? ''
-    url = url.replace('{apiKey}', apiKey)
+    url = url.replace('{apiKey}', encodeURIComponent(apiKey))
   }
 
   if (tileLayer.value) {
@@ -1716,110 +1753,95 @@ async function loadStations() {
 }
 
 async function connectSignalR() {
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
+  hub = createHubConnection('/hubs/packets', {
+    packetReceived: (packet: PacketBroadcastDto) => {
+      beaconStore.addPacket(packet)
 
-  connection.on('packetReceived', (packet: PacketBroadcastDto) => {
-    // Forward to beacon stream store
-    beaconStore.addPacket(packet)
+      sessionPacketCounts.value[packet.callsign] =
+        (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
 
-    // Increment session packet count
-    sessionPacketCounts.value[packet.callsign] =
-      (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
+      // Trigger detail panel refresh for the selected station.
+      // Re-fetch the persistent path from the API so it reflects the latest packet.
+      if (packet.callsign === selectionStore.selectedCallsign) {
+        detailRefreshKey.value++
+        showPacketPath(packet.callsign)
+      } else if (packet.resolvedPath && packet.resolvedPath.length >= 2) {
+        // Auto-draw a fading path for non-selected stations.
+        drawAutoPath(packet.callsign, packet.resolvedPath)
+      }
 
-    // Trigger detail panel refresh for the selected station.
-    // Re-fetch the persistent path from the API so it reflects the latest packet.
-    if (packet.callsign === selectionStore.selectedCallsign) {
-      detailRefreshKey.value++
-      showPacketPath(packet.callsign)
-    } else if (packet.resolvedPath && packet.resolvedPath.length >= 2) {
-      // Auto-draw a fading path for non-selected stations.
-      drawAutoPath(packet.callsign, packet.resolvedPath)
-    }
+      // Beacon flash ring on the marker (fires for any packet type, with/without position)
+      triggerBeaconFlash(packet.callsign, packet.parsedType)
 
-    // Beacon flash ring on the marker (fires for any packet type, with/without position)
-    triggerBeaconFlash(packet.callsign, packet.parsedType)
+      // Reset stale decay class — this station is actively transmitting
+      const markerEl = markers.get(packet.callsign)?.getElement()
+      if (markerEl) {
+        markerEl.classList.remove('stale-light', 'stale-medium', 'stale-heavy')
+      }
 
-    // Reset stale decay class — this station is actively transmitting
-    const markerEl = markers.get(packet.callsign)?.getElement()
-    if (markerEl) {
-      markerEl.classList.remove('stale-light', 'stale-medium', 'stale-heavy')
-    }
+      // Keep stationCache in sync for all packet types — ensures lastSeen and
+      // position are always current so the station list stays reactive.
+      const cachedStation = stationCache.get(packet.callsign)
+      if (cachedStation) {
+        stationCache.set(packet.callsign, {
+          ...cachedStation,
+          lastSeen: packet.receivedAt,
+          ...(packet.latitude != null && packet.longitude != null
+            ? { lastLat: packet.latitude, lastLon: packet.longitude }
+            : {}),
+        })
+        updateStationsList()
+      }
 
-    // Keep stationCache in sync for all packet types — ensures lastSeen and
-    // position are always current so the station list stays reactive.
-    const cachedStation = stationCache.get(packet.callsign)
-    if (cachedStation) {
-      stationCache.set(packet.callsign, {
-        ...cachedStation,
-        lastSeen: packet.receivedAt,
-        ...(packet.latitude != null && packet.longitude != null
-          ? { lastLat: packet.latitude, lastLon: packet.longitude }
-          : {}),
-      })
-      updateStationsList()
-    }
+      if (packet.latitude != null && packet.longitude != null) {
+        // A fresh real position supersedes the ghost
+        removeGhostLayer(packet.callsign)
 
-    if (packet.latitude != null && packet.longitude != null) {
-      // A fresh real position supersedes the ghost
-      removeGhostLayer(packet.callsign)
-
-      const isNew = !markers.has(packet.callsign)
-      addOrUpdateMarker(packet.callsign, packet.latitude, packet.longitude, packet.receivedAt)
-      if (isNew) {
-        // loadStations() will call updateStationsList() once the REST response
-        // arrives and populates full station data for the new callsign.
-        loadStations()
-      } else {
-        const station = stationCache.get(packet.callsign)
-        if (showTracks.value && station && isMobileStation(station)) {
-          fetchAndDrawTrack(packet.callsign)
+        const isNew = !markers.has(packet.callsign)
+        addOrUpdateMarker(packet.callsign, packet.latitude, packet.longitude, packet.receivedAt)
+        if (isNew) {
+          // loadStations() will call updateStationsList() once the REST response
+          // arrives and populates full station data for the new callsign.
+          loadStations()
+        } else {
+          const station = stationCache.get(packet.callsign)
+          if (showTracks.value && station && isMobileStation(station)) {
+            fetchAndDrawTrack(packet.callsign)
+          }
         }
       }
-    }
-  })
-
-  connection.on('stationsStale', (callsigns: string[]) => {
-    for (const callsign of callsigns) {
-      const marker = markers.get(callsign)
-      if (marker) {
-        marker.remove()
-        markers.delete(callsign)
+    },
+    stationsStale: (callsigns: string[]) => {
+      for (const callsign of callsigns) {
+        const marker = markers.get(callsign)
+        if (marker) {
+          marker.remove()
+          markers.delete(callsign)
+        }
+        stationCache.delete(callsign)
+        removeTrack(callsign)
+        removeGhostLayer(callsign)
+        removePath(callsign)
+        if (selectionStore.selectedCallsign === callsign) {
+          selectionStore.deselect()
+        }
       }
-      stationCache.delete(callsign)
-      removeTrack(callsign)
-      removeGhostLayer(callsign)
-      removePath(callsign)
-      if (selectionStore.selectedCallsign === callsign) {
-        selectionStore.deselect()
+      updateStationsList()
+      // If show stale is on, refresh to include newly stale stations
+      if (showStaleStations.value) {
+        loadStaleStations()
       }
-    }
-    updateStationsList()
-    // If show stale is on, refresh to include newly stale stations
-    if (showStaleStations.value) {
-      loadStaleStations()
-    }
+    },
+    ownBeaconReceived: (dto: OwnBeaconBroadcastDto) => {
+      radiosStore.onOwnBeaconReceived(dto)
+      triggerHomeMarkerFlash()
+    },
+    digiConfirmation: (dto: DigiConfirmationBroadcastDto) => {
+      radiosStore.onDigiConfirmation(dto)
+      drawConfirmationLine(dto)
+    },
   })
-
-  connection.on('ownBeaconReceived', (dto: OwnBeaconBroadcastDto) => {
-    radiosStore.onOwnBeaconReceived(dto)
-    triggerHomeMarkerFlash()
-  })
-
-  connection.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => {
-    radiosStore.onDigiConfirmation(dto)
-    drawConfirmationLine(dto)
-  })
-
-  try {
-    await connection.start()
-    console.log('SignalR connected')
-  } catch (err) {
-    console.error('SignalR connection failed:', err)
-  }
+  await hub.start()
 }
 
 // Watch: ring distances — persist to localStorage and redraw if rings are showing
@@ -1860,7 +1882,6 @@ watch(lightningOpacity, (v) => lightningLayer?.setOpacity(v))
 
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
-  console.log('[Select] selectedCallsign watch fired — callsign:', callsign, '| prev:', prev)
   if (callsign && callsign !== prev) {
     if (prev) removePath(prev)
     showPacketPath(callsign)
@@ -1925,10 +1946,8 @@ onMounted(async () => {
   })
   setTileProvider(selectedProvider.value)
   map.value.on('click', () => {
-    console.log('[Select] map background click — selectedCallsign:', selectionStore.selectedCallsign, '— stack:', new Error().stack)
     if (selectionStore.selectedCallsign) onDetailClose()
   })
-  console.log('[Map] click listeners after attach:', (map.value as unknown as { _events?: { click?: unknown[] } })._events?.click?.length ?? 'unknown')
   await loadStations()
   await loadStaleStations()
   await connectSignalR()
@@ -1955,6 +1974,9 @@ onMounted(async () => {
   // Initial stale decay pass + periodic update every 60 s
   updateStaleDecayClasses()
   staleDecayInterval = setInterval(updateStaleDecayClasses, 60_000)
+
+  // Age movement tracks every 30 s so old points fade out and drop off
+  trackAgeInterval = setInterval(ageTracks, 30_000)
 
   // Restore persisted layer states (issue #32 item 2)
   if (showRings.value) await drawRings()
@@ -2008,9 +2030,9 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
-  if (connection) {
-    await connection.stop()
-    connection = null
+  if (hub) {
+    await hub.stop()
+    hub = null
   }
   if (ghostUpdateInterval) {
     clearInterval(ghostUpdateInterval)
@@ -2020,12 +2042,16 @@ onUnmounted(async () => {
     clearInterval(staleDecayInterval)
     staleDecayInterval = null
   }
+  if (trackAgeInterval) {
+    clearInterval(trackAgeInterval)
+    trackAgeInterval = null
+  }
   for (const group of ghostLayers.values()) {
     group.remove()
   }
   ghostLayers.clear()
-  for (const group of trackLayers.values()) {
-    group.remove()
+  for (const entry of trackLayers.values()) {
+    entry.group.remove()
   }
   trackLayers.clear()
   for (const marker of staleMarkers.values()) {

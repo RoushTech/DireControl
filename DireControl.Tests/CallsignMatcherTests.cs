@@ -7,9 +7,7 @@ namespace DireControl.Tests;
 [TestFixture]
 public class CallsignMatcherTests
 {
-    // -------------------------------------------------------------------------
     // Matches — exact callsign+SSID matching with -0 equivalence
-    // -------------------------------------------------------------------------
 
     [TestCase("W3UWU", null, "W3UWU", true)]   // exact match, no SSID
     [TestCase("W3UWU", null, "W3UWU-0", true)]   // -0 is equivalent to no SSID
@@ -23,9 +21,7 @@ public class CallsignMatcherTests
         Assert.That(CallsignMatcher.Matches(radio, packetSource), Is.EqualTo(expected));
     }
 
-    // -------------------------------------------------------------------------
     // Normalise — case insensitivity and -0 stripping
-    // -------------------------------------------------------------------------
 
     [TestCase("w3uwu", "W3UWU")]    // lowercase uppercased
     [TestCase("W3UWU", "W3UWU")]    // already upper — unchanged
@@ -38,9 +34,7 @@ public class CallsignMatcherTests
         Assert.That(CallsignMatcher.Normalise(input), Is.EqualTo(expected));
     }
 
-    // -------------------------------------------------------------------------
     // -0 equivalence is symmetric: radio "-0" matches no-SSID packet
-    // -------------------------------------------------------------------------
 
     [Test]
     public void Matches_RadioConfiguredWithSsid0_MatchesPacketWithNoSsid()
@@ -57,9 +51,7 @@ public class CallsignMatcherTests
         Assert.That(CallsignMatcher.Matches(radio, "W3UWU-0"), Is.True);
     }
 
-    // -------------------------------------------------------------------------
     // Two radios with same base callsign, different SSIDs — no cross-matching
-    // -------------------------------------------------------------------------
 
     [Test]
     public void Matches_TwoRadiosSameBaseCallsign_EachMatchesOnlyOwnPackets()

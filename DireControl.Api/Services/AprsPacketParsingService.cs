@@ -55,7 +55,7 @@ public sealed class AprsPacketParsingService(
     /// </summary>
     private static readonly HashSet<string> MobileSymbols = new(StringComparer.Ordinal)
     {
-        // ── Primary table (/) ────────────────────────────────────────────────
+        // Primary table (/)
         "/'",   // Small aircraft
         "/<",   // Motorcycle
         "/>",   // Car
@@ -70,7 +70,7 @@ public sealed class AprsPacketParsingService(
         "/v",   // Van / SUV
         "/X",   // Helicopter
         "/Y",   // Sailboat (yacht)
-        // ── Alternate table (\) ──────────────────────────────────────────────
+        // Alternate table (\)
         "\\>",  // Car
         "\\j",  // Jeep
         "\\k",  // Truck
@@ -212,11 +212,7 @@ public sealed class AprsPacketParsingService(
                 {
                     msg.AckSent = true;
                     await db.SaveChangesAsync(ct);
-                }
 
-                // Broadcast to frontend
-                if (msg is not null)
-                {
                     await hubContext.Clients.All.SendAsync(
                         PacketHub.MessageReceivedMethod,
                         ToInboxDto(msg),
@@ -231,11 +227,6 @@ public sealed class AprsPacketParsingService(
 
                 if (ackedId is int dbId)
                 {
-                    await hubContext.Clients.All.SendAsync(
-                        PacketHub.MessageAcknowledgedMethod,
-                        new MessageAcknowledgedDto { Id = dbId, MessageId = effect.OriginalMsgId },
-                        ct);
-
                     await hubContext.Clients.All.SendAsync(
                         PacketHub.MessageAckedMethod,
                         new MessageAckDto { Id = dbId, MessageId = effect.OriginalMsgId },
@@ -299,11 +290,11 @@ public sealed class AprsPacketParsingService(
                 break;
 
             case ObjectInfo obj:
-                HandleObject(packet, obj, db);
+                HandleObjectOrItem(packet, obj.Comment, obj.Position);
                 break;
 
             case ItemInfo item:
-                HandleItem(packet, item, db);
+                HandleObjectOrItem(packet, item.Comment, item.Position);
                 break;
 
             case PositionInfo position:
@@ -323,7 +314,7 @@ public sealed class AprsPacketParsingService(
                 break;
         }
 
-        // ── Mode / frequency / gateway detection ────────────────────────────────
+        // Mode / frequency / gateway detection
         // Skipped when reprocessing: these mutate live Station state from the packet,
         // and replaying historical packets must not overwrite a station's current mode.
         var mode = DetectMode(tocall, packet.Comment);
@@ -344,10 +335,6 @@ public sealed class AprsPacketParsingService(
             });
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Station statistics
-    // -------------------------------------------------------------------------
 
     private async Task UpdateStationStatisticsAsync(
         DireControlContext db,
@@ -447,7 +434,7 @@ public sealed class AprsPacketParsingService(
                         : perPacketVias[0];  // most recent packet's classification
                 }
 
-                // ── Fixed station detection ──────────────────────────────────────────
+                // Fixed station detection
                 // A station is classified Fixed when it has broadcast from the same
                 // location for at least FixedDetectionWindowHours without moving by
                 // more than MovementThresholdDeg.
@@ -498,10 +485,6 @@ public sealed class AprsPacketParsingService(
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Per-type handlers
-    // -------------------------------------------------------------------------
-
     private void HandlePosition(DbPacket packet, PositionInfo info, DireControlContext db, bool reprocess = false)
     {
         packet.Comment = info.Comment ?? string.Empty;
@@ -524,7 +507,7 @@ public sealed class AprsPacketParsingService(
 
             UpdateStation(db, packet.StationCallsign, station =>
             {
-                // ── Mobile detection ────────────────────────────────────────
+                // Mobile detection
                 // Check BEFORE updating LastLat/LastLon so we compare old vs new.
                 //
                 // Two independent signals both upgrade a station to Mobile:
@@ -659,26 +642,11 @@ public sealed class AprsPacketParsingService(
         }
     }
 
-    private void HandleObject(DbPacket packet, ObjectInfo info, DireControlContext db)
+    private static void HandleObjectOrItem(DbPacket packet, string? comment, Position? position)
     {
-        packet.Comment = info.Comment ?? string.Empty;
+        packet.Comment = comment ?? string.Empty;
 
-        if (info.Position is { } pos)
-        {
-            var coord = pos.Coordinates;
-            if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
-            {
-                packet.Latitude = coord.Latitude;
-                packet.Longitude = coord.Longitude;
-            }
-        }
-    }
-
-    private void HandleItem(DbPacket packet, ItemInfo info, DireControlContext db)
-    {
-        packet.Comment = info.Comment ?? string.Empty;
-
-        if (info.Position is { } pos)
+        if (position is { } pos)
         {
             var coord = pos.Coordinates;
             if (!double.IsNaN(coord.Latitude) && !double.IsNaN(coord.Longitude))
@@ -796,10 +764,6 @@ public sealed class AprsPacketParsingService(
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
     /// <summary>
     /// Builds the complete <see cref="DbPacket.ResolvedPath"/> for a packet:
     /// <list type="bullet">
@@ -819,7 +783,7 @@ public sealed class AprsPacketParsingService(
     {
         var opts = options.Value;
 
-        // --- Hop 0: originating station ---
+        // Hop 0: originating station
         double? srcLat = packet.Latitude;
         double? srcLon = packet.Longitude;
         if (srcLat == null || srcLon == null)
@@ -839,7 +803,7 @@ public sealed class AprsPacketParsingService(
             HopIndex = 0,
         };
 
-        // --- Intermediate hops (already extracted by ParsePacket, HopIndex 1+) ---
+        // Intermediate hops (already extracted by ParsePacket, HopIndex 1+)
         foreach (var hop in packet.ResolvedPath)
         {
             if (AprsPathParser.IsGenericAlias(hop.Callsign))
@@ -877,7 +841,7 @@ public sealed class AprsPacketParsingService(
 
         packet.UnknownHopCount = packet.ResolvedPath.Count(e => !e.Known);
 
-        // --- Final hop: our own station ---
+        // Final hop: our own station
         var homeEntry = new ResolvedPathEntry
         {
             Callsign = ourCallsign,
@@ -961,8 +925,6 @@ public sealed class AprsPacketParsingService(
                 : $"Raw: {packet.RawPacket}"
         };
     }
-
-    // ─── Own-beacon detection ─────────────────────────────────────────────────
 
     private async Task CheckOwnBeaconAsync(
         DbPacket packet,
@@ -1188,8 +1150,6 @@ public sealed class AprsPacketParsingService(
         logger.LogDebug("Recorded digi confirmation for {Callsign} via {Digi} (+{Secs}s).",
             radio.FullCallsign, digiCallsign, secondsAfter);
     }
-
-    // ─── Mode / frequency helpers ─────────────────────────────────────────────
 
     private static readonly Regex FrequencyRegex = new(
         @"(\d{2,3}\.\d{3,5})\s*MHz",

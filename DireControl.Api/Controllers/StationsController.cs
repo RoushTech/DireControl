@@ -90,7 +90,7 @@ public class StationsController(
         var items = await query
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(ToPacketDto())
+            .Select(PacketProjections.ToPacketDto)
             .ToListAsync(ct);
 
         return Ok(new PaginatedResponse<PacketDto>
@@ -268,19 +268,6 @@ public class StationsController(
         return Ok(frequencies);
     }
 
-    [HttpGet("watchlist")]
-    public async Task<ActionResult<IReadOnlyList<StationDto>>> GetWatchList(CancellationToken ct)
-    {
-        var stations = await db.Stations
-            .AsNoTracking()
-            .Where(s => s.IsOnWatchList)
-            .OrderBy(s => s.Callsign)
-            .Select(ToStationDto())
-            .ToListAsync(ct);
-
-        return Ok(stations);
-    }
-
     [HttpPut("{callsign}/watch")]
     public async Task<IActionResult> ToggleWatch(string callsign, CancellationToken ct)
     {
@@ -405,26 +392,4 @@ public class StationsController(
         LastFrequencyMhz = s.LastFrequencyMhz,
     };
 
-    private static System.Linq.Expressions.Expression<Func<DireControl.Data.Models.Packet, PacketDto>> ToPacketDto() => p => new PacketDto
-    {
-        Id = p.Id,
-        StationCallsign = p.StationCallsign,
-        ReceivedAt = p.ReceivedAt,
-        RawPacket = p.RawPacket,
-        ParsedType = p.ParsedType,
-        Source = p.Source,
-        Latitude = p.Latitude,
-        Longitude = p.Longitude,
-        Path = p.Path,
-        ResolvedPath = p.ResolvedPath,
-        HopCount = p.HopCount,
-        UnknownHopCount = p.UnknownHopCount,
-        IsDirectHeard = p.HopCount == 0,
-        Comment = p.Comment,
-        WeatherData = p.WeatherData,
-        TelemetryData = p.TelemetryData,
-        MessageData = p.MessageData,
-        SignalData = p.SignalData,
-        GridSquare = p.GridSquare,
-    };
 }

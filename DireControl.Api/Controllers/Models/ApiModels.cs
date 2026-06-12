@@ -139,7 +139,7 @@ public sealed class UpdateWeatherApiKeysRequest
     public string? RainViewerProApiKey { get; init; }
 }
 
-// ─── Weather proxy DTOs ────────────────────────────────────────────────────
+// Weather proxy DTOs
 
 public sealed class WeatherManifestDto
 {
@@ -244,12 +244,6 @@ public sealed class MessageRetriedDto
     public int MaxRetries { get; init; }
     public DateTime? NextRetryAt { get; init; }
     public DateTime? LastSentAt { get; init; }
-}
-
-public sealed class MessageAcknowledgedDto
-{
-    public int Id { get; init; }
-    public required string MessageId { get; init; }
 }
 
 public sealed class MessageFailedDto
@@ -421,7 +415,7 @@ public sealed class CoverageGridSquareDto
     public int PacketCount { get; init; }
 }
 
-// ─── Radio management ────────────────────────────────────────────────────────
+// Radio management
 
 public sealed class RadioDto
 {

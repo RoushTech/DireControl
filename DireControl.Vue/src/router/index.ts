@@ -20,11 +20,6 @@ const router = createRouter({
       component: () => import('@/views/MessagesView.vue'),
     },
     {
-      path: '/aprs-icon-test',
-      name: 'aprs-icon-test',
-      component: () => import('@/views/AprsIconTest.vue'),
-    },
-    {
       path: '/alerts',
       name: 'alerts',
       component: () => import('@/views/AlertsView.vue'),

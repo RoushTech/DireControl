@@ -24,7 +24,6 @@ public class Message : IEntityTypeConfiguration<Message>
     /// </summary>
     public string? PathUsed { get; set; }
 
-    // ── Retry fields ─────────────────────────────────────────────────────────
     /// <summary>Number of retransmissions performed beyond the initial send.</summary>
     public int RetryCount { get; set; }
     /// <summary>Maximum retransmissions before giving up.</summary>

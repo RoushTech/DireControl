@@ -130,6 +130,8 @@ public class MessagesController(
             return BadRequest("ToCallsign is required.");
 
         var body = request.Body?.Trim() ?? string.Empty;
+        // Control characters would go out over the air inside the info field.
+        body = string.Concat(body.Where(c => !char.IsControl(c)));
         if (body.Length > 67)
             body = body[..67];
 
@@ -246,8 +248,6 @@ public class MessagesController(
 
         return Ok(ToInboxDto(msg));
     }
-
-    // ── Private helpers ───────────────────────────────────────────────────────
 
     private static InboxMessageDto ToInboxDto(Message m) => new()
     {

@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { createHubConnection } from '@/composables/useSignalR'
 import { useLogStreamStore } from '@/stores/logStream'
 import {
   LOG_LEVEL_COLORS,
@@ -17,8 +13,11 @@ import { getLogLevels, setLogLevel } from '@/api/loggingApi'
 const route = useRoute()
 const store = useLogStreamStore()
 
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+const hub = createHubConnection('/hubs/logs', {
+  logBacklog: (entries: LogEntryDto[]) => store.seedBacklog(entries),
+  logReceived: (entry: LogEntryDto) => store.addLog(entry),
+})
+const connectionStatus = hub.status
 
 const selectedEntry = ref<LogEntryDto | null>(null)
 
@@ -48,7 +47,7 @@ function openDetail(entry: LogEntryDto) {
   selectedEntry.value = entry
 }
 
-// ── Runtime log-level editor ──────────────────────────────────────────────
+// Runtime log-level editor
 const levelsDialog = ref(false)
 const levelsLoading = ref(false)
 const levelsSaving = ref(false)
@@ -104,43 +103,12 @@ async function changeLevel(category: string, level: string) {
   }
 }
 
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/logs')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
-
-  connection.on('logBacklog', (entries: LogEntryDto[]) => {
-    store.seedBacklog(entries)
-  })
-
-  connection.on('logReceived', (entry: LogEntryDto) => {
-    store.addLog(entry)
-  })
-
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
-
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
-  }
-}
-
 onMounted(async () => {
-  await connectSignalR()
+  await hub.start()
 })
 
 onUnmounted(async () => {
-  if (connection) {
-    await connection.stop()
-    connection = null
-  }
+  await hub.stop()
 })
 
 function openPopOut() {

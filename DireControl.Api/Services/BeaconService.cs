@@ -1,4 +1,3 @@
-using System.Text;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
 using DireControl.Data;
@@ -47,7 +46,7 @@ public sealed class BeaconService(
         var path = radio.BeaconPath ?? string.Empty;
 
         var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", radio.BeaconComment);
-        var frame = BuildAx25Frame(radio.FullCallsign, info, path);
+        var frame = Ax25Frame.BuildUiFrame(radio.FullCallsign, info, path);
 
         if (!connectionHolder.TrySend(frame))
         {
@@ -95,8 +94,6 @@ public sealed class BeaconService(
         return beacon;
     }
 
-    // ── APRS position info field ───────────────────────────────────────────────
-
     private static string BuildPositionInfo(double lat, double lon, string symbol, string? comment)
     {
         var latAbs = Math.Abs(lat);
@@ -115,54 +112,5 @@ public sealed class BeaconService(
         var commentPart = string.IsNullOrEmpty(comment) ? string.Empty : comment;
 
         return $"!{latDeg:D2}{latMin:00.00}{latDir}{symbolTable}{lonDeg:D3}{lonMin:00.00}{lonDir}{symbolCode}{commentPart}";
-    }
-
-    // ── AX.25 frame encoding (mirrors MessageSendingService) ──────────────────
-
-    private static byte[] BuildAx25Frame(string sourceCallsign, string aprsInfo, string path)
-    {
-        const string destination = "APRS";
-
-        var (destBase, destSsid) = SplitCallsign(destination);
-        var (srcBase, srcSsid) = SplitCallsign(sourceCallsign);
-
-        var pathItems = string.IsNullOrWhiteSpace(path)
-            ? []
-            : path.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var frame = new List<byte>(128);
-
-        frame.AddRange(EncodeAddress(destBase, destSsid, isLast: false));
-        frame.AddRange(EncodeAddress(srcBase, srcSsid, isLast: pathItems.Length == 0));
-
-        for (var i = 0; i < pathItems.Length; i++)
-        {
-            var (dBase, dSsid) = SplitCallsign(pathItems[i]);
-            frame.AddRange(EncodeAddress(dBase, dSsid, isLast: i == pathItems.Length - 1));
-        }
-
-        frame.Add(0x03); // Control: Unnumbered Information (UI)
-        frame.Add(0xF0); // PID: no layer-3 protocol
-
-        frame.AddRange(Encoding.ASCII.GetBytes(aprsInfo));
-
-        return [.. frame];
-    }
-
-    private static byte[] EncodeAddress(string callsign, int ssid, bool isLast)
-    {
-        var padded = callsign.ToUpperInvariant().PadRight(6)[..6];
-        var bytes = new byte[7];
-        for (var i = 0; i < 6; i++)
-            bytes[i] = (byte)((padded[i] & 0x7F) << 1);
-        bytes[6] = (byte)(0x60 | ((ssid & 0x0F) << 1) | (isLast ? 0x01 : 0x00));
-        return bytes;
-    }
-
-    private static (string callsign, int ssid) SplitCallsign(string raw)
-    {
-        var parts = raw.Split('-', 2);
-        var ssid = parts.Length > 1 && int.TryParse(parts[1], out var n) ? n : 0;
-        return (parts[0], ssid);
     }
 }

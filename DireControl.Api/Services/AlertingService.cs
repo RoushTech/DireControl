@@ -59,9 +59,7 @@ public sealed class AlertingService(
         logger.LogInformation("AlertingService stopped.");
     }
 
-    // -------------------------------------------------------------------------
     // Seeding — run once on first packet
-    // -------------------------------------------------------------------------
 
     private async Task SeedAsync(DireControlContext db, CancellationToken ct)
     {
@@ -86,10 +84,6 @@ public sealed class AlertingService(
         logger.LogInformation("AlertingService seeded with {Count} active watched stations.", _lastSeenTimes.Count);
     }
 
-    // -------------------------------------------------------------------------
-    // Per-callsign rule evaluation
-    // -------------------------------------------------------------------------
-
     private async Task CheckStationAsync(string callsign, DireControlContext db, CancellationToken ct)
     {
         var station = await db.Stations
@@ -106,10 +100,6 @@ public sealed class AlertingService(
             await CheckGeofencesAsync(station, db, ct);
         }
     }
-
-    // -------------------------------------------------------------------------
-    // WatchList
-    // -------------------------------------------------------------------------
 
     private async Task CheckWatchListAsync(Station station, DireControlContext db, CancellationToken ct)
     {
@@ -156,10 +146,6 @@ public sealed class AlertingService(
         await BroadcastAlertAsync(alert, ct);
         logger.LogInformation("WatchList alert fired for {Callsign}.", callsign);
     }
-
-    // -------------------------------------------------------------------------
-    // Proximity
-    // -------------------------------------------------------------------------
 
     private async Task CheckProximityAsync(Station station, DireControlContext db, CancellationToken ct)
     {
@@ -214,10 +200,6 @@ public sealed class AlertingService(
                 callsign, rule.Name, dist);
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Geofence
-    // -------------------------------------------------------------------------
 
     private async Task CheckGeofencesAsync(Station station, DireControlContext db, CancellationToken ct)
     {
@@ -279,10 +261,6 @@ public sealed class AlertingService(
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Broadcast helper
-    // -------------------------------------------------------------------------
-
     private async Task BroadcastAlertAsync(Alert alert, CancellationToken ct)
     {
         var dto = new AlertBroadcastDto
@@ -299,10 +277,6 @@ public sealed class AlertingService(
 
         await hubContext.Clients.All.SendAsync(PacketHub.AlertReceivedMethod, dto, ct);
     }
-
-    // -------------------------------------------------------------------------
-    // Haversine formula
-    // -------------------------------------------------------------------------
 
     private static double HaversineMeters(double lat1, double lon1, double lat2, double lon2)
     {

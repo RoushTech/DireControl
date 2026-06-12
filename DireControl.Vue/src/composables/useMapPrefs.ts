@@ -16,7 +16,6 @@ export function useMapPrefs() {
     heatmap: pref('heatmap', false),
     coverage: pref('coverage', false),
     rangeRings: pref('rangeRings', false),
-    ringDistance: pref('ringDistance', 25),
     ringPanelOpen: pref('ringPanelOpen', false),
     radar: pref('radar', false),
     wind: pref('wind', false),

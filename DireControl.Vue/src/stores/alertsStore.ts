@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr'
+import { createHubConnection } from '@/composables/useSignalR'
 import { getAlerts, acknowledgeAlert } from '@/api/alertsApi'
 import type { AlertDto, AlertBroadcastDto } from '@/types/alert'
 import { ALERT_TYPE_COLORS } from '@/types/alert'
@@ -54,11 +54,9 @@ export const useAlertsStore = defineStore('alerts', () => {
     }
     alerts.value.unshift(provisional)
 
-    // Show toast
     const message = buildToastMessage(dto)
     showToast(message, ALERT_TYPE_COLORS[dto.alertTypeName] ?? 'info')
 
-    // Browser notification
     showBrowserNotification(dto.alertTypeName, message)
   }
 
@@ -95,30 +93,12 @@ export const useAlertsStore = defineStore('alerts', () => {
     if (connectionStarted) return
     connectionStarted = true
 
-    const connection = new HubConnectionBuilder()
-      .withUrl('/hubs/packets')
-      .withAutomaticReconnect()
-      .build()
-
-    connection.on('alertReceived', (dto: AlertBroadcastDto) => {
-      onAlertReceived(dto)
-    })
-
-    async function start() {
-      try {
-        await connection.start()
-      } catch {
-        setTimeout(start, 5000)
-      }
-    }
-
-    connection.onclose(() => {
-      if (connection.state !== HubConnectionState.Reconnecting) {
-        setTimeout(start, 5000)
-      }
-    })
-
-    start()
+    const hub = createHubConnection(
+      '/hubs/packets',
+      { alertReceived: (dto: AlertBroadcastDto) => onAlertReceived(dto) },
+      { retryForever: true },
+    )
+    hub.start()
   }
 
   return {

@@ -4,6 +4,7 @@ import type { PacketBroadcastDto } from '@/types/packet'
 import { parsedTypeFromString } from '@/types/packet'
 
 const MAX_DISPLAYED = 1000
+const MAX_PENDING = 1000
 
 export const useBeaconStreamStore = defineStore('beaconStream', () => {
   const displayedPackets = ref<PacketBroadcastDto[]>([])
@@ -20,6 +21,9 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
   function addPacket(p: PacketBroadcastDto) {
     if (paused.value) {
       pendingPackets.value.unshift(p)
+      if (pendingPackets.value.length > MAX_PENDING) {
+        pendingPackets.value.splice(MAX_PENDING)
+      }
     } else {
       displayedPackets.value.unshift(p)
       if (displayedPackets.value.length > MAX_DISPLAYED) {

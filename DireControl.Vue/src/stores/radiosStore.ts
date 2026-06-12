@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
-import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr'
+import { createHubConnection } from '@/composables/useSignalR'
 import { getRadios, getLastBeacon } from '@/api/radiosApi'
 import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto, BeaconConfirmedHeardDto } from '@/types/radio'
 
@@ -94,7 +94,6 @@ export const useRadiosStore = defineStore('radios', () => {
       ]
     }
 
-    // Bump confirmation count on radio
     const radio = radios.value.find((r) => r.id === dto.radioId)
     if (radio) {
       radio.confirmationCount++
@@ -105,38 +104,16 @@ export const useRadiosStore = defineStore('radios', () => {
     if (connectionStarted) return
     connectionStarted = true
 
-    const connection = new HubConnectionBuilder()
-      .withUrl('/hubs/packets')
-      .withAutomaticReconnect()
-      .build()
-
-    connection.on('ownBeaconReceived', (dto: OwnBeaconBroadcastDto) => {
-      onOwnBeaconReceived(dto)
-    })
-
-    connection.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => {
-      onDigiConfirmation(dto)
-    })
-
-    connection.on('beaconConfirmedHeard', (dto: BeaconConfirmedHeardDto) => {
-      onBeaconConfirmedHeard(dto)
-    })
-
-    async function start() {
-      try {
-        await connection.start()
-      } catch {
-        setTimeout(start, 5000)
-      }
-    }
-
-    connection.onclose(() => {
-      if (connection.state !== HubConnectionState.Reconnecting) {
-        setTimeout(start, 5000)
-      }
-    })
-
-    start()
+    const hub = createHubConnection(
+      '/hubs/packets',
+      {
+        ownBeaconReceived: (dto: OwnBeaconBroadcastDto) => onOwnBeaconReceived(dto),
+        digiConfirmation: (dto: DigiConfirmationBroadcastDto) => onDigiConfirmation(dto),
+        beaconConfirmedHeard: (dto: BeaconConfirmedHeardDto) => onBeaconConfirmedHeard(dto),
+      },
+      { retryForever: true },
+    )
+    hub.start()
   }
 
   function getLastBeaconForRadio(radioId: string): LastBeaconDto | undefined {

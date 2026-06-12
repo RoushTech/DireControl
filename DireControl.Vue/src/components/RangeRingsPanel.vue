@@ -74,7 +74,7 @@ function removeRing(index: number) {
         />
       </div>
 
-      <div v-for="(dist, i) in distances" :key="i" class="rr-row">
+      <div v-for="(_, i) in distances" :key="i" class="rr-row">
         <v-text-field
           v-model="editValues[i]"
           density="compact"

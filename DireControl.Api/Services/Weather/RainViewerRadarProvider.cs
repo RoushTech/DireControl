@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace DireControl.Api.Services.Weather;
 
-// ── Internal upstream model ────────────────────────────────────────────────
+// Internal upstream model
 
 internal sealed class RainViewerManifest
 {
@@ -35,8 +35,6 @@ internal sealed class RainViewerFrame
     [JsonPropertyName("path")]
     public string Path { get; set; } = "";
 }
-
-// ── Provider ───────────────────────────────────────────────────────────────
 
 public sealed class RainViewerRadarProvider(
     IHttpClientFactory httpClientFactory,

@@ -10,9 +10,7 @@ namespace DireControl.Tests;
 [TestFixture]
 public class PathParserTests
 {
-    // -------------------------------------------------------------------------
     // IsGenericAlias
-    // -------------------------------------------------------------------------
 
     [TestCase("WIDE1", true)]
     [TestCase("WIDE2", true)]
@@ -48,9 +46,7 @@ public class PathParserTests
         Assert.That(AprsPathParser.IsGenericAlias(callsign), Is.EqualTo(expected));
     }
 
-    // -------------------------------------------------------------------------
     // ExtractViaHops — no * markers → direct packet, zero hops
-    // -------------------------------------------------------------------------
 
     /// <summary>
     /// Packet 1 from issue #11.
@@ -82,9 +78,7 @@ public class PathParserTests
         Assert.That(hopCount, Is.EqualTo(0));
     }
 
-    // -------------------------------------------------------------------------
     // ExtractViaHops — with * markers (standard case)
-    // -------------------------------------------------------------------------
 
     [Test]
     public void ExtractViaHops_WithStarMarkers_IncludesOnlyStarredEntries()
@@ -113,9 +107,7 @@ public class PathParserTests
         Assert.That(hopCount, Is.EqualTo(1));
     }
 
-    // -------------------------------------------------------------------------
     // ExtractViaHops — TOCALL is unconditionally excluded
-    // -------------------------------------------------------------------------
 
     [Test]
     public void ExtractViaHops_StandardAprsDestination_ExcludedFromHops()
@@ -171,11 +163,9 @@ public class PathParserTests
         Assert.That(hopCount, Is.EqualTo(0));
     }
 
-    // -------------------------------------------------------------------------
     // Alias entries start as Known=false; real entries also start as Known=false.
     // Coordinate resolution (setting Known=true) is performed later by
     // ResolvePathCoordinatesAsync and requires a station database lookup.
-    // -------------------------------------------------------------------------
 
     [Test]
     public void ExtractViaHops_AllEntriesInitiallyNotKnown()
@@ -192,9 +182,7 @@ public class PathParserTests
         });
     }
 
-    // -------------------------------------------------------------------------
     // Issue #13 — direct packet (unused alias, no hops)
-    // -------------------------------------------------------------------------
 
     /// <summary>
     /// Issue #13 test packet.
@@ -241,9 +229,7 @@ public class PathParserTests
         Assert.That(hopCount, Is.EqualTo(1));
     }
 
-    // -------------------------------------------------------------------------
     // ParseTnc2Header — source / TOCALL / rawPath extraction
-    // -------------------------------------------------------------------------
 
     /// <summary>
     /// Issue #14 test packet.
@@ -324,9 +310,7 @@ public class PathParserTests
         Assert.That(rawPath, Is.EqualTo("WIDE1*,WE4MB-3*,WIDE2"));
     }
 
-    // -------------------------------------------------------------------------
     // Issue #17 — starred generic aliases must never become hops
-    // -------------------------------------------------------------------------
 
     /// <summary>
     /// Primary case from issue #17.
@@ -445,12 +429,10 @@ public class PathParserTests
         Assert.That(hops, Has.None.Matches<ResolvedPathEntry>(h => AprsPathParser.IsGenericAlias(h.Callsign)));
     }
 
-    // -------------------------------------------------------------------------
     // "Digi-before-alias" pattern — unstarred callsign immediately before a
     // starred generic alias, e.g. "W4CAT-2,WIDE2*".
     // Some digipeaters write their own callsign (unstarred) then mark the alias
     // they consumed instead of the more common "W4CAT-2*,WIDE2-1" convention.
-    // -------------------------------------------------------------------------
 
     /// <summary>
     /// Exact real-world path reported by user:
@@ -494,120 +476,3 @@ public class PathParserTests
     }
 }
 
-// -------------------------------------------------------------------------
-// PathResolver.Resolve — full-path classification including source and home
-// -------------------------------------------------------------------------
-
-[TestFixture]
-public class PathResolverTests
-{
-    // No station coordinates needed for these tests; pass null for stationLookup.
-    private static readonly IReadOnlyDictionary<string, (double Lat, double Lon)>? MockStations = null;
-
-    private static IEnumerable<TestCaseData> PathClassificationData()
-    {
-        // Direct RF — no hops, no q construct
-        yield return new TestCaseData(
-            "W1ABC>APRS:!data",
-            new[] { "W1ABC", "W3UWU" },
-            new string?[] { null, null },
-            0, HeardVia.Direct);
-
-        // RF via one digi
-        yield return new TestCaseData(
-            "W1ABC>APRS,KD4RFT-10*,WIDE1*:!data",
-            new[] { "W1ABC", "KD4RFT-10", "W3UWU" },
-            new string?[] { null, "WIDE1", null },
-            1, HeardVia.Digi);
-
-        // RF via two digis
-        yield return new TestCaseData(
-            "W1ABC>APRS,KD4RFT-10*,WIDE1*,WE4MB-3*,WIDE2*:!data",
-            new[] { "W1ABC", "KD4RFT-10", "WE4MB-3", "W3UWU" },
-            new string?[] { null, "WIDE1", "WIDE2", null },
-            2, HeardVia.Digi);
-
-        // igated from RF direct — qAR, no RF digi hops, igate is the one RF hop
-        yield return new TestCaseData(
-            "W1ABC>APRS,qAR,VK2ION:!data",
-            new[] { "W1ABC", "VK2ION", "W3UWU" },
-            new string?[] { null, null, null },
-            1, HeardVia.IgateRf);
-
-        // igated from RF via digi — qAR with starred hops before it, igate included
-        yield return new TestCaseData(
-            "W1ABC>APRS,KD4RFT-10*,WIDE1*,qAR,VK2ION:!data",
-            new[] { "W1ABC", "KD4RFT-10", "VK2ION", "W3UWU" },
-            new string?[] { null, "WIDE1", null, null },
-            2, HeardVia.IgateRfDigi);
-
-        // Pure internet origin — qAC
-        yield return new TestCaseData(
-            "W1ABC>APRS,TCPIP*,qAC,VK2ION:!data",
-            new[] { "W1ABC", "W3UWU" },
-            new string?[] { null, null },
-            0, HeardVia.Internet);
-
-        // TCPIP direct inject — no q code
-        yield return new TestCaseData(
-            "W1ABC>APRS,TCPIP*:!data",
-            new[] { "W1ABC", "W3UWU" },
-            new string?[] { null, null },
-            0, HeardVia.Internet);
-
-        // Unused path entries before q — WIDE2-1 unstarred, then qAR, igate is the one RF hop
-        yield return new TestCaseData(
-            "W1ABC>APRS,WIDE2-1,qAR,VK2ION:!data",
-            new[] { "W1ABC", "VK2ION", "W3UWU" },
-            new string?[] { null, null, null },
-            1, HeardVia.IgateRf);
-
-        // Unstarred digi before starred alias — W4CAT-2,WIDE2* pattern (real-world report), igate included
-        yield return new TestCaseData(
-            "W1ABC>APRS,WIDE2,W4CAT-2,WIDE2*,qAR,N8DEU-7:!data",
-            new[] { "W1ABC", "W4CAT-2", "N8DEU-7", "W3UWU" },
-            new string?[] { null, "WIDE2", null, null },
-            2, HeardVia.IgateRfDigi);
-
-        // Direct to igate — unused WIDE1-1,WIDE2-1 path, no digi hops, igate is the only hop
-        yield return new TestCaseData(
-            "KR4BRU-9>APMI0A,WIDE1-1,WIDE2-1,qAR,KM4KMO-14:/220059z3510.27N/08509.27Wa043/000/A=000815Ramble-Ambulance",
-            new[] { "KR4BRU-9", "KM4KMO-14", "W3UWU" },
-            new string?[] { null, null, null },
-            1, HeardVia.IgateRf);
-
-        // NOGATE token — RF only, not internet
-        yield return new TestCaseData(
-            "W1ABC>APRS,WE4MB-3*,WIDE2*,NOGATE:!data",
-            new[] { "W1ABC", "WE4MB-3", "W3UWU" },
-            new string?[] { null, "WIDE2", null },
-            1, HeardVia.Digi);
-    }
-
-    [TestCaseSource(nameof(PathClassificationData))]
-    public void PathParser_ClassifiesCorrectly(
-        string raw,
-        string[] expectedCallsigns,
-        string?[] expectedAliasUsed,
-        int expectedHopCount,
-        HeardVia expectedHeardVia)
-    {
-        var result = PathResolver.Resolve(raw, homeCallsign: "W3UWU", stationLookup: MockStations);
-
-        Assert.That(result.HopCount, Is.EqualTo(expectedHopCount));
-        Assert.That(result.HeardVia, Is.EqualTo(expectedHeardVia));
-        Assert.That(result.Hops.Count, Is.EqualTo(expectedCallsigns.Length));
-
-        for (var i = 0; i < expectedCallsigns.Length; i++)
-        {
-            Assert.That(result.Hops[i].Callsign, Is.EqualTo(expectedCallsigns[i]));
-            Assert.That(result.Hops[i].AliasUsed, Is.EqualTo(expectedAliasUsed[i]));
-        }
-
-        // Internet tokens must never appear as hop nodes
-        Assert.That(result.Hops, Has.None.Matches<ResolvedPathEntry>(h =>
-            h.Callsign.StartsWith("q", System.StringComparison.OrdinalIgnoreCase) ||
-            h.Callsign.Equals("TCPIP", System.StringComparison.OrdinalIgnoreCase) ||
-            h.Callsign.Equals("TCPXX", System.StringComparison.OrdinalIgnoreCase)));
-    }
-}

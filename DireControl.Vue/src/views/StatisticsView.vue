@@ -27,8 +27,6 @@ const mapEl = ref<HTMLElement | null>(null)
 let leafletMap: L.Map | null = null
 let gridLayers: L.Rectangle[] = []
 
-// ---- Fetch ----
-
 async function load() {
   loading.value = true
   error.value = false
@@ -47,8 +45,6 @@ async function load() {
     loading.value = false
   }
 }
-
-// ---- Bar chart ----
 
 const barOptions = {
   responsive: true,
@@ -91,8 +87,6 @@ const barData = computed(() => {
   }
 })
 
-// ---- Station type labels ----
-
 const typeLabel: Record<StationType, string> = {
   [StationType.Fixed]: 'Fixed',
   [StationType.Mobile]: 'Mobile',
@@ -112,7 +106,7 @@ const typeColor: Record<StationType, string> = {
   [StationType.Gateway]: 'deep-purple',
 }
 
-// ---- Maidenhead grid → lat/lon bounds ----
+// Maidenhead grid → lat/lon bounds
 
 function gridSquareToBounds(grid: string): [[number, number], [number, number]] | null {
   if (grid.length < 4) return null
@@ -137,7 +131,7 @@ function gridSquareToBounds(grid: string): [[number, number], [number, number]] 
   ]
 }
 
-// ---- Leaflet grid map ----
+// Leaflet grid map
 
 function initMap() {
   if (!mapEl.value) return
@@ -158,7 +152,6 @@ function initMap() {
 function updateGridLayers() {
   if (!leafletMap) return
 
-  // Remove old rectangles
   gridLayers.forEach(r => r.remove())
   gridLayers = []
 

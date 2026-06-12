@@ -12,11 +12,8 @@ public class DigipeaterStatistic : IEntityTypeConfiguration<DigipeaterStatistic>
     public int HopPositionCount { get; set; }
     public DateTime LastComputedAt { get; set; }
 
-    public double AverageHopPosition => HopPositionCount > 0 ? HopPositionSum / HopPositionCount : 0.0;
-
     public void Configure(EntityTypeBuilder<DigipeaterStatistic> builder)
     {
         builder.HasKey(d => d.Callsign);
-        builder.Ignore(d => d.AverageHopPosition);
     }
 }

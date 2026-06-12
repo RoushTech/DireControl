@@ -60,11 +60,6 @@ export interface MessageRetriedDto {
   lastSentAt: string | null
 }
 
-export interface MessageAcknowledgedDto {
-  id: number
-  messageId: string
-}
-
 export interface MessageFailedDto {
   id: number
   toCallsign: string

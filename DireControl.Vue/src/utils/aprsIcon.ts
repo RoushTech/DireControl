@@ -113,26 +113,13 @@ export function createAprsIcon(
 function overlayCharOffset(ch: string): { x: number; y: number } | null {
   const code = ch.charCodeAt(0);
   if (code >= 48 && code <= 57) {
-    // '0'-'9' → positions 0-9 in overlay sheet row 0
-    // But '0' maps to index 15 in the original spec (after '1'-'9')
-    // Looking at the sprite: row 0 has "1 2 3 4 5 6 7 8 9" then row 1 has "0 A B C..."
-    // Actually from the image: row 0 = empty + "1 2 3 4 5 6 7 8 9", row 1 = "A B C D..."
-    // Let me map based on the actual sprite layout observed:
-    // Row 0: pos 0=empty, 1="1", 2="2", ..., 9="9"
-    // Row 1: pos 0="0"(?), or pos 0="A"
-    // From the image: Row 0 has "1 2 3 4 5 6 7 8 9" starting at col 1
-    //                 Row 1 has "A B C D E F G H I J K L M N O P"
-    //                 Row 2 has "Q R S T U V W X Y Z"
     if (ch === "0") {
-      // '0' is at row 0 col 0 in the overlay sheet
       return { x: 0, y: 0 };
     }
-    // '1'-'9' at row 0, cols 1-9
     const digit = code - 48;
     return { x: digit * SYMBOL_SIZE, y: 0 };
   }
   if (code >= 65 && code <= 90) {
-    // 'A'-'Z' → 26 chars starting at row 1 col 0
     const letterIndex = code - 65;
     const col = letterIndex % COLS;
     const row = 1 + Math.floor(letterIndex / COLS);

@@ -56,6 +56,9 @@ public class Packet : IEntityTypeConfiguration<Packet>
         builder.HasIndex(p => p.ReceivedAt);
         builder.HasIndex(p => new { p.StationCallsign, p.ReceivedAt });
         builder.HasIndex(p => p.ParserVersion);
+        // Serves the parser's ParsedType=Unknown poll and message-history queries;
+        // without it both full-scan the table.
+        builder.HasIndex(p => new { p.ParsedType, p.ReceivedAt });
 
         builder.Property(p => p.ResolvedPath)
                .HasConversion(

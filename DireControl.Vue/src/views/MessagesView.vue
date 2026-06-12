@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { createHubConnection } from '@/composables/useSignalR'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { getAllMessages } from '@/api/messagesApi'
 import { getSettings, getStations } from '@/api/stationsApi'
@@ -12,7 +8,6 @@ import { formatUtc, timeAgo } from '@/utils/time'
 import type {
   AllMessagePacketDto,
   InboxMessageDto,
-  MessageAcknowledgedDto,
   MessageAckDto,
   MessageFailedDto,
   MessageRetriedDto,
@@ -26,21 +21,20 @@ const store = useMessagesStore()
 const uiStore = useUiStore()
 const { now } = useTick(1000)
 
-// ─── Settings & stations ────────────────────────────────────────────────────
+// Settings & stations
 const ourCallsign = ref('')
 const allStations = ref<StationDto[]>([])
 
-// ─── Common gateways ─────────────────────────────────────────────────────────
+// Common gateways
 const COMMON_GATEWAYS = ['SMSGTE', 'EMAIL', 'WLNK-1', 'ANSRVR']
 
 function stationTypeName(t: StationType): string {
   return StationType[t] ?? 'Unknown'
 }
 
-// ─── Tabs ────────────────────────────────────────────────────────────────────
 const activeTab = ref<'inbox' | 'all' | 'outbox'>('inbox')
 
-// ─── All-messages state ──────────────────────────────────────────────────────
+// All-messages state
 const filterSender = ref('')
 const filterAddressee = ref('')
 const filterText = ref('')
@@ -78,7 +72,7 @@ watch([filterSender, filterAddressee, filterText], () => {
   }, 400)
 })
 
-// ─── Inbox / Outbox ──────────────────────────────────────────────────────────
+// Inbox / Outbox
 const inboundMessages = computed(() =>
   store.inboxMessages.filter(
     (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase()
@@ -162,7 +156,7 @@ function showFailedToast(data: MessageFailedDto) {
   failedToast.value = true
 }
 
-// ─── Compose panel ──────────────────────────────────────────────────────────
+// Compose panel
 const composeOpen = ref(false)
 const composeTo = ref('')
 const composeBody = ref('')
@@ -220,7 +214,7 @@ async function doSend() {
   }
 }
 
-// ─── Keyboard shortcut ───────────────────────────────────────────────────────
+// Keyboard shortcut
 function onKeydown(e: KeyboardEvent) {
   if (
     e.key === 'm' &&
@@ -242,60 +236,29 @@ watch(() => uiStore.pendingComposeOpen, (pending) => {
   }
 })
 
-// ─── Inbox actions ───────────────────────────────────────────────────────────
+// Inbox actions
 async function onRowClick(message: InboxMessageDto) {
   if (!message.isRead) {
     await store.markRead(message.id)
   }
 }
 
-// ─── SignalR ─────────────────────────────────────────────────────────────────
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
-
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
-
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
-
-  connection.on('messageReceived', (message: InboxMessageDto) => {
+// SignalR
+const hub = createHubConnection('/hubs/packets', {
+  messageReceived: (message: InboxMessageDto) => {
     store.onMessageReceived(message)
     showBrowserNotification(message)
-  })
-
-  connection.on('messageAcked', (ack: MessageAckDto) => {
-    store.onMessageAcked(ack)
-  })
-
-  connection.on('messageRetried', (data: MessageRetriedDto) => {
-    store.onMessageRetried(data)
-  })
-
-  connection.on('messageAcknowledged', (data: MessageAcknowledgedDto) => {
-    store.onMessageAcknowledged(data)
-  })
-
-  connection.on('messageFailed', (data: MessageFailedDto) => {
+  },
+  messageAcked: (ack: MessageAckDto) => store.onMessageAcked(ack),
+  messageRetried: (data: MessageRetriedDto) => store.onMessageRetried(data),
+  messageFailed: (data: MessageFailedDto) => {
     store.onMessageFailed(data)
     showFailedToast(data)
-  })
+  },
+})
+const connectionStatus = hub.status
 
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
-  }
-}
-
-// ─── Browser notifications ───────────────────────────────────────────────────
+// Browser notifications
 async function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     await Notification.requestPermission()
@@ -312,7 +275,6 @@ function showBrowserNotification(message: InboxMessageDto) {
   })
 }
 
-// ─── Lifecycle ───────────────────────────────────────────────────────────────
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
 
@@ -331,12 +293,12 @@ onMounted(async () => {
   } catch { /* ignore */ }
 
   await Promise.all([store.fetchInbox(), fetchAllMessages()])
-  await connectSignalR()
+  await hub.start()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  connection?.stop()
+  hub.stop()
 })
 
 function replyTo(message: InboxMessageDto) {
@@ -399,7 +361,7 @@ function replyTo(message: InboxMessageDto) {
     </v-tabs>
 
     <v-window v-model="activeTab" class="flex-grow-1 overflow-auto">
-      <!-- ── Inbox Tab ───────────────────────────────────────────────────────── -->
+      <!-- Inbox Tab -->
       <v-window-item value="inbox">
         <v-table density="compact" hover>
           <thead>
@@ -460,7 +422,7 @@ function replyTo(message: InboxMessageDto) {
         </v-table>
       </v-window-item>
 
-      <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
+      <!-- Outbox Tab -->
       <v-window-item value="outbox">
         <v-table density="compact">
           <thead>
@@ -544,7 +506,7 @@ function replyTo(message: InboxMessageDto) {
         </v-table>
       </v-window-item>
 
-      <!-- ── All Messages Tab ───────────────────────────────────────────────── -->
+      <!-- All Messages Tab -->
       <v-window-item value="all">
         <!-- Filters -->
         <v-row dense class="mb-2 mt-1">
@@ -637,7 +599,7 @@ function replyTo(message: InboxMessageDto) {
       </v-window-item>
     </v-window>
 
-    <!-- ── Compose Dialog ─────────────────────────────────────────────────── -->
+    <!-- Compose Dialog -->
     <v-dialog v-model="composeOpen" max-width="520" @keydown.esc="composeOpen = false">
       <v-card>
         <v-card-title class="d-flex align-center">
@@ -758,7 +720,7 @@ function replyTo(message: InboxMessageDto) {
       </v-card>
     </v-dialog>
 
-    <!-- ── Reset Confirmation Dialog ─────────────────────────────────────── -->
+    <!-- Reset Confirmation Dialog -->
     <v-dialog v-model="resetDialogOpen" max-width="420">
       <v-card v-if="resetDialogMsg">
         <v-card-title>Reset retries?</v-card-title>
@@ -773,7 +735,7 @@ function replyTo(message: InboxMessageDto) {
       </v-card>
     </v-dialog>
 
-    <!-- ── Failed Message Toast ───────────────────────────────────────────── -->
+    <!-- Failed Message Toast -->
     <v-snackbar v-model="failedToast" color="error" :timeout="6000" location="bottom right">
       {{ failedToastText }}
       <template #actions>

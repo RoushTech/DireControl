@@ -10,7 +10,7 @@ namespace DireControl.Api.Services;
 /// previously-stored packets to be re-derived. History:
 /// <list type="bullet">
 ///   <item>0 — pre-versioning rows (includes the third-party AX.25 StationCallsign bug).</item>
-///   <item>1 — StationCallsign derived from the TNC2 header; MessageData.SenderCallsign added.</item>
+///   <item>1 — StationCallsign derived from the TNC2 header.</item>
 /// </list>
 /// </summary>
 public static class ParserVersionInfo

@@ -10,7 +10,6 @@ import {
 } from '@/api/messagesApi'
 import type {
   InboxMessageDto,
-  MessageAcknowledgedDto,
   MessageAckDto,
   MessageFailedDto,
   MessageRetriedDto,
@@ -76,7 +75,11 @@ export const useMessagesStore = defineStore('messages', () => {
   /** Called when SignalR delivers an ACK for one of our sent messages. */
   function onMessageAcked(ack: MessageAckDto) {
     const msg = inboxMessages.value.find((m) => m.id === ack.id)
-    if (msg) msg.ackSent = true
+    if (msg) {
+      msg.retryState = RetryState.Acknowledged
+      msg.nextRetryAt = null
+      msg.ackSent = true
+    }
   }
 
   /** Called when the retry service retransmits a message. Updates attempt info. */
@@ -91,16 +94,6 @@ export const useMessagesStore = defineStore('messages', () => {
     }
   }
 
-  /** Called when an ACK is received — upgrades state to Acknowledged. */
-  function onMessageAcknowledged(data: MessageAcknowledgedDto) {
-    const msg = inboxMessages.value.find((m) => m.id === data.id)
-    if (msg) {
-      msg.retryState = RetryState.Acknowledged
-      msg.nextRetryAt = null
-      msg.ackSent = true
-    }
-  }
-
   /** Called when a message exhausts all retries and transitions to Failed. */
   function onMessageFailed(data: MessageFailedDto) {
     const msg = inboxMessages.value.find((m) => m.id === data.id)
@@ -110,8 +103,6 @@ export const useMessagesStore = defineStore('messages', () => {
       msg.retryCount = data.retryCount
     }
   }
-
-  // ── Private helpers ────────────────────────────────────────────────────────
 
   function replaceInbox(updated: InboxMessageDto) {
     const idx = inboxMessages.value.findIndex((m) => m.id === updated.id)
@@ -131,7 +122,6 @@ export const useMessagesStore = defineStore('messages', () => {
     onMessageReceived,
     onMessageAcked,
     onMessageRetried,
-    onMessageAcknowledged,
     onMessageFailed,
   }
 })
