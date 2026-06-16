@@ -1,5 +1,7 @@
-export function timeAgo(isoDate: string, now = Date.now()): string {
-  const diff = Math.floor((now - new Date(isoDate).getTime()) / 1000)
+import { serverNow } from '@/utils/serverTime'
+
+export function timeAgo(isoDate: string, now = serverNow()): string {
+  const diff = Math.max(0, Math.floor((now - new Date(isoDate).getTime()) / 1000))
   if (diff < 60) return `${diff}s ago`
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`

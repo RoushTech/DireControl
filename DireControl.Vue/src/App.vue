@@ -7,8 +7,12 @@ import { useAlertsStore } from '@/stores/alertsStore'
 import { useUiStore } from '@/stores/uiStore'
 import { getStatus } from '@/api/statusApi'
 import { getAbout } from '@/api/aboutApi'
+import { recordServerSync } from '@/utils/serverTime'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
+const CLOCK_SYNC_INTERVAL_MS = 5 * 60 * 1000
+
+let clockSyncTimer: ReturnType<typeof setInterval> | null = null
 
 const router = useRouter()
 const route = useRoute()
@@ -138,12 +142,10 @@ onMounted(async () => {
     // ignore — count shows 0 until fetched
   }
 
-  try {
-    const about = await getAbout()
-    version.value = about.version
-  } catch {
-    // ignore — version display is non-critical
-  }
+  await syncServerClock()
+  // Re-sync periodically: the dashboard can stay open for days, over which the
+  // client and server clocks drift apart.
+  clockSyncTimer = setInterval(syncServerClock, CLOCK_SYNC_INTERVAL_MS)
 
   await pollStatus()
   statusInterval = setInterval(pollStatus, 10_000)
@@ -153,8 +155,20 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (statusInterval !== null) clearInterval(statusInterval)
+  if (clockSyncTimer !== null) clearInterval(clockSyncTimer)
   window.removeEventListener('keydown', onKeydown)
 })
+
+async function syncServerClock() {
+  try {
+    const requestStart = Date.now()
+    const about = await getAbout()
+    recordServerSync(about.serverTime, requestStart, Date.now())
+    version.value = about.version
+  } catch {
+    // ignore — non-critical; keep the last good offset and version
+  }
+}
 </script>
 
 <template>

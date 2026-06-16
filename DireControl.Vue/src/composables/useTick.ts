@@ -1,4 +1,5 @@
 import { ref, onMounted, onUnmounted, type Ref } from 'vue'
+import { serverNow } from '@/utils/serverTime'
 
 interface TickState {
   now: Ref<number>
@@ -10,13 +11,13 @@ const ticks = new Map<number, TickState>()
 
 export function useTick(intervalMs = 5000) {
   if (!ticks.has(intervalMs)) {
-    ticks.set(intervalMs, { now: ref(Date.now()), timer: null, subscribers: 0 })
+    ticks.set(intervalMs, { now: ref(serverNow()), timer: null, subscribers: 0 })
   }
   const state = ticks.get(intervalMs)!
 
   onMounted(() => {
     if (state.subscribers === 0) {
-      state.timer = setInterval(() => { state.now.value = Date.now() }, intervalMs)
+      state.timer = setInterval(() => { state.now.value = serverNow() }, intervalMs)
     }
     state.subscribers++
   })

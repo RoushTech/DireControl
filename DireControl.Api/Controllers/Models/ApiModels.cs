@@ -6,6 +6,7 @@ namespace DireControl.Api.Controllers.Models;
 public sealed class AboutDto
 {
     public required string Version { get; init; }
+    public DateTime ServerTime { get; init; }
 }
 
 public sealed class StationDto
