@@ -190,7 +190,7 @@ onUnmounted(() => {
 <template>
   <v-container fluid class="statistics-view pa-4">
     <div class="d-flex align-center justify-space-between mb-4">
-      <div class="text-h5 font-weight-bold">Statistics</div>
+      <h1 class="text-h5 font-weight-bold ma-0">Statistics</h1>
       <v-btn
         size="small"
         variant="tonal"

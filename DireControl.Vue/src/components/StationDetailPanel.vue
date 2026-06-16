@@ -11,6 +11,8 @@ import {
   Tooltip as ChartTooltip,
   Filler,
   Legend,
+  type Tick,
+  type TooltipItem,
 } from 'chart.js'
 import {
   getStation,
@@ -30,7 +32,7 @@ import {
   type WeatherReadingDto,
   type SignalPointDto,
 } from '@/types/packet'
-import { timeAgo, formatUtc, compassDir } from '@/utils/time'
+import { timeAgo, formatLocal, compassDir } from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
@@ -86,6 +88,7 @@ function onTabKeydown(e: KeyboardEvent) {
 const station = ref<StationDto | null>(null)
 const loading = ref(false)
 const watchLoading = ref(false)
+const watchError = ref(false)
 
 const packets = ref<PacketDto[]>([])
 const packetPage = ref(1)
@@ -101,8 +104,7 @@ const weatherRange = ref<'24h' | '7d'>('24h')
 const crosshairPlugin = {
   id: 'weatherCrosshair',
   afterDraw(chart: ChartJS) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const active = (chart.tooltip as any)?._active as { element: { x: number } }[] | undefined
+    const active = chart.tooltip?.getActiveElements()
     const firstActive = active?.[0]
     if (!firstActive) return
     const x = firstActive.element.x
@@ -122,6 +124,7 @@ const crosshairPlugin = {
 // Lookup state
 const lookupLoading = ref(false)
 const lookupFailed = ref(false)
+const lookupError = ref(false)
 const lookupData = ref<CallsignLookupDto | null>(null)
 
 // Stats state
@@ -242,8 +245,7 @@ const weatherChartOptions = computed(() => {
                   minute: '2-digit',
                 })
           },
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          label(item: any) {
+          label(item: TooltipItem<'line'>) {
             if (item.raw == null) return ''
             const unit = item.datasetIndex === 0 ? '°F' : ' mph'
             return `${item.dataset.label}: ${(item.raw as number).toFixed(1)}${unit}`
@@ -261,8 +263,7 @@ const weatherChartOptions = computed(() => {
             ? { autoSkip: true, maxTicksLimit: 12 }
             : {
                 autoSkip: false,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                callback(_v: unknown, index: number, ticks: any[]) {
+                callback(_v: unknown, index: number, ticks: Tick[]) {
                   // Only render the label when it has content (weekday names)
                   const label = ticks[index]?.label as string | undefined
                   return label || null
@@ -519,6 +520,7 @@ async function performLookup() {
   if (!props.callsign) return
   lookupLoading.value = true
   lookupFailed.value = false
+  lookupError.value = false
   try {
     const result = await lookupCallsign(props.callsign)
     if (result) {
@@ -529,6 +531,8 @@ async function performLookup() {
     } else {
       lookupFailed.value = true
     }
+  } catch {
+    lookupError.value = true
   } finally {
     lookupLoading.value = false
   }
@@ -549,9 +553,13 @@ function onDialogSelectStation(callsign: string) {
 async function toggleWatchStatus() {
   if (!props.callsign || !station.value) return
   watchLoading.value = true
+  watchError.value = false
   try {
     await toggleWatch(props.callsign)
     station.value = { ...station.value, isOnWatchList: !station.value.isOnWatchList }
+  } catch {
+    watchError.value = true
+    setTimeout(() => { watchError.value = false }, 4000)
   } finally {
     watchLoading.value = false
   }
@@ -587,6 +595,7 @@ watch(() => props.callsign, async (val) => {
     weatherRange.value = '24h'
     lookupData.value = null
     lookupFailed.value = false
+    lookupError.value = false
     stats.value = null
     signalPoints.value = []
     packetsNewData.value = false
@@ -597,6 +606,7 @@ watch(() => props.callsign, async (val) => {
   weatherRange.value = '24h'
   lookupData.value = null
   lookupFailed.value = false
+  lookupError.value = false
   stats.value = null
   signalPoints.value = []
   packetsNewData.value = false
@@ -661,6 +671,7 @@ watch(tab, (newTab) => {
         </div>
       </div>
       <div class="d-flex align-center">
+        <span v-if="watchError" class="text-caption text-error mr-1">Update failed</span>
         <v-btn
           :icon="station?.isOnWatchList ? 'mdi-star' : 'mdi-star-outline'"
           :color="station?.isOnWatchList ? 'amber' : 'default'"
@@ -671,7 +682,7 @@ watch(tab, (newTab) => {
           title="Toggle watch list"
           @click="toggleWatchStatus"
         />
-        <v-btn icon="mdi-close" variant="text" size="small" @click="emit('close')" />
+        <v-btn icon="mdi-close" variant="text" size="small" aria-label="Close" @click="emit('close')" />
       </div>
     </div>
     <v-divider />
@@ -708,12 +719,12 @@ watch(tab, (newTab) => {
           </template>
 
           <div class="info-label">First Seen</div>
-          <div class="info-value" :title="formatUtc(station.firstSeen)">
+          <div class="info-value" :title="formatLocal(station.firstSeen)">
             {{ timeAgo(station.firstSeen, now) }}
           </div>
 
           <div class="info-label">Last Seen</div>
-          <div class="info-value" :title="formatUtc(station.lastSeen)">
+          <div class="info-value" :title="formatLocal(station.lastSeen)">
             {{ timeAgo(station.lastSeen, now) }}
           </div>
 
@@ -804,6 +815,22 @@ watch(tab, (newTab) => {
           <div class="px-3 pb-3 text-caption text-medium-emphasis">No record found</div>
         </template>
 
+        <template v-else-if="lookupError">
+          <div class="px-3 pb-1 text-caption text-error">Lookup failed — check the API connection.</div>
+          <div class="px-3 pb-3">
+            <v-btn
+              size="x-small"
+              variant="tonal"
+              color="primary"
+              :loading="lookupLoading"
+              prepend-icon="mdi-refresh"
+              @click="performLookup"
+            >
+              Retry lookup
+            </v-btn>
+          </div>
+        </template>
+
         <template v-else>
           <div class="px-3 pb-3">
             <v-btn
@@ -829,7 +856,16 @@ watch(tab, (newTab) => {
         <div v-if="packets.length === 0 && !packetsLoading" class="text-center text-medium-emphasis py-4">
           No packets
         </div>
-        <div v-for="p in packets" :key="p.id" class="packet-row" @click="onPacketRowClick(p)">
+        <div
+          v-for="p in packets"
+          :key="p.id"
+          class="packet-row"
+          role="button"
+          tabindex="0"
+          @click="onPacketRowClick(p)"
+          @keydown.enter="onPacketRowClick(p)"
+          @keydown.space.prevent="onPacketRowClick(p)"
+        >
           <div class="d-flex align-center ga-2">
             <v-chip :color="packetTypeColor(p.parsedType)" size="x-small" label>
               {{ packetTypeName(p.parsedType) }}
@@ -839,7 +875,7 @@ watch(tab, (newTab) => {
               :class="p.isDirectHeard ? 'heard-via-dot--direct' : 'heard-via-dot--digi'"
               :title="p.isDirectHeard ? 'Direct' : 'Via Digi'"
             />
-            <span class="text-caption text-medium-emphasis flex-shrink-0" :title="formatUtc(p.receivedAt)">
+            <span class="text-caption text-medium-emphasis flex-shrink-0" :title="formatLocal(p.receivedAt)">
               {{ timeAgo(p.receivedAt, now) }}
             </span>
           </div>
@@ -866,6 +902,7 @@ watch(tab, (newTab) => {
             size="x-small"
             variant="text"
             :disabled="packetPage <= 1"
+            aria-label="Previous page"
             @click="packetPage--"
           />
           <span class="text-caption">{{ packetPage }} / {{ totalPages }}</span>
@@ -874,6 +911,7 @@ watch(tab, (newTab) => {
             size="x-small"
             variant="text"
             :disabled="packetPage >= totalPages"
+            aria-label="Next page"
             @click="packetPage++"
           />
         </div>
@@ -1196,6 +1234,11 @@ watch(tab, (newTab) => {
 
 .packet-row:hover {
   background: rgba(var(--v-theme-on-surface), 0.05);
+}
+
+.packet-row:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 
 .wx-section-label {

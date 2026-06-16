@@ -71,7 +71,6 @@ function onSelect(v: unknown) {
       density="compact"
       variant="solo"
       hide-details
-      bg-color="rgba(30, 30, 30, 0.85)"
       style="min-width: 190px; max-width: 220px"
       @update:model-value="onSelect"
     >
@@ -96,5 +95,9 @@ function onSelect(v: unknown) {
   top: 10px;
   right: 10px;
   z-index: 1000;
+}
+
+.tile-switcher :deep(.v-field) {
+  background: rgba(var(--v-theme-surface), 0.85);
 }
 </style>

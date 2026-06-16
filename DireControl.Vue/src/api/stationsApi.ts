@@ -1,3 +1,4 @@
+import axios from "axios";
 import http from "./axios";
 import type { StationDto, SettingsDto, CallsignLookupDto, StationStatisticDto } from "@/types/station";
 import type { TrackPointDto, PacketDto, WeatherReadingDto, SignalPointDto } from "@/types/packet";
@@ -75,8 +76,9 @@ export async function lookupCallsign(callsign: string): Promise<CallsignLookupDt
       `/api/v0/stations/${encodeURIComponent(callsign)}/lookup`,
     )
     return data
-  } catch {
-    return null
+  } catch (e) {
+    if (axios.isAxiosError(e) && e.response?.status === 404) return null
+    throw e
   }
 }
 

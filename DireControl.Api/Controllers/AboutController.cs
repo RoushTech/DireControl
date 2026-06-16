@@ -15,6 +15,6 @@ public class AboutController : ControllerBase
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion ?? "unknown";
 
-        return Ok(new AboutDto { Version = version });
+        return Ok(new AboutDto { Version = version, ServerTime = DateTime.UtcNow });
     }
 }

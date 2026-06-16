@@ -124,6 +124,7 @@ function openPopOut() {
         <v-text-field
           v-model="store.textFilter"
           placeholder="Search message or category…"
+          aria-label="Search message or category"
           density="compact"
           variant="outlined"
           hide-details
@@ -166,7 +167,7 @@ function openPopOut() {
         </v-btn>
         <v-btn
           v-else
-          color="green"
+          color="success"
           size="small"
           variant="tonal"
           @click="store.unpause()"
@@ -238,7 +239,11 @@ function openPopOut() {
           :key="e.sequence"
           class="log-row"
           :class="{ 'log-row--error': e.level === 'Error' || e.level === 'Critical' }"
+          role="button"
+          tabindex="0"
           @click="openDetail(e)"
+          @keydown.enter="openDetail(e)"
+          @keydown.space.prevent="openDetail(e)"
         >
           <span class="log-cell log-time text-caption text-medium-emphasis">{{ formatTime(e.timestamp) }}</span>
           <span class="log-cell log-level">
@@ -387,6 +392,11 @@ function openPopOut() {
 
 .log-row:hover {
   background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.log-row:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 
 .log-row--error {

@@ -91,6 +91,15 @@ const selectedProvider = ref(providerIsAvailable(_storedProvider) ? _storedProvi
 const providerFallbackSnackbar = ref(false)
 const providerFallbackMessage = ref('')
 
+// Generic map error notification (heatmap/coverage load failures etc.)
+const mapErrorSnackbar = ref(false)
+const mapErrorMessage = ref('')
+
+function showMapError(message: string) {
+  mapErrorMessage.value = message
+  mapErrorSnackbar.value = true
+}
+
 // Panel/sidebar state
 const showSidebar = ref(localStorage.getItem(SIDEBAR_KEY) !== 'false')
 const panelWidth = ref(Math.max(PANEL_MIN_WIDTH, parseInt(localStorage.getItem(PANEL_WIDTH_KEY) ?? '380', 10)))
@@ -576,6 +585,7 @@ async function toggleHeatmap() {
     }).addTo(map.value)
   } catch (err) {
     console.error('Failed to load heatmap positions:', err)
+    showMapError('Failed to load heatmap data — try again later.')
     showHeatmap.value = false
   } finally {
     heatmapLoading.value = false
@@ -663,6 +673,7 @@ async function toggleCoverage() {
     drawCoverage()
   } catch (err) {
     console.error('Failed to load coverage data:', err)
+    showMapError('Failed to load coverage data — try again later.')
     showCoverage.value = false
   } finally {
     coverageLoading.value = false
@@ -1121,9 +1132,14 @@ onMounted(async () => {
   await connectSignalR()
 
   // Initialise radios — load list and last beacons, start the store's own SignalR connection.
-  radiosStore.startSignalR()
-  await radiosStore.fetchRadios()
-  await radiosStore.fetchAllLastBeacons()
+  // Failures here must not abort the rest of map initialisation.
+  try {
+    radiosStore.startSignalR()
+    await radiosStore.fetchRadios()
+    await radiosStore.fetchAllLastBeacons()
+  } catch (err) {
+    console.warn('Failed to initialise radios:', err)
+  }
 
   // Draw home station marker; show banner + start poll if position not known yet
   await drawHomeMarker()
@@ -1291,6 +1307,7 @@ defineExpose({ TILE_PROVIDERS })
         size="small"
         variant="elevated"
         color="surface"
+        :aria-label="showSidebar ? 'Collapse station list' : 'Expand station list'"
         @click="toggleSidebar"
       />
 
@@ -1440,14 +1457,15 @@ defineExpose({ TILE_PROVIDERS })
         class="radar-animation-bar"
         @mouseenter="keepRadarControlsVisible"
       >
-        <v-btn icon="mdi-skip-previous" size="x-small" variant="text" @click="stepRadarFrame(-1)" />
+        <v-btn icon="mdi-skip-previous" size="x-small" variant="text" aria-label="Previous radar frame" @click="stepRadarFrame(-1)" />
         <v-btn
           :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
           size="x-small"
           variant="text"
+          :aria-label="radarPlaying ? 'Pause radar animation' : 'Play radar animation'"
           @click="radarPlaying ? pauseRadar() : playRadar()"
         />
-        <v-btn icon="mdi-skip-next" size="x-small" variant="text" @click="stepRadarFrame(1)" />
+        <v-btn icon="mdi-skip-next" size="x-small" variant="text" aria-label="Next radar frame" @click="stepRadarFrame(1)" />
         <span class="radar-timestamp">{{ radarTimestamp }}</span>
         <span class="radar-frame-dots">{{ radarCurrentIdx + 1 }}&nbsp;/&nbsp;{{ radarFrameCount }}</span>
         <span class="radar-bar-divider" />
@@ -1611,7 +1629,7 @@ defineExpose({ TILE_PROVIDERS })
       <v-card-title class="d-flex align-center">
         Stations
         <v-spacer />
-        <v-btn icon="mdi-close" size="small" variant="text" @click="mobileStationSheetOpen = false" />
+        <v-btn icon="mdi-close" size="small" variant="text" aria-label="Close" @click="mobileStationSheetOpen = false" />
       </v-card-title>
       <v-divider />
       <div style="overflow-y: auto; max-height: calc(70vh - 60px)">
@@ -1655,6 +1673,16 @@ defineExpose({ TILE_PROVIDERS })
     location="bottom"
   >
     {{ providerFallbackMessage }}
+  </v-snackbar>
+
+  <!-- Generic map error notification -->
+  <v-snackbar
+    v-model="mapErrorSnackbar"
+    :timeout="5000"
+    color="error"
+    location="bottom"
+  >
+    {{ mapErrorMessage }}
   </v-snackbar>
 </template>
 

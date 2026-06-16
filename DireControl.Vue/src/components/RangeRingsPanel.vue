@@ -54,7 +54,15 @@ function removeRing(index: number) {
 
 <template>
   <div class="range-rings-panel">
-    <div class="rr-header" @click="expanded = !expanded">
+    <div
+      class="rr-header"
+      role="button"
+      tabindex="0"
+      :aria-expanded="expanded"
+      @click="expanded = !expanded"
+      @keydown.enter="expanded = !expanded"
+      @keydown.space.prevent="expanded = !expanded"
+    >
       <v-icon size="16" class="rr-icon">mdi-radius-outline</v-icon>
       <span class="rr-title">Range Rings</span>
       <v-icon size="16" class="rr-chevron">
@@ -109,13 +117,13 @@ function removeRing(index: number) {
 
 <style scoped>
 .range-rings-panel {
-  background: rgba(30, 30, 40, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-surface), 0.92);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   min-width: 160px;
   max-width: 200px;
   backdrop-filter: blur(4px);
-  color: #e0e0e0;
+  color: rgba(var(--v-theme-on-surface), 0.87);
   font-size: 12px;
   user-select: none;
 }
@@ -130,7 +138,12 @@ function removeRing(index: number) {
 }
 
 .rr-header:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(var(--v-theme-on-surface), 0.07);
+}
+
+.rr-header:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 
 .rr-icon {
@@ -152,7 +165,7 @@ function removeRing(index: number) {
 
 .rr-body {
   padding: 4px 8px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .rr-toggle-row {

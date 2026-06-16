@@ -57,6 +57,16 @@ function dotColor(radioId: string, expectedIntervalSeconds: number): string {
   return 'red'
 }
 
+function dotTitle(radioId: string, expectedIntervalSeconds: number): string {
+  const lb = radiosStore.getLastBeaconForRadio(radioId)
+  const secs = secondsAgo(radioId)
+  if (secs === null) return 'No beacon sent yet'
+  if (lb && !lb.heard) return 'Beacon awaiting confirmation'
+  if (secs <= expectedIntervalSeconds) return 'Beacon OK'
+  if (secs <= expectedIntervalSeconds * 1.5) return 'Beacon slightly overdue'
+  return 'Beacon overdue'
+}
+
 function recentConfirmations(radioId: string) {
   const lb = radiosStore.getLastBeaconForRadio(radioId)
   return (lb?.confirmations ?? []).slice(0, 3)
@@ -69,10 +79,18 @@ function recentConfirmations(radioId: string) {
       v-for="radio in radiosStore.activeRadios"
       :key="radio.id"
       class="own-station-card"
+      role="button"
+      tabindex="0"
       @click="openHistory(radio.id)"
+      @keydown.enter="openHistory(radio.id)"
+      @keydown.space.prevent="openHistory(radio.id)"
     >
       <div class="d-flex align-center ga-2">
-        <v-icon :color="dotColor(radio.id, radio.expectedIntervalSeconds)" size="10">
+        <v-icon
+          :color="dotColor(radio.id, radio.expectedIntervalSeconds)"
+          size="10"
+          :title="dotTitle(radio.id, radio.expectedIntervalSeconds)"
+        >
           mdi-circle
         </v-icon>
         <span class="text-caption font-weight-bold">{{ radio.fullCallsign }}</span>
@@ -148,5 +166,10 @@ function recentConfirmations(radioId: string) {
 
 .own-station-card:hover {
   background: rgba(var(--v-theme-surface), 1);
+}
+
+.own-station-card:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 </style>

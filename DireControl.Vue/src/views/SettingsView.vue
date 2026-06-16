@@ -10,6 +10,7 @@ import { getWeatherStatus } from '@/api/weatherApi'
 import { getMaintenanceStatus, updateRetention, runCleanup, type CleanupResult } from '@/api/maintenanceApi'
 import { useUnits } from '@/composables/useUnits'
 import { getSymbolStyle } from '@/utils/aprsIcon'
+import { apiErrorText } from '@/utils/apiError'
 import AprsSymbolPicker from '@/components/AprsSymbolPicker.vue'
 
 // Units
@@ -24,6 +25,7 @@ const stationRetryDelay = ref(30)
 const stationSaving = ref(false)
 const stationSaveError = ref('')
 const stationSaveSuccess = ref(false)
+const settingsLoadFailed = ref(false)
 
 async function saveStationSettings() {
   stationSaving.value = true
@@ -39,8 +41,8 @@ async function saveStationSettings() {
     })
     stationSaveSuccess.value = true
     setTimeout(() => { stationSaveSuccess.value = false }, 3000)
-  } catch {
-    stationSaveError.value = 'Failed to save station settings — check callsign and coordinate values.'
+  } catch (e) {
+    stationSaveError.value = apiErrorText(e, 'Failed to save station settings — check callsign and coordinate values.')
   } finally {
     stationSaving.value = false
   }
@@ -82,15 +84,19 @@ async function saveQrzCredentials() {
 // Cleanup schedule
 const cleanupScheduleSaving = ref(false)
 const cleanupScheduleError = ref('')
+const cleanupScheduleSaveSuccess = ref(false)
 
 async function saveCleanupSettings() {
   cleanupScheduleSaving.value = true
   cleanupScheduleError.value = ''
+  cleanupScheduleSaveSuccess.value = false
   try {
     await updateCleanupSettings({
       databaseCleanupIntervalHours: cleanupIntervalHours.value,
       vacuumOnCleanup: vacuumOnCleanup.value,
     })
+    cleanupScheduleSaveSuccess.value = true
+    setTimeout(() => { cleanupScheduleSaveSuccess.value = false }, 3000)
   } catch {
     cleanupScheduleError.value = 'Failed to save cleanup schedule.'
   } finally {
@@ -121,8 +127,8 @@ function schedulePathSave() {
     outboundPathSaveError.value = ''
     try {
       await updateOutboundPath(outboundPath.value.trim())
-    } catch {
-      outboundPathSaveError.value = 'Failed to save outbound path.'
+    } catch (e) {
+      outboundPathSaveError.value = apiErrorText(e, 'Failed to save outbound path.')
     } finally {
       outboundPathSaving.value = false
     }
@@ -165,8 +171,8 @@ async function saveAprsIsSettings() {
     aprsIsPasscodeOverride.value = null
     clearPasscodeOverride.value = false
     setTimeout(() => { aprsIsSaveSuccess.value = false }, 3000)
-  } catch {
-    aprsIsSaveError.value = 'Failed to save APRS-IS settings.'
+  } catch (e) {
+    aprsIsSaveError.value = apiErrorText(e, 'Failed to save APRS-IS settings.')
   } finally {
     aprsIsSaving.value = false
   }
@@ -177,6 +183,9 @@ const radios = ref<RadioDto[]>([])
 const radioDialogOpen = ref(false)
 const editingRadioId = ref<string | null>(null)
 const radioSaving = ref(false)
+const radioSaveError = ref('')
+const radioListError = ref('')
+const radiosLoadFailed = ref(false)
 
 const rName = ref('')
 const rCallsign = ref('')
@@ -215,10 +224,16 @@ const ssidError = computed(() => {
 })
 
 async function loadRadios() {
-  try { radios.value = await getRadios() } catch { /* */ }
+  try {
+    radios.value = await getRadios()
+    radiosLoadFailed.value = false
+  } catch {
+    radiosLoadFailed.value = true
+  }
 }
 
 function openAddRadio() {
+  radioSaveError.value = ''
   editingRadioId.value = null
   rName.value = ''
   rCallsign.value = ''
@@ -233,6 +248,7 @@ function openAddRadio() {
 }
 
 function openEditRadio(radio: RadioDto) {
+  radioSaveError.value = ''
   editingRadioId.value = radio.id
   rName.value = radio.name
   rCallsign.value = radio.callsign
@@ -249,6 +265,7 @@ function openEditRadio(radio: RadioDto) {
 async function saveRadio() {
   if (!radioFormValid.value || ssidError.value) return
   radioSaving.value = true
+  radioSaveError.value = ''
   const payload = {
     name: rName.value.trim(),
     callsign: rCallsign.value.trim().toUpperCase(),
@@ -270,19 +287,27 @@ async function saveRadio() {
       radios.value.push(created)
     }
     radioDialogOpen.value = false
+  } catch (e) {
+    radioSaveError.value = apiErrorText(e, 'Failed to save radio.')
   } finally {
     radioSaving.value = false
   }
 }
 
 async function toggleActive(id: string) {
-  const updated = await toggleRadioActive(id)
-  const idx = radios.value.findIndex((r) => r.id === id)
-  if (idx !== -1) radios.value[idx] = updated
+  try {
+    const updated = await toggleRadioActive(id)
+    const idx = radios.value.findIndex((r) => r.id === id)
+    if (idx !== -1) radios.value[idx] = updated
+  } catch (e) {
+    radioListError.value = apiErrorText(e, 'Failed to toggle radio active state.')
+    setTimeout(() => { radioListError.value = '' }, 4000)
+  }
 }
 
 // Delete (shared confirm dialog handles radios too)
 function promptDeleteRadio(radio: RadioDto) {
+  deleteError.value = ''
   const historyNote = radio.beaconCount > 0
     ? ` This radio has ${radio.beaconCount} beacon records. Deleting will remove all history.`
     : ''
@@ -376,6 +401,8 @@ const gfRadius = ref<number>(500)
 const gfAlertOnEnter = ref(true)
 const gfAlertOnExit = ref(true)
 const gfSaving = ref(false)
+const geofenceSaveError = ref('')
+const geofencesLoadFailed = ref(false)
 
 // Proximity Rules
 const rules = ref<ProximityRuleDto[]>([])
@@ -386,6 +413,8 @@ const prLat = ref<number | null>(null)
 const prLon = ref<number | null>(null)
 const prRadius = ref<number>(1000)
 const prSaving = ref(false)
+const ruleSaveError = ref('')
+const rulesLoadFailed = ref(false)
 
 // Leaflet map for picking coordinates
 let map: L.Map | null = null
@@ -404,6 +433,9 @@ const retentionAprsIsDays = ref(14)
 const retentionOwnDays = ref(0)
 const retentionSaving = ref(false)
 const retentionSaveError = ref('')
+const retentionSaveSuccess = ref(false)
+const maintenanceLoadFailed = ref(false)
+const cleanupRunError = ref('')
 let cleanupPollTimer: ReturnType<typeof setInterval> | null = null
 
 function formatBytes(bytes: number): string {
@@ -427,18 +459,24 @@ async function loadMaintenance() {
     retentionAprsIsDays.value = s.retention.aprsIsDays
     retentionOwnDays.value = s.retention.ownDays
     if (s.isRunning) startCleanupPolling()
-  } catch { /* ignore */ }
+    maintenanceLoadFailed.value = false
+  } catch {
+    maintenanceLoadFailed.value = true
+  }
 }
 
 async function saveRetention() {
   retentionSaving.value = true
   retentionSaveError.value = ''
+  retentionSaveSuccess.value = false
   try {
     await updateRetention({
       rfDays: Math.max(0, Math.floor(retentionRfDays.value || 0)),
       aprsIsDays: Math.max(0, Math.floor(retentionAprsIsDays.value || 0)),
       ownDays: Math.max(0, Math.floor(retentionOwnDays.value || 0)),
     })
+    retentionSaveSuccess.value = true
+    setTimeout(() => { retentionSaveSuccess.value = false }, 3000)
   } catch {
     retentionSaveError.value = 'Failed to save retention settings.'
   } finally {
@@ -465,11 +503,13 @@ function stopCleanupPolling() {
 
 async function runCleanupNow() {
   cleanupRunning.value = true
+  cleanupRunError.value = ''
   try {
     await runCleanup()
     startCleanupPolling()
-  } catch {
+  } catch (e) {
     cleanupRunning.value = false
+    cleanupRunError.value = apiErrorText(e, 'Failed to start cleanup.')
   }
 }
 
@@ -490,7 +530,9 @@ onMounted(async () => {
     aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
     aprsIsFilter.value = s.aprsIsFilter
     deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
-  } catch { /* ignore */ }
+  } catch {
+    settingsLoadFailed.value = true
+  }
   try {
     const status = await getWeatherStatus()
     owmKeyConfigured.value = status.wind.available
@@ -510,10 +552,20 @@ onUnmounted(() => {
 })
 
 async function loadGeofences() {
-  try { geofences.value = await getGeofences() } catch { /* */ }
+  try {
+    geofences.value = await getGeofences()
+    geofencesLoadFailed.value = false
+  } catch {
+    geofencesLoadFailed.value = true
+  }
 }
 async function loadRules() {
-  try { rules.value = await getProximityRules() } catch { /* */ }
+  try {
+    rules.value = await getProximityRules()
+    rulesLoadFailed.value = false
+  } catch {
+    rulesLoadFailed.value = true
+  }
 }
 
 function initMap(containerId: string, forType: 'geofence' | 'rule', defaultLat: number, defaultLon: number) {
@@ -546,6 +598,7 @@ function initMap(containerId: string, forType: 'geofence' | 'rule', defaultLat: 
 
 function openAddGeofence() {
   showAddGeofence.value = true
+  geofenceSaveError.value = ''
   gfName.value = ''
   gfLat.value = null
   gfLon.value = null
@@ -557,6 +610,7 @@ function openAddGeofence() {
 
 function openAddRule() {
   showAddRule.value = true
+  ruleSaveError.value = ''
   prName.value = ''
   prCallsign.value = ''
   prLat.value = null
@@ -568,6 +622,7 @@ function openAddRule() {
 async function saveGeofence() {
   if (!gfName.value || gfLat.value == null || gfLon.value == null) return
   gfSaving.value = true
+  geofenceSaveError.value = ''
   try {
     const gf = await createGeofence({
       name: gfName.value,
@@ -580,6 +635,8 @@ async function saveGeofence() {
     geofences.value.push(gf)
     showAddGeofence.value = false
     if (map) { map.remove(); map = null }
+  } catch (e) {
+    geofenceSaveError.value = apiErrorText(e, 'Failed to save geofence.')
   } finally {
     gfSaving.value = false
   }
@@ -593,6 +650,7 @@ async function removeGeofence(id: number) {
 async function saveRule() {
   if (!prName.value || prLat.value == null || prLon.value == null) return
   prSaving.value = true
+  ruleSaveError.value = ''
   try {
     const rule = await createProximityRule({
       name: prName.value,
@@ -604,6 +662,8 @@ async function saveRule() {
     rules.value.push(rule)
     showAddRule.value = false
     if (map) { map.remove(); map = null }
+  } catch (e) {
+    ruleSaveError.value = apiErrorText(e, 'Failed to save proximity rule.')
   } finally {
     prSaving.value = false
   }
@@ -617,42 +677,64 @@ async function removeRule(id: number) {
 // Confirm delete dialog
 const deleteConfirmOpen = ref(false)
 const deleteConfirmMessage = ref('')
+const deleteError = ref('')
+const deleting = ref(false)
 let deleteConfirmAction: (() => Promise<void>) | null = null
 
 function promptDeleteGeofence(id: number, name: string) {
+  deleteError.value = ''
   deleteConfirmMessage.value = `Delete geofence "${name}"? This cannot be undone.`
   deleteConfirmAction = () => removeGeofence(id)
   deleteConfirmOpen.value = true
 }
 
 function promptDeleteRule(id: number, name: string) {
+  deleteError.value = ''
   deleteConfirmMessage.value = `Delete proximity rule "${name}"? This cannot be undone.`
   deleteConfirmAction = () => removeRule(id)
   deleteConfirmOpen.value = true
 }
 
 async function confirmDelete() {
-  if (deleteConfirmAction) await deleteConfirmAction()
-  deleteConfirmOpen.value = false
-  deleteConfirmAction = null
+  if (!deleteConfirmAction) {
+    deleteConfirmOpen.value = false
+    return
+  }
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    await deleteConfirmAction()
+    deleteConfirmOpen.value = false
+    deleteConfirmAction = null
+  } catch (e) {
+    deleteError.value = apiErrorText(e, 'Delete failed.')
+  } finally {
+    deleting.value = false
+  }
 }
 </script>
 
 <template>
   <div class="settings-view pa-4">
-    <div class="text-h5 font-weight-bold mb-4">Settings</div>
+    <h1 class="text-h5 font-weight-bold mb-4 mt-0">Settings</h1>
 
     <!-- Radios -->
     <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Radios</span>
+      <h2 class="text-h6 ma-0">Radios</h2>
       <v-spacer />
       <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRadio">
         Add Radio
       </v-btn>
     </div>
 
+    <v-alert v-if="radioListError" type="error" variant="tonal" density="compact" class="mb-2">
+      {{ radioListError }}
+    </v-alert>
     <v-card variant="outlined" class="mb-6">
-      <div v-if="radios.length === 0" class="text-center text-medium-emphasis py-4">
+      <v-alert v-if="radiosLoadFailed" type="error" variant="tonal" density="compact" class="ma-2">
+        Failed to load radios — reload the page to retry.
+      </v-alert>
+      <div v-else-if="radios.length === 0" class="text-center text-medium-emphasis py-4">
         No radios configured
       </div>
       <template v-else>
@@ -678,6 +760,7 @@ async function confirmDelete() {
                 icon="mdi-pencil"
                 size="x-small"
                 variant="text"
+                aria-label="Edit radio"
                 @click="openEditRadio(radio)"
               />
               <v-btn
@@ -685,6 +768,7 @@ async function confirmDelete() {
                 size="x-small"
                 variant="text"
                 color="error"
+                aria-label="Delete radio"
                 @click="promptDeleteRadio(radio)"
               />
             </div>
@@ -796,6 +880,9 @@ async function confirmDelete() {
             />
           </div>
         </v-card-text>
+        <v-alert v-if="radioSaveError" type="error" variant="tonal" density="compact" class="mx-4 mb-2">
+          {{ radioSaveError }}
+        </v-alert>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="radioDialogOpen = false">Cancel</v-btn>
@@ -813,7 +900,7 @@ async function confirmDelete() {
 
     <!-- API Keys -->
     <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Map API Keys</span>
+      <h2 class="text-h6 ma-0">Map API Keys</h2>
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
@@ -850,7 +937,7 @@ async function confirmDelete() {
 
     <!-- Weather Overlays -->
     <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Weather Overlays</span>
+      <h2 class="text-h6 ma-0">Weather Overlays</h2>
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
@@ -953,7 +1040,7 @@ async function confirmDelete() {
 
     <!-- Units -->
     <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Units</span>
+      <h2 class="text-h6 ma-0">Units</h2>
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
@@ -974,7 +1061,7 @@ async function confirmDelete() {
 
     <!-- Geofences -->
     <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Geofences</span>
+      <h2 class="text-h6 ma-0">Geofences</h2>
       <v-spacer />
       <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddGeofence">
         Add Geofence
@@ -982,7 +1069,10 @@ async function confirmDelete() {
     </div>
 
     <v-card variant="outlined" class="mb-6">
-      <div v-if="geofences.length === 0" class="text-center text-medium-emphasis py-4">
+      <v-alert v-if="geofencesLoadFailed" type="error" variant="tonal" density="compact" class="ma-2">
+        Failed to load geofences — reload the page to retry.
+      </v-alert>
+      <div v-else-if="geofences.length === 0" class="text-center text-medium-emphasis py-4">
         No geofences defined
       </div>
       <v-list v-else density="compact">
@@ -1001,7 +1091,7 @@ async function confirmDelete() {
             <span v-if="gf.alertOnExit" class="ml-1 text-caption">↑Exit</span>
           </v-list-item-subtitle>
           <template #append>
-            <v-btn icon="mdi-delete" size="x-small" variant="text" color="error" @click="promptDeleteGeofence(gf.id, gf.name)" />
+            <v-btn icon="mdi-delete" size="x-small" variant="text" color="error" aria-label="Delete geofence" @click="promptDeleteGeofence(gf.id, gf.name)" />
           </template>
         </v-list-item>
       </v-list>
@@ -1031,6 +1121,9 @@ async function confirmDelete() {
           <div class="text-caption text-medium-emphasis mb-1">Click on the map to set the centre point</div>
           <div id="gf-map" style="height: 280px; border-radius: 4px" />
         </v-card-text>
+        <v-alert v-if="geofenceSaveError" type="error" variant="tonal" density="compact" class="mx-4 mb-2">
+          {{ geofenceSaveError }}
+        </v-alert>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="showAddGeofence = false">Cancel</v-btn>
@@ -1048,7 +1141,7 @@ async function confirmDelete() {
 
     <!-- Proximity Rules -->
     <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Proximity Rules</span>
+      <h2 class="text-h6 ma-0">Proximity Rules</h2>
       <v-spacer />
       <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRule">
         Add Rule
@@ -1056,7 +1149,10 @@ async function confirmDelete() {
     </div>
 
     <v-card variant="outlined">
-      <div v-if="rules.length === 0" class="text-center text-medium-emphasis py-4">
+      <v-alert v-if="rulesLoadFailed" type="error" variant="tonal" density="compact" class="ma-2">
+        Failed to load proximity rules — reload the page to retry.
+      </v-alert>
+      <div v-else-if="rules.length === 0" class="text-center text-medium-emphasis py-4">
         No proximity rules defined
       </div>
       <v-list v-else density="compact">
@@ -1074,7 +1170,7 @@ async function confirmDelete() {
             {{ formatDistance(rule.radiusMetres / 1000) }}
           </v-list-item-subtitle>
           <template #append>
-            <v-btn icon="mdi-delete" size="x-small" variant="text" color="error" @click="promptDeleteRule(rule.id, rule.name)" />
+            <v-btn icon="mdi-delete" size="x-small" variant="text" color="error" aria-label="Delete rule" @click="promptDeleteRule(rule.id, rule.name)" />
           </template>
         </v-list-item>
       </v-list>
@@ -1106,6 +1202,9 @@ async function confirmDelete() {
           <div class="text-caption text-medium-emphasis mb-1">Click on the map to set the centre point</div>
           <div id="pr-map" style="height: 280px; border-radius: 4px" />
         </v-card-text>
+        <v-alert v-if="ruleSaveError" type="error" variant="tonal" density="compact" class="mx-4 mb-2">
+          {{ ruleSaveError }}
+        </v-alert>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="showAddRule = false">Cancel</v-btn>
@@ -1123,11 +1222,14 @@ async function confirmDelete() {
 
     <!-- Station -->
     <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Station</span>
+      <h2 class="text-h6 ma-0">Station</h2>
       <v-progress-circular v-if="stationSaving" indeterminate size="16" width="2" class="ml-3" />
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
+      <v-alert v-if="settingsLoadFailed" type="warning" variant="tonal" density="compact" class="mb-3">
+        Settings failed to load — the values below may be stale, and saving may overwrite your stored settings. Reload the page to retry.
+      </v-alert>
       <v-text-field
         v-model="stationCallsign"
         label="Callsign (with optional SSID)"
@@ -1169,7 +1271,7 @@ async function confirmDelete() {
           style="max-width: 200px"
         />
       </div>
-      <v-btn color="primary" size="small" variant="tonal" :loading="stationSaving" @click="saveStationSettings">
+      <v-btn color="primary" size="small" variant="tonal" :loading="stationSaving" :disabled="settingsLoadFailed" @click="saveStationSettings">
         Save
       </v-btn>
       <v-alert v-if="stationSaveError" type="error" variant="tonal" density="compact" class="mt-2">
@@ -1185,7 +1287,7 @@ async function confirmDelete() {
 
     <!-- QRZ Lookups -->
     <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">QRZ Lookups</span>
+      <h2 class="text-h6 ma-0">QRZ Lookups</h2>
       <v-progress-circular v-if="qrzSaving" indeterminate size="16" width="2" class="ml-3" />
     </div>
 
@@ -1218,7 +1320,7 @@ async function confirmDelete() {
         hide-details
         class="mb-2"
       />
-      <v-btn color="primary" size="small" variant="tonal" :loading="qrzSaving" @click="saveQrzCredentials">
+      <v-btn color="primary" size="small" variant="tonal" :loading="qrzSaving" :disabled="settingsLoadFailed" @click="saveQrzCredentials">
         Save
       </v-btn>
       <v-alert v-if="qrzSaveError" type="error" variant="tonal" density="compact" class="mt-2">
@@ -1231,7 +1333,7 @@ async function confirmDelete() {
 
     <!-- Messaging -->
     <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Messaging</span>
+      <h2 class="text-h6 ma-0">Messaging</h2>
       <v-progress-circular
         v-if="outboundPathSaving"
         indeterminate
@@ -1278,7 +1380,7 @@ async function confirmDelete() {
 
     <!-- APRS-IS -->
     <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">APRS-IS</span>
+      <h2 class="text-h6 ma-0">APRS-IS</h2>
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
@@ -1368,10 +1470,13 @@ async function confirmDelete() {
 
     <!-- Database maintenance -->
     <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Database Maintenance</span>
+      <h2 class="text-h6 ma-0">Database Maintenance</h2>
     </div>
 
     <v-card variant="outlined" class="mb-6 pa-4">
+      <v-alert v-if="maintenanceLoadFailed" type="error" variant="tonal" density="compact" class="mb-3">
+        Failed to load maintenance status — reload the page to retry.
+      </v-alert>
       <div class="d-flex align-center mb-4">
         <div>
           <div class="text-caption text-medium-emphasis">Database size</div>
@@ -1388,6 +1493,10 @@ async function confirmDelete() {
           {{ cleanupRunning ? 'Cleaning…' : 'Run Cleanup Now' }}
         </v-btn>
       </div>
+
+      <v-alert v-if="cleanupRunError" type="error" variant="tonal" density="compact" class="mb-3">
+        {{ cleanupRunError }}
+      </v-alert>
 
       <div class="text-body-2 mb-2">
         Packet retention — how long to keep received packets before pruning.
@@ -1439,6 +1548,9 @@ async function confirmDelete() {
       <v-alert v-if="retentionSaveError" type="error" variant="tonal" density="compact" class="mt-2">
         {{ retentionSaveError }}
       </v-alert>
+      <v-alert v-if="retentionSaveSuccess" type="success" variant="tonal" density="compact" class="mt-2">
+        Retention settings saved.
+      </v-alert>
 
       <div class="d-flex ga-3 align-center mt-3 flex-wrap">
         <v-text-field
@@ -1462,6 +1574,9 @@ async function confirmDelete() {
       </div>
       <v-alert v-if="cleanupScheduleError" type="error" variant="tonal" density="compact" class="mt-2">
         {{ cleanupScheduleError }}
+      </v-alert>
+      <v-alert v-if="cleanupScheduleSaveSuccess" type="success" variant="tonal" density="compact" class="mt-2">
+        Cleanup schedule saved.
       </v-alert>
       <div class="text-caption text-medium-emphasis mt-2">
         Cleanup runs automatically
@@ -1498,10 +1613,13 @@ async function confirmDelete() {
           Confirm Delete
         </v-card-title>
         <v-card-text>{{ deleteConfirmMessage }}</v-card-text>
+        <v-alert v-if="deleteError" type="error" variant="tonal" density="compact" class="mx-4 mb-2">
+          {{ deleteError }}
+        </v-alert>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="deleteConfirmOpen = false">Cancel</v-btn>
-          <v-btn color="error" variant="tonal" @click="confirmDelete">Delete</v-btn>
+          <v-btn color="error" variant="tonal" :loading="deleting" @click="confirmDelete">Delete</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

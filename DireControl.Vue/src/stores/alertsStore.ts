@@ -108,6 +108,7 @@ export const useAlertsStore = defineStore('alerts', () => {
     fetchAlerts,
     acknowledge,
     onAlertReceived,
+    showToast,
     dismissToast,
     startSignalR,
   }

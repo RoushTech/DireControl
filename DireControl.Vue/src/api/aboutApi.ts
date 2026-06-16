@@ -2,6 +2,7 @@ import http from './axios'
 
 export interface AboutDto {
   version: string
+  serverTime: string
 }
 
 export async function getAbout(): Promise<AboutDto> {

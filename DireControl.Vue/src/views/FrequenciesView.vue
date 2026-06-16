@@ -55,6 +55,7 @@ onMounted(load)
         variant="text"
         size="small"
         :loading="loading"
+        aria-label="Refresh"
         @click="load"
       />
     </div>

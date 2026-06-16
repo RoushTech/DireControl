@@ -166,6 +166,7 @@ const virtualItems = computed<VirtualItem[]>(() => {
         :color="showStale ? 'brown-lighten-1' : 'grey'"
         class="ml-1"
         style="cursor:pointer"
+        link
         @click="emit('update:showStale', !showStale)"
       >
         {{ staleCount }} stale
@@ -177,6 +178,7 @@ const virtualItems = computed<VirtualItem[]>(() => {
         ref="searchFieldRef"
         v-model="searchText"
         placeholder="Search callsign…"
+        aria-label="Search callsign"
         density="compact"
         variant="outlined"
         hide-details
@@ -245,7 +247,11 @@ const virtualItems = computed<VirtualItem[]>(() => {
             'station-row--selected': item.station.callsign === selectedCallsign,
             'station-row--stale': item.stale,
           }"
+          role="button"
+          tabindex="0"
           @click="emit('selectStation', item.station.callsign)"
+          @keydown.enter="emit('selectStation', item.station.callsign)"
+          @keydown.space.prevent="emit('selectStation', item.station.callsign)"
         >
           <div :style="symbolStyle(item.station)" class="station-icon flex-shrink-0" :class="{ 'stale-icon': item.stale }" />
           <div class="station-info">
@@ -324,6 +330,11 @@ const virtualItems = computed<VirtualItem[]>(() => {
 
 .station-row:hover {
   background: rgba(var(--v-theme-on-surface), 0.05);
+}
+
+.station-row:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 
 .station-row--selected {

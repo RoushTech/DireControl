@@ -12,14 +12,19 @@ const open = defineModel<boolean>()
 
 const beacons = ref<OwnBeaconHistoryItemDto[]>([])
 const loading = ref(false)
+const loadError = ref(false)
 const expanded = ref<number[]>([])
 
 watch(open, async (val) => {
   if (val) {
     loading.value = true
     expanded.value = []
+    beacons.value = []
+    loadError.value = false
     try {
       beacons.value = await getBeaconHistory(props.radioId, 20)
+    } catch {
+      loadError.value = true
     } finally {
       loading.value = false
     }
@@ -68,7 +73,7 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
         <v-icon class="mr-2" size="20">mdi-radio-tower</v-icon>
         Beacon History — {{ radioName }}
         <v-spacer />
-        <v-btn icon="mdi-close" variant="text" size="small" @click="open = false" />
+        <v-btn icon="mdi-close" variant="text" size="small" aria-label="Close" @click="open = false" />
       </v-card-title>
 
       <v-divider />
@@ -76,6 +81,10 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
       <v-card-text style="max-height: 70vh; overflow-y: auto">
         <div v-if="loading" class="d-flex justify-center py-6">
           <v-progress-circular indeterminate />
+        </div>
+
+        <div v-else-if="loadError" class="text-center text-error py-6">
+          Failed to load beacon history — close and reopen to retry.
         </div>
 
         <div v-else-if="beacons.length === 0" class="text-center text-medium-emphasis py-6">
@@ -95,7 +104,13 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
           </thead>
           <tbody>
             <template v-for="beacon in beacons" :key="beacon.id">
-              <tr class="cursor-pointer" @click="toggleExpand(beacon.id)">
+              <tr
+                class="cursor-pointer"
+                role="button"
+                tabindex="0"
+                @click="toggleExpand(beacon.id)"
+                @keydown.enter="toggleExpand(beacon.id)"
+              >
                 <td>
                   <v-icon size="14" :class="isExpanded(beacon.id) ? 'text-primary' : 'text-medium-emphasis'">
                     {{ isExpanded(beacon.id) ? 'mdi-chevron-down' : 'mdi-chevron-right' }}

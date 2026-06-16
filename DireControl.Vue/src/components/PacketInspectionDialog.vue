@@ -154,7 +154,7 @@ function heardViaLabel(p: PacketDto): string {
           >
             {{ copyFeedback ? 'Copied ✓' : 'Copy Raw' }}
           </v-btn>
-          <v-btn icon="mdi-close" size="small" variant="text" @click="onClose" />
+          <v-btn icon="mdi-close" size="small" variant="text" aria-label="Close" @click="onClose" />
         </div>
       </div>
 
@@ -215,7 +215,11 @@ function heardViaLabel(p: PacketDto): string {
                         v-if="index === 0"
                         class="hop-node hop-node--source"
                         :title="`Select ${entry.callsign}`"
+                        role="button"
+                        tabindex="0"
                         @click="onHopClick(entry.callsign)"
+                        @keydown.enter="onHopClick(entry.callsign)"
+                        @keydown.space.prevent="onHopClick(entry.callsign)"
                       >
                         <span class="hop-callsign">{{ entry.callsign }} ✓</span>
                       </span>
@@ -223,7 +227,11 @@ function heardViaLabel(p: PacketDto): string {
                         v-else-if="entry.known"
                         class="hop-node hop-node--known"
                         :title="`Select ${entry.callsign}`"
+                        role="button"
+                        tabindex="0"
                         @click="onHopClick(entry.callsign)"
+                        @keydown.enter="onHopClick(entry.callsign)"
+                        @keydown.space.prevent="onHopClick(entry.callsign)"
                       >
                         <span class="hop-callsign">{{ entry.callsign }} ✓</span>
                         <span v-if="entry.aliasUsed" class="hop-alias">via {{ entry.aliasUsed }}</span>
@@ -463,6 +471,12 @@ function heardViaLabel(p: PacketDto): string {
 .hop-node--source:hover,
 .hop-node--known:hover {
   background: rgba(var(--v-theme-primary), 0.14);
+}
+
+.hop-node--source:focus-visible,
+.hop-node--known:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: 1px;
 }
 
 .hop-node--unknown {

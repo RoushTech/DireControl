@@ -84,7 +84,7 @@ function selectSymbol(table: string, code: string) {
         <v-card-title class="d-flex align-center">
           <span>Select APRS Symbol</span>
           <v-spacer />
-          <v-btn icon="mdi-close" variant="text" size="small" @click="pickerOpen = false" />
+          <v-btn icon="mdi-close" variant="text" size="small" aria-label="Close" @click="pickerOpen = false" />
         </v-card-title>
         <v-divider />
 

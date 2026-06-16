@@ -4,7 +4,8 @@ import { createHubConnection } from '@/composables/useSignalR'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { getAllMessages } from '@/api/messagesApi'
 import { getSettings, getStations } from '@/api/stationsApi'
-import { formatUtc, timeAgo } from '@/utils/time'
+import { formatLocal, timeAgo } from '@/utils/time'
+import { apiErrorText } from '@/utils/apiError'
 import type {
   AllMessagePacketDto,
   InboxMessageDto,
@@ -86,6 +87,7 @@ const outboxMessages = computed(() =>
 )
 
 const actionLoading = ref<Record<number, 'retry' | 'reset' | 'cancel' | null>>({})
+const inboxLoadFailed = ref(false)
 
 function secondsUntilRetry(msg: InboxMessageDto): number {
   if (!msg.nextRetryAt) return 0
@@ -111,7 +113,9 @@ async function doRetryNow(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'retry'
   try {
     await store.retryNow(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch {
+    showErrorToast('Retry failed — is the API reachable?')
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -133,7 +137,9 @@ async function confirmReset() {
   actionLoading.value[msg.id] = 'reset'
   try {
     await store.resetRetry(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch {
+    showErrorToast('Reset failed — is the API reachable?')
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -142,7 +148,9 @@ async function doCancel(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'cancel'
   try {
     await store.cancelRetry(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch {
+    showErrorToast('Cancel failed — is the API reachable?')
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -153,6 +161,12 @@ const failedToastText = ref('')
 
 function showFailedToast(data: MessageFailedDto) {
   failedToastText.value = `Message to ${data.toCallsign} failed after ${data.retryCount} attempts — no ACK received.`
+  failedToast.value = true
+}
+
+/** Generic error variant of the failed-message toast, reusing the same snackbar. */
+function showErrorToast(text: string) {
+  failedToastText.value = text
   failedToast.value = true
 }
 
@@ -207,8 +221,8 @@ async function doSend() {
     })
     composeOpen.value = false
     activeTab.value = 'outbox'
-  } catch {
-    sendError.value = 'Failed to send. Is Direwolf connected?'
+  } catch (e) {
+    sendError.value = apiErrorText(e, 'Failed to send. Is Direwolf connected?')
   } finally {
     sending.value = false
   }
@@ -239,7 +253,11 @@ watch(() => uiStore.pendingComposeOpen, (pending) => {
 // Inbox actions
 async function onRowClick(message: InboxMessageDto) {
   if (!message.isRead) {
-    await store.markRead(message.id)
+    try {
+      await store.markRead(message.id)
+    } catch (e) {
+      console.warn('Failed to mark message as read', e)
+    }
   }
 }
 
@@ -292,7 +310,8 @@ onMounted(async () => {
     allStations.value = stations
   } catch { /* ignore */ }
 
-  await Promise.all([store.fetchInbox(), fetchAllMessages()])
+  const results = await Promise.allSettled([store.fetchInbox(), fetchAllMessages()])
+  if (results[0].status === 'rejected') inboxLoadFailed.value = true
   await hub.start()
 })
 
@@ -312,7 +331,7 @@ function replyTo(message: InboxMessageDto) {
     <v-row no-gutters align="center" class="mb-3">
       <v-col>
         <div class="d-flex align-center gap-2">
-          <span class="text-h6">Messages</span>
+          <h1 class="text-h6 ma-0">Messages</h1>
           <v-chip
             v-if="store.unreadCount > 0"
             color="error"
@@ -379,7 +398,10 @@ function replyTo(message: InboxMessageDto) {
               :key="msg.id"
               :class="{ 'font-weight-bold': !msg.isRead }"
               style="cursor: pointer"
+              role="button"
+              tabindex="0"
               @click="onRowClick(msg)"
+              @keydown.enter="onRowClick(msg)"
             >
               <td>
                 <a
@@ -392,7 +414,7 @@ function replyTo(message: InboxMessageDto) {
                 {{ msg.body }}
               </td>
               <td class="text-no-wrap">
-                <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
+                <span :title="formatLocal(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
               </td>
               <td>
                 <v-chip
@@ -409,11 +431,22 @@ function replyTo(message: InboxMessageDto) {
                   icon="mdi-reply"
                   size="x-small"
                   variant="text"
+                  aria-label="Reply"
                   @click.stop="replyTo(msg)"
                 />
               </td>
             </tr>
-            <tr v-if="inboundMessages.length === 0">
+            <tr v-if="store.loading">
+              <td colspan="5" class="text-center text-medium-emphasis py-6">
+                Loading…
+              </td>
+            </tr>
+            <tr v-else-if="inboxLoadFailed && inboundMessages.length === 0">
+              <td colspan="5" class="text-center text-error py-6">
+                Failed to load messages — reload the page to retry.
+              </td>
+            </tr>
+            <tr v-else-if="inboundMessages.length === 0">
               <td colspan="5" class="text-center text-medium-emphasis py-6">
                 No messages yet.
               </td>
@@ -457,7 +490,7 @@ function replyTo(message: InboxMessageDto) {
                   v-if="msg.lastSentAt"
                   class="text-caption text-medium-emphasis ml-1"
                 >
-                  · Sent {{ formatUtc(msg.lastSentAt) }}
+                  · Sent {{ formatLocal(msg.lastSentAt) }}
                 </span>
               </td>
               <td class="text-no-wrap">
@@ -497,7 +530,17 @@ function replyTo(message: InboxMessageDto) {
                 </v-btn>
               </td>
             </tr>
-            <tr v-if="outboxMessages.length === 0">
+            <tr v-if="store.loading">
+              <td colspan="4" class="text-center text-medium-emphasis py-6">
+                Loading…
+              </td>
+            </tr>
+            <tr v-else-if="inboxLoadFailed && outboxMessages.length === 0">
+              <td colspan="4" class="text-center text-error py-6">
+                Failed to load messages — reload the page to retry.
+              </td>
+            </tr>
+            <tr v-else-if="outboxMessages.length === 0">
               <td colspan="4" class="text-center text-medium-emphasis py-6">
                 No outbound messages.
               </td>
@@ -562,7 +605,7 @@ function replyTo(message: InboxMessageDto) {
                 v-for="msg in allItems"
                 :key="msg.packetId"
                 :class="{
-                  'bg-blue-lighten-5': msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
+                  'row-addressed-to-us': msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
                 }"
               >
                 <td>{{ msg.fromCallsign }}</td>
@@ -571,7 +614,7 @@ function replyTo(message: InboxMessageDto) {
                   {{ msg.body }}
                 </td>
                 <td class="text-no-wrap">
-                  <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
+                  <span :title="formatLocal(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
                 </td>
               </tr>
               <tr v-if="allItems.length === 0">
@@ -600,7 +643,7 @@ function replyTo(message: InboxMessageDto) {
     </v-window>
 
     <!-- Compose Dialog -->
-    <v-dialog v-model="composeOpen" max-width="520" @keydown.esc="composeOpen = false">
+    <v-dialog v-model="composeOpen" max-width="520" persistent @keydown.esc="composeOpen = false">
       <v-card>
         <v-card-title class="d-flex align-center">
           <v-icon class="mr-2">mdi-message-text-outline</v-icon>
@@ -754,5 +797,14 @@ function replyTo(message: InboxMessageDto) {
   height: 100%;
   padding: 16px;
   overflow-y: auto;
+}
+
+.row-addressed-to-us {
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+tbody tr:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 </style>

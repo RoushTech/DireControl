@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { ALERT_TYPE_COLORS } from '@/types/alert'
-import { formatUtc, timeAgo } from '@/utils/time'
+import { formatLocal, timeAgo } from '@/utils/time'
 
 const router = useRouter()
 const alertsStore = useAlertsStore()
@@ -12,9 +12,15 @@ const stationSelection = useStationSelectionStore()
 
 const typeFilter = ref<string>('')
 const showAcknowledged = ref(true)
+const loadError = ref(false)
+const ackingId = ref<number | null>(null)
 
-onMounted(() => {
-  alertsStore.fetchAlerts()
+onMounted(async () => {
+  try {
+    await alertsStore.fetchAlerts()
+  } catch {
+    loadError.value = true
+  }
 })
 
 const filteredAlerts = computed(() => {
@@ -42,7 +48,14 @@ function alertDetailText(alert: (typeof alertsStore.alerts)[0]): string {
 }
 
 async function acknowledge(id: number) {
-  await alertsStore.acknowledge(id)
+  ackingId.value = id
+  try {
+    await alertsStore.acknowledge(id)
+  } catch {
+    alertsStore.showToast('Failed to acknowledge alert — is the API reachable?', 'error')
+  } finally {
+    ackingId.value = null
+  }
 }
 
 function goToStation(callsign: string) {
@@ -55,7 +68,7 @@ function goToStation(callsign: string) {
   <div class="alerts-view">
     <!-- Toolbar -->
     <div class="alerts-toolbar pa-3 d-flex align-center ga-3 flex-wrap">
-      <span class="text-h6 font-weight-bold">Alert Log</span>
+      <h1 class="text-h6 font-weight-bold ma-0">Alert Log</h1>
 
       <v-select
         v-model="typeFilter"
@@ -90,10 +103,22 @@ function goToStation(callsign: string) {
 
     <v-divider />
 
+    <v-progress-linear v-if="alertsStore.loading" indeterminate color="primary" />
+
     <!-- Alert list -->
     <div class="alerts-list">
+      <v-alert
+        v-if="loadError"
+        type="error"
+        variant="tonal"
+        density="compact"
+        class="ma-3"
+      >
+        Failed to load alerts — reload the page to retry.
+      </v-alert>
+
       <div
-        v-if="filteredAlerts.length === 0"
+        v-else-if="!alertsStore.loading && filteredAlerts.length === 0"
         class="text-center text-medium-emphasis py-8"
       >
         No alerts
@@ -119,7 +144,11 @@ function goToStation(callsign: string) {
           <!-- Callsign -->
           <span
             class="callsign-link font-weight-medium"
+            role="button"
+            tabindex="0"
             @click="goToStation(alert.callsign)"
+            @keydown.enter="goToStation(alert.callsign)"
+            @keydown.space.prevent="goToStation(alert.callsign)"
           >
             {{ alert.callsign }}
           </span>
@@ -127,7 +156,7 @@ function goToStation(callsign: string) {
           <!-- Timestamp -->
           <span
             class="text-caption text-medium-emphasis flex-shrink-0"
-            :title="formatUtc(alert.triggeredAt)"
+            :title="formatLocal(alert.triggeredAt)"
           >
             {{ timeAgo(alert.triggeredAt) }}
           </span>
@@ -148,6 +177,7 @@ function goToStation(callsign: string) {
             size="x-small"
             variant="outlined"
             color="primary"
+            :loading="ackingId === alert.id"
             @click="acknowledge(alert.id)"
           >
             Acknowledge
@@ -203,5 +233,10 @@ function goToStation(callsign: string) {
 
 .callsign-link:hover {
   text-decoration: underline;
+}
+
+.callsign-link:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: 1px;
 }
 </style>

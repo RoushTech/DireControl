@@ -13,7 +13,7 @@ import {
   type PacketBroadcastDto,
   type PacketDto,
 } from '@/types/packet'
-import { timeAgo, formatUtc } from '@/utils/time'
+import { timeAgo, formatLocal } from '@/utils/time'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
 
 const router = useRouter()
@@ -120,6 +120,7 @@ function openPopOut() {
             ref="filterFieldRef"
             v-model="store.callsignFilter"
             placeholder="Callsign filter"
+            aria-label="Callsign filter"
             density="compact"
             variant="outlined"
             hide-details
@@ -131,6 +132,7 @@ function openPopOut() {
           <v-text-field
             v-model="store.textFilter"
             placeholder="Search packets…"
+            aria-label="Search packets"
             density="compact"
             variant="outlined"
             hide-details
@@ -176,7 +178,7 @@ function openPopOut() {
         </v-btn>
         <v-btn
           v-else
-          color="green"
+          color="success"
           size="small"
           variant="tonal"
           @click="store.unpause()"
@@ -229,13 +231,17 @@ function openPopOut() {
         <div
           :key="p.id"
           class="beacon-row"
+          role="button"
+          tabindex="0"
           @click="openInspectDialog(p.id)"
+          @keydown.enter="openInspectDialog(p.id)"
+          @keydown.space.prevent="openInspectDialog(p.id)"
         >
-          <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatUtc(p.receivedAt)">
+          <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatLocal(p.receivedAt)">
             {{ timeAgo(p.receivedAt) }}
           </span>
           <span class="beacon-cell beacon-callsign">
-            <a class="callsign-link" @click.stop.prevent="onCallsignClick(p.callsign)">
+            <a href="#" class="callsign-link" @click.stop.prevent="onCallsignClick(p.callsign)">
               {{ p.callsign }}
             </a>
           </span>
@@ -320,6 +326,11 @@ function openPopOut() {
 
 .beacon-row:hover {
   background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.beacon-row:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: -2px;
 }
 
 .beacon-cell {
