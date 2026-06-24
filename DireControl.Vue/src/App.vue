@@ -5,7 +5,7 @@ import { useTheme } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useUiStore } from '@/stores/uiStore'
-import { getStatus } from '@/api/statusApi'
+import { getStatus, reconnectAprsIs } from '@/api/statusApi'
 import { getAbout } from '@/api/aboutApi'
 import { recordServerSync } from '@/utils/serverTime'
 
@@ -28,6 +28,11 @@ const aprsIsState = ref('Disabled')
 const aprsIsServerName = ref<string | null>(null)
 const aprsIsFilter = ref('')
 const aprsIsSessionPacketCount = ref(0)
+const aprsIsFirstDisconnectedAt = ref<string | null>(null)
+const aprsIsLastConnectAttemptAt = ref<string | null>(null)
+const aprsIsFailedAttempts = ref(0)
+const aprsIsLastError = ref<string | null>(null)
+const aprsIsReconnecting = ref(false)
 const showShortcutsDialog = ref(false)
 const version = ref<string | null>(null)
 const mobileDrawerOpen = ref(false)
@@ -82,9 +87,31 @@ async function pollStatus() {
     aprsIsServerName.value = status.aprsIsServerName
     aprsIsFilter.value = status.aprsIsFilter
     aprsIsSessionPacketCount.value = status.aprsIsSessionPacketCount
+    aprsIsFirstDisconnectedAt.value = status.aprsIsFirstDisconnectedAt
+    aprsIsLastConnectAttemptAt.value = status.aprsIsLastConnectAttemptAt
+    aprsIsFailedAttempts.value = status.aprsIsFailedAttempts
+    aprsIsLastError.value = status.aprsIsLastError
   } catch {
     apiOffline.value = true
     direwolfDisconnected.value = false
+  }
+}
+
+function formatTimestamp(iso: string | null): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString()
+}
+
+async function reconnectAprsIsNow() {
+  aprsIsReconnecting.value = true
+  try {
+    await reconnectAprsIs()
+    // Re-poll shortly after so the UI reflects the new attempt.
+    setTimeout(pollStatus, 1000)
+  } catch {
+    // ignore — next poll will reflect the real state
+  } finally {
+    aprsIsReconnecting.value = false
   }
 }
 
@@ -320,7 +347,7 @@ async function syncServerClock() {
               <span class="ml-1 text-caption desktop-nav">IS</span>
             </v-btn>
           </template>
-          <v-card min-width="240" density="compact">
+          <v-card min-width="280" density="compact">
             <v-card-title class="text-subtitle-2 pb-1">APRS-IS</v-card-title>
             <v-card-text class="pt-0">
               <div class="d-flex align-center mb-1">
@@ -336,7 +363,37 @@ async function syncServerClock() {
               <div class="text-caption text-medium-emphasis mt-1">
                 Session packets: {{ aprsIsSessionPacketCount.toLocaleString() }}
               </div>
+
+              <!-- Disconnection diagnostics -->
+              <template v-if="aprsIsState !== 'Connected'">
+                <v-divider class="my-2" />
+                <div class="text-caption text-medium-emphasis">
+                  First disconnected: {{ formatTimestamp(aprsIsFirstDisconnectedAt) }}
+                </div>
+                <div class="text-caption text-medium-emphasis mt-1">
+                  Last attempt: {{ formatTimestamp(aprsIsLastConnectAttemptAt) }}
+                </div>
+                <div class="text-caption text-medium-emphasis mt-1">
+                  Failed attempts: {{ aprsIsFailedAttempts.toLocaleString() }}
+                </div>
+                <div v-if="aprsIsLastError" class="text-caption text-error mt-1">
+                  Error: {{ aprsIsLastError }}
+                </div>
+              </template>
             </v-card-text>
+            <v-card-actions class="pt-0">
+              <v-spacer />
+              <v-btn
+                size="small"
+                variant="tonal"
+                color="primary"
+                prepend-icon="mdi-refresh"
+                :loading="aprsIsReconnecting"
+                @click="reconnectAprsIsNow"
+              >
+                Reconnect
+              </v-btn>
+            </v-card-actions>
           </v-card>
         </v-menu>
       </template>

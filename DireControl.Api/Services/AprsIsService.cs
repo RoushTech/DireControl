@@ -42,6 +42,7 @@ public sealed class AprsIsService(
                     continue;
                 }
 
+                statusService.RecordConnectAttempt();
                 statusService.SetState(AprsIsConnectionState.Connecting);
                 statusService.SetActiveFilter(settings.AprsIsFilter);
                 statusService.ResetSessionCount();
@@ -57,8 +58,9 @@ public sealed class AprsIsService(
                 // Settings changed or reconnect triggered — loop immediately to re-read settings.
                 continue;
             }
-            catch (AuthFailedException)
+            catch (AuthFailedException ex)
             {
+                statusService.RecordFailure(ex.Message);
                 statusService.SetState(AprsIsConnectionState.AuthFailed);
                 logger.LogError("APRS-IS passcode rejected. Fix the passcode in Settings, then save to reconnect.");
                 // Wait indefinitely for a reconnect trigger (settings change) or app shutdown.
@@ -68,6 +70,7 @@ public sealed class AprsIsService(
             }
             catch (Exception ex)
             {
+                statusService.RecordFailure(ex.Message);
                 statusService.SetState(AprsIsConnectionState.Disconnected);
                 logger.LogError(ex, "APRS-IS disconnected, reconnecting in 30 s");
                 try { await Task.Delay(30_000, ct); }

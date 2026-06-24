@@ -382,6 +382,10 @@ public sealed class StatusDto
     public string? AprsIsServerName { get; init; }
     public string AprsIsFilter { get; init; } = string.Empty;
     public long AprsIsSessionPacketCount { get; init; }
+    public DateTime? AprsIsFirstDisconnectedAt { get; init; }
+    public DateTime? AprsIsLastConnectAttemptAt { get; init; }
+    public int AprsIsFailedAttempts { get; init; }
+    public string? AprsIsLastError { get; init; }
 }
 
 public sealed class SignalPointDto
