@@ -182,7 +182,7 @@ public sealed class PacketReprocessingTests
     /// <summary>Transmitter stand-in: no RF backend available.</summary>
     private sealed class NullFrameTransmitter : IFrameTransmitter
     {
-        public bool TrySend(byte[] ax25Frame) => false;
+        public bool TrySend(byte[] ax25Frame, int channel = 0) => false;
     }
 
     private sealed class ThrowingHubContext : IHubContext<PacketHub>

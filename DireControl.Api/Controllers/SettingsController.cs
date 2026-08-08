@@ -66,27 +66,6 @@ public class SettingsController(
             AprsIsFilter = userSetting.AprsIsFilter,
             DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
             DirewolfEnabled = direwolfOptions.Value.Enabled,
-            ModemEnabled = userSetting.ModemEnabled,
-            ModemCaptureDevice = userSetting.ModemCaptureDevice,
-            ModemKissChannel = userSetting.ModemKissChannel,
-            ModemTxEnabled = userSetting.ModemTxEnabled,
-            ModemPlaybackDevice = userSetting.ModemPlaybackDevice,
-            ModemTxAudioLevelPct = userSetting.ModemTxAudioLevelPct,
-            ModemTxDelayMs = userSetting.ModemTxDelayMs,
-            ModemTxTailMs = userSetting.ModemTxTailMs,
-            ModemPersistence = userSetting.ModemPersistence,
-            ModemSlotTimeMs = userSetting.ModemSlotTimeMs,
-            ModemPttMethod = userSetting.ModemPttMethod,
-            ModemPttSerialPort = userSetting.ModemPttSerialPort,
-            ModemPttSerialUseRts = userSetting.ModemPttSerialUseRts,
-            ModemPttSerialUseDtr = userSetting.ModemPttSerialUseDtr,
-            ModemPttHidDevice = userSetting.ModemPttHidDevice,
-            ModemPttHidPin = userSetting.ModemPttHidPin,
-            ModemPttGpioChip = userSetting.ModemPttGpioChip,
-            ModemPttGpioLine = userSetting.ModemPttGpioLine,
-            ModemPttGpioActiveLow = userSetting.ModemPttGpioActiveLow,
-            ModemPttRigctldHost = userSetting.ModemPttRigctldHost,
-            ModemPttRigctldPort = userSetting.ModemPttRigctldPort,
             DigipeaterEnabled = userSetting.DigipeaterEnabled,
             DigipeaterMaxWideN = userSetting.DigipeaterMaxWideN,
             DigipeaterFillInOnly = userSetting.DigipeaterFillInOnly,
@@ -138,90 +117,6 @@ public class SettingsController(
 
         // The KISS server re-reads its settings on the modem restart trigger;
         // digipeater and iGate read settings per packet.
-        modemRestartTrigger.Trigger();
-
-        return NoContent();
-    }
-
-    [HttpPut("modem")]
-    public async Task<ActionResult> UpdateModemSettings(
-        [FromBody] UpdateModemSettingsRequest request,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(request.ModemCaptureDevice))
-            return BadRequest("Capture device is required (e.g. \"default\").");
-
-        if (request.ModemKissChannel is < 0 or > 15)
-            return BadRequest("KISS channel must be between 0 and 15.");
-
-        if (request.ModemTxEnabled)
-        {
-            if (string.IsNullOrWhiteSpace(request.ModemPlaybackDevice))
-                return BadRequest("Playback device is required when TX is enabled.");
-            if (request.ModemTxAudioLevelPct is < 1 or > 100)
-                return BadRequest("TX audio level must be between 1 and 100 percent.");
-            if (request.ModemTxDelayMs is < 0 or > 2000)
-                return BadRequest("TX delay must be between 0 and 2000 ms.");
-            if (request.ModemTxTailMs is < 0 or > 1000)
-                return BadRequest("TX tail must be between 0 and 1000 ms.");
-            if (request.ModemPersistence is < 0 or > 255)
-                return BadRequest("Persistence must be between 0 and 255.");
-            if (request.ModemSlotTimeMs is < 10 or > 1000)
-                return BadRequest("Slot time must be between 10 and 1000 ms.");
-
-            switch (request.ModemPttMethod)
-            {
-                case PttMethod.SerialRtsDtr when string.IsNullOrWhiteSpace(request.ModemPttSerialPort):
-                    return BadRequest("Serial PTT requires a serial port.");
-                case PttMethod.SerialRtsDtr when request is { ModemPttSerialUseRts: false, ModemPttSerialUseDtr: false }:
-                    return BadRequest("Serial PTT requires at least one of RTS or DTR.");
-                case PttMethod.Cm108 when string.IsNullOrWhiteSpace(request.ModemPttHidDevice):
-                    return BadRequest("CM108 PTT requires a hidraw device.");
-                case PttMethod.Cm108 when request.ModemPttHidPin is < 1 or > 8:
-                    return BadRequest("CM108 GPIO pin must be between 1 and 8.");
-                case PttMethod.Rigctld when string.IsNullOrWhiteSpace(request.ModemPttRigctldHost):
-                    return BadRequest("Rigctld PTT requires a hostname.");
-                case PttMethod.Rigctld when request.ModemPttRigctldPort is < 1 or > 65535:
-                    return BadRequest("Rigctld port must be between 1 and 65535.");
-                case PttMethod.Unknown:
-                    return BadRequest("Choose a PTT method (or None for VOX).");
-            }
-        }
-
-        var setting = await db.UserSettings.FindAsync([1], ct);
-        if (setting is null)
-        {
-            setting = new UserSetting { Id = 1 };
-            db.UserSettings.Add(setting);
-        }
-
-        setting.ModemEnabled = request.ModemEnabled;
-        setting.ModemCaptureDevice = request.ModemCaptureDevice.Trim();
-        setting.ModemKissChannel = request.ModemKissChannel;
-        setting.ModemTxEnabled = request.ModemTxEnabled;
-        setting.ModemPlaybackDevice = string.IsNullOrWhiteSpace(request.ModemPlaybackDevice)
-            ? "default"
-            : request.ModemPlaybackDevice.Trim();
-        setting.ModemTxAudioLevelPct = request.ModemTxAudioLevelPct;
-        setting.ModemTxDelayMs = request.ModemTxDelayMs;
-        setting.ModemTxTailMs = request.ModemTxTailMs;
-        setting.ModemPersistence = request.ModemPersistence;
-        setting.ModemSlotTimeMs = request.ModemSlotTimeMs;
-        setting.ModemPttMethod = request.ModemPttMethod;
-        setting.ModemPttSerialPort = request.ModemPttSerialPort?.Trim();
-        setting.ModemPttSerialUseRts = request.ModemPttSerialUseRts;
-        setting.ModemPttSerialUseDtr = request.ModemPttSerialUseDtr;
-        setting.ModemPttHidDevice = request.ModemPttHidDevice?.Trim();
-        setting.ModemPttHidPin = request.ModemPttHidPin;
-        setting.ModemPttGpioChip = request.ModemPttGpioChip;
-        setting.ModemPttGpioLine = request.ModemPttGpioLine;
-        setting.ModemPttGpioActiveLow = request.ModemPttGpioActiveLow;
-        setting.ModemPttRigctldHost = request.ModemPttRigctldHost.Trim();
-        setting.ModemPttRigctldPort = request.ModemPttRigctldPort;
-
-        await db.SaveChangesAsync(ct);
-
-        // Signal SoundModemService to restart with the new settings.
         modemRestartTrigger.Trigger();
 
         return NoContent();

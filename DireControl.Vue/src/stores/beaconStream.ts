@@ -48,19 +48,30 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
     }
   }
 
+  /**
+   * A packet first heard via APRS-IS was subsequently heard on RF — update it
+   * in place so the stream reflects what the radio actually decoded.
+   */
+  function upgradeSource(id: number, source: PacketBroadcastDto['source']) {
+    for (const list of [displayedPackets.value, pendingPackets.value]) {
+      const entry = list.find((p) => p.id === id)
+      if (entry) entry.source = source
+    }
+  }
+
   const filteredPackets = computed(() => {
     let list = displayedPackets.value
     const cs = callsignFilter.value.trim().toUpperCase()
-    if (cs) list = list.filter(p => p.callsign.toUpperCase().includes(cs))
+    if (cs) list = list.filter((p) => p.callsign.toUpperCase().includes(cs))
     const tf = typeFilter.value
     if (tf) {
-      list = list.filter(p => {
+      list = list.filter((p) => {
         const pt = parsedTypeFromString(p.parsedType)
         return pt === Number(tf)
       })
     }
     const tx = textFilter.value.trim().toLowerCase()
-    if (tx) list = list.filter(p => p.summary.toLowerCase().includes(tx))
+    if (tx) list = list.filter((p) => p.summary.toLowerCase().includes(tx))
     return list
   })
 
@@ -76,5 +87,6 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
     pause,
     unpause,
     seedFromApi,
+    upgradeSource,
   }
 })

@@ -11,27 +11,30 @@ public class ModemController(
     SoundModemService modemService,
     ModemRestartTrigger restartTrigger) : ControllerBase
 {
-    /// <summary>Live status of the native sound modem.</summary>
+    /// <summary>Live status of every radio's modem instance.</summary>
     [HttpGet("status")]
-    public ActionResult<ModemStatusDto> GetStatus()
+    public ActionResult<List<ModemStatusDto>> GetStatus() =>
+        Ok(modemService.Statuses.Select(ToDto).ToList());
+
+    internal static ModemStatusDto ToDto(ModemStatusSnapshot s) => new()
     {
-        var s = modemService.Status;
-        return Ok(new ModemStatusDto
-        {
-            State = s.State,
-            CaptureDevice = s.CaptureDevice,
-            ErrorMessage = s.ErrorMessage,
-            AudioLevel = s.AudioLevel,
-            CarrierDetected = s.CarrierDetected,
-            DecodedFrames = s.DecodedFrames,
-            InvalidFrames = s.InvalidFrames,
-            TxEnabled = s.TxEnabled,
-            Transmitting = s.Transmitting,
-            TransmittedFrames = s.TransmittedFrames,
-            RigFrequencyHz = s.RigFrequencyHz,
-            DecodedByProfile = s.DecodedByProfile,
-        });
-    }
+        RadioId = s.RadioId,
+        RadioName = s.RadioName,
+        FullCallsign = s.FullCallsign,
+        Channel = s.Channel,
+        State = s.State,
+        CaptureDevice = s.CaptureDevice,
+        ErrorMessage = s.ErrorMessage,
+        AudioLevel = s.AudioLevel,
+        CarrierDetected = s.CarrierDetected,
+        DecodedFrames = s.DecodedFrames,
+        InvalidFrames = s.InvalidFrames,
+        TxEnabled = s.TxEnabled,
+        Transmitting = s.Transmitting,
+        TransmittedFrames = s.TransmittedFrames,
+        RigFrequencyHz = s.RigFrequencyHz,
+        DecodedByProfile = s.DecodedByProfile,
+    };
 
     /// <summary>
     /// Devices available for modem configuration: ALSA PCM devices (as

@@ -49,7 +49,7 @@ public sealed class BeaconService(
         var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", radio.BeaconComment);
         var frame = Ax25Encoder.EncodeUiFrame(radio.FullCallsign, info, path);
 
-        if (!transmitter.TrySend(frame))
+        if (!transmitter.TrySend(frame, radio.ChannelNumber))
         {
             logger.LogWarning(
                 "Cannot beacon for {Callsign}: no RF transmit backend available.",

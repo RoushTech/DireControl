@@ -1,19 +1,23 @@
-using DireControl.Api.Controllers.Models;
+using DireControl.Api.Controllers;
 using DireControl.Api.Hubs;
 using DireControl.Enums;
 using Microsoft.AspNetCore.SignalR;
 
 namespace DireControl.Api.Services;
 
-/// <summary>Fast, tiny telemetry payload for live RX/TX meters.</summary>
-public sealed record ModemLevelDto(float AudioLevel, bool CarrierDetected, bool Transmitting);
+/// <summary>Fast, tiny per-radio telemetry payload for live RX/TX meters.</summary>
+public sealed record ModemLevelDto(
+    string RadioId, int Channel, float AudioLevel, bool CarrierDetected, bool Transmitting);
+
+/// <summary>Per-radio spectrum row for the waterfalls.</summary>
+public sealed record ModemSpectrumDto(string RadioId, byte[] Bins);
 
 /// <summary>
-/// Pushes native modem telemetry to browsers over SignalR at three cadences
-/// while the modem runs: audio level / DCD / TX at 10 Hz (live meters), the
-/// waterfall spectrum at 5 Hz, and the full status snapshot at 1 Hz.  While
-/// idle or disabled only status changes are sent, so a quiet modem costs no
-/// traffic.
+/// Pushes native modem telemetry for every radio instance to browsers over
+/// SignalR at three cadences while any modem runs: audio level / DCD / TX at
+/// 10 Hz (live meters), the waterfall spectra at 5 Hz, and the full status
+/// snapshots at 1 Hz.  While idle or disabled only status changes are sent,
+/// so a quiet modem costs no traffic.
 /// </summary>
 public sealed class ModemStatusBroadcaster(
     SoundModemService modemService,
@@ -25,26 +29,37 @@ public sealed class ModemStatusBroadcaster(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        ModemStatusSnapshot? lastSent = null;
+        List<ModemStatusSnapshot>? lastSent = null;
         var tick = 0;
         using var timer = new PeriodicTimer(TickInterval);
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             tick++;
-            var status = modemService.Status;
+            var statuses = modemService.Statuses.ToList();
+            var anyRunning = statuses.Any(s => s.State == ModemState.Running);
 
-            if (status.State == ModemState.Running)
+            if (anyRunning)
             {
                 await hubContext.Clients.All.SendAsync(
                     PacketHub.ModemLevelMethod,
-                    new ModemLevelDto(status.AudioLevel, status.CarrierDetected, status.Transmitting),
+                    statuses
+                        .Where(s => s.State == ModemState.Running)
+                        .Select(s => new ModemLevelDto(
+                            s.RadioId, s.Channel, s.AudioLevel, s.CarrierDetected, s.Transmitting))
+                        .ToList(),
                     stoppingToken);
 
-                if (tick % SpectrumEveryTicks == 0 && modemService.GetSpectrum() is { } spectrum)
+                if (tick % SpectrumEveryTicks == 0)
                 {
-                    await hubContext.Clients.All.SendAsync(
-                        PacketHub.ModemSpectrumMethod, spectrum, stoppingToken);
+                    var spectra = modemService.GetSpectra();
+                    if (spectra.Count > 0)
+                    {
+                        await hubContext.Clients.All.SendAsync(
+                            PacketHub.ModemSpectrumMethod,
+                            spectra.Select(x => new ModemSpectrumDto(x.RadioId, x.Bins)).ToList(),
+                            stoppingToken);
+                    }
                 }
             }
 
@@ -53,27 +68,13 @@ public sealed class ModemStatusBroadcaster(
 
             // While running the counters change constantly — send every status
             // tick.  Otherwise only send when something actually changed.
-            if (status.State != ModemState.Running && status == lastSent)
+            if (!anyRunning && lastSent is not null && statuses.SequenceEqual(lastSent))
                 continue;
-            lastSent = status;
+            lastSent = statuses;
 
             await hubContext.Clients.All.SendAsync(
                 PacketHub.ModemStatusChangedMethod,
-                new ModemStatusDto
-                {
-                    State = status.State,
-                    CaptureDevice = status.CaptureDevice,
-                    ErrorMessage = status.ErrorMessage,
-                    AudioLevel = status.AudioLevel,
-                    CarrierDetected = status.CarrierDetected,
-                    DecodedFrames = status.DecodedFrames,
-                    InvalidFrames = status.InvalidFrames,
-                    TxEnabled = status.TxEnabled,
-                    Transmitting = status.Transmitting,
-                    TransmittedFrames = status.TransmittedFrames,
-                    RigFrequencyHz = status.RigFrequencyHz,
-                    DecodedByProfile = status.DecodedByProfile,
-                },
+                statuses.Select(ModemController.ToDto).ToList(),
                 stoppingToken);
         }
     }

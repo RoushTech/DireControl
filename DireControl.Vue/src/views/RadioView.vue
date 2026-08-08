@@ -7,6 +7,7 @@ import {
   ModemStates,
   modemStateLabels,
   type ModemLevelDto,
+  type ModemSpectrumDto,
   type ModemStatusDto,
 } from '@/api/modemApi'
 import { getStatus, type StatusDto } from '@/api/statusApi'
@@ -26,24 +27,32 @@ import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
 const MAX_FEED = 100
 
 const status = ref<StatusDto | null>(null)
-const modemStatus = ref<ModemStatusDto | null>(null)
+const modemStatuses = ref<ModemStatusDto[]>([])
 const settings = ref<SettingsDto | null>(null)
 const radios = ref<RadioDto[]>([])
 const packets = ref<PacketBroadcastDto[]>([])
 
-// Live meters — updated at 10 Hz over SignalR.
-const audioLevel = ref(0)
-const carrierDetected = ref(false)
-const transmitting = ref(false)
+// Live meters per radio — updated at 10 Hz over SignalR, keyed by radio id.
+const levels = ref<Record<string, ModemLevelDto>>({})
 
-const waterfall = ref<InstanceType<typeof WaterfallCanvas> | null>(null)
+type WaterfallInstance = InstanceType<typeof WaterfallCanvas>
+const waterfalls = new Map<string, WaterfallInstance>()
+
+function setWaterfallRef(radioId: string, el: unknown) {
+  if (el) waterfalls.set(radioId, el as WaterfallInstance)
+  else waterfalls.delete(radioId)
+}
+
 let connection: HubConnection | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 
-const modemRunning = computed(() => modemStatus.value?.state === ModemStates.Running)
+/** Radios without a modem instance — shown in the plain radio list. */
+const radiosWithoutModem = computed(() =>
+  radios.value.filter((r) => !modemStatuses.value.some((m) => m.radioId === r.id)),
+)
 
-const modemStateColor = computed(() => {
-  switch (modemStatus.value?.state) {
+function stateColor(m: ModemStatusDto): string {
+  switch (m.state) {
     case ModemStates.Running:
       return 'green'
     case ModemStates.Error:
@@ -51,18 +60,40 @@ const modemStateColor = computed(() => {
     default:
       return 'grey'
   }
-})
+}
 
-const rigFrequencyMhz = computed(() => {
-  const hz = modemStatus.value?.rigFrequencyHz
-  return hz ? (hz / 1_000_000).toFixed(4) : null
-})
+function radioFor(m: ModemStatusDto): RadioDto | undefined {
+  return radios.value.find((r) => r.id === m.radioId)
+}
 
-const audioLevelColor = computed(() => {
-  if (audioLevel.value > 0.9) return 'error'
-  if (audioLevel.value > 0.05) return 'green'
+/** Rigctld live frequency wins; manual radio frequency is the fallback. */
+function frequencyLabel(m: ModemStatusDto): string | null {
+  if (m.rigFrequencyHz) return `${(m.rigFrequencyHz / 1_000_000).toFixed(4)} MHz`
+  const radio = radioFor(m)
+  if (radio?.frequencyMhz) {
+    const mode = radio.mode ? ` ${radio.mode}` : ''
+    return `${radio.frequencyMhz.toFixed(3)} MHz${mode}`
+  }
+  return null
+}
+
+function levelFor(m: ModemStatusDto): ModemLevelDto {
+  return (
+    levels.value[m.radioId] ?? {
+      radioId: m.radioId,
+      channel: m.channel,
+      audioLevel: m.audioLevel,
+      carrierDetected: m.carrierDetected,
+      transmitting: m.transmitting,
+    }
+  )
+}
+
+function levelColor(level: number): string {
+  if (level > 0.9) return 'error'
+  if (level > 0.05) return 'green'
   return 'grey'
-})
+}
 
 function typeLabel(p: PacketBroadcastDto): string {
   return PACKET_TYPE_LABELS[parsedTypeFromString(p.parsedType)] ?? 'Unknown'
@@ -84,7 +115,7 @@ async function refresh() {
   try {
     const [s, m] = await Promise.all([getStatus(), getModemStatus()])
     status.value = s
-    modemStatus.value = m
+    modemStatuses.value = m
   } catch {
     /* ignore — page shows last known state */
   }
@@ -107,24 +138,31 @@ onMounted(async () => {
 
   connection = new HubConnectionBuilder().withUrl('/hubs/packets').withAutomaticReconnect().build()
 
-  connection.on('modemLevel', (level: ModemLevelDto) => {
-    audioLevel.value = level.audioLevel
-    carrierDetected.value = level.carrierDetected
-    transmitting.value = level.transmitting
+  connection.on('modemLevel', (batch: ModemLevelDto[]) => {
+    for (const level of batch) levels.value[level.radioId] = level
   })
 
-  connection.on('modemSpectrum', (bins: number[] | string) => {
-    waterfall.value?.drawRow(decodeSpectrumPayload(bins))
+  connection.on('modemSpectrum', (batch: ModemSpectrumDto[]) => {
+    for (const spectrum of batch)
+      waterfalls.get(spectrum.radioId)?.drawRow(decodeSpectrumPayload(spectrum.bins))
   })
 
-  connection.on('modemStatusChanged', (s: ModemStatusDto) => {
-    modemStatus.value = s
+  connection.on('modemStatusChanged', (statuses: ModemStatusDto[]) => {
+    modemStatuses.value = statuses
   })
 
   connection.on('packetReceived', (p: PacketBroadcastDto) => {
     packets.value.unshift(p)
     if (packets.value.length > MAX_FEED) packets.value.splice(MAX_FEED)
   })
+
+  connection.on(
+    'packetSourceUpgraded',
+    (upgrade: { id: number; source: PacketBroadcastDto['source'] }) => {
+      const entry = packets.value.find((p) => p.id === upgrade.id)
+      if (entry) entry.source = upgrade.source
+    },
+  )
 
   try {
     await connection.start()
@@ -147,86 +185,87 @@ onUnmounted(() => {
     <div class="radio-layout">
       <!-- ── RF stack column ── -->
       <div class="stack-column">
-        <!-- Sound modem -->
-        <v-card variant="outlined" class="mb-4 pa-4">
-          <div class="d-flex align-center mb-2">
-            <span class="text-subtitle-1 font-weight-medium">Sound Modem</span>
-            <v-chip :color="modemStateColor" size="x-small" variant="tonal" class="ml-2">
-              {{ modemStatus ? (modemStateLabels[modemStatus.state] ?? 'Unknown') : '…' }}
+        <!-- One card per radio with a modem instance -->
+        <v-card v-for="m in modemStatuses" :key="m.radioId" variant="outlined" class="mb-4 pa-4">
+          <div class="d-flex align-center mb-2 flex-wrap ga-1">
+            <span class="text-subtitle-1 font-weight-medium">{{ m.radioName }}</span>
+            <span class="text-caption text-medium-emphasis">{{ m.fullCallsign }}</span>
+            <span class="text-caption text-medium-emphasis">· ch {{ m.channel }}</span>
+            <v-chip :color="stateColor(m)" size="x-small" variant="tonal" class="ml-1">
+              {{ modemStateLabels[m.state] ?? 'Unknown' }}
             </v-chip>
             <v-spacer />
-            <span v-if="modemStatus?.captureDevice" class="text-caption text-medium-emphasis">
-              {{ modemStatus.captureDevice }}
+            <span v-if="m.captureDevice" class="text-caption text-medium-emphasis">
+              {{ m.captureDevice }}
             </span>
           </div>
 
-          <template v-if="modemRunning">
-            <!-- Live meters -->
+          <template v-if="m.state === ModemStates.Running">
             <div class="d-flex align-center ga-3 mb-3">
-              <v-chip :color="carrierDetected ? 'green' : 'grey'" size="small" variant="tonal">
+              <v-chip
+                :color="levelFor(m).carrierDetected ? 'green' : 'grey'"
+                size="small"
+                variant="tonal"
+              >
                 <v-icon start size="14">mdi-arrow-down-bold</v-icon>RX
               </v-chip>
               <v-chip
-                v-if="modemStatus?.txEnabled"
-                :color="transmitting ? 'red' : 'grey'"
+                v-if="m.txEnabled"
+                :color="levelFor(m).transmitting ? 'red' : 'grey'"
                 size="small"
                 variant="tonal"
               >
                 <v-icon start size="14">mdi-arrow-up-bold</v-icon>TX
               </v-chip>
-              <span v-if="rigFrequencyMhz" class="text-body-2 font-weight-medium">
-                {{ rigFrequencyMhz }} MHz
+              <span v-if="frequencyLabel(m)" class="text-body-2 font-weight-medium">
+                {{ frequencyLabel(m) }}
               </span>
             </div>
 
-            <div class="d-flex align-center ga-2 mb-3">
-              <span class="text-caption text-medium-emphasis" style="width: 44px">Audio</span>
+            <div class="d-flex align-center ga-2 mb-3 flex-nowrap">
+              <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
+                >Audio</span
+              >
               <v-progress-linear
-                :model-value="Math.min(100, audioLevel * 100)"
-                :color="audioLevelColor"
+                :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
+                :color="levelColor(levelFor(m).audioLevel)"
                 height="14"
                 rounded
               />
               <span
-                class="text-caption text-medium-emphasis"
-                style="width: 40px; text-align: right"
+                class="text-caption text-medium-emphasis flex-shrink-0"
+                style="width: 48px; text-align: right; white-space: nowrap"
               >
-                {{ (audioLevel * 100).toFixed(0) }}%
+                {{ (levelFor(m).audioLevel * 100).toFixed(0) }}%
               </span>
             </div>
 
-            <WaterfallCanvas ref="waterfall" :height="120" class="mb-2" />
+            <WaterfallCanvas
+              :ref="(el) => setWaterfallRef(m.radioId, el)"
+              :height="100"
+              class="mb-2"
+            />
 
             <div class="text-caption text-medium-emphasis">
-              {{ modemStatus!.decodedFrames.toLocaleString() }} decoded ·
-              {{ modemStatus!.invalidFrames.toLocaleString() }} bad CRC<template
-                v-if="modemStatus!.txEnabled"
+              {{ m.decodedFrames.toLocaleString() }} decoded ·
+              {{ m.invalidFrames.toLocaleString() }} bad CRC<template v-if="m.txEnabled">
+                · {{ m.transmittedFrames.toLocaleString() }} sent</template
               >
-                · {{ modemStatus!.transmittedFrames.toLocaleString() }} sent</template
-              >
-            </div>
-            <div
-              v-if="
-                modemStatus?.decodedByProfile &&
-                Object.keys(modemStatus.decodedByProfile).length > 1
-              "
-              class="text-caption text-medium-emphasis"
-            >
-              Profiles:
-              <span v-for="(count, name) in modemStatus.decodedByProfile" :key="name" class="mr-2">
-                {{ name }}: {{ count.toLocaleString() }}
-              </span>
             </div>
           </template>
           <v-alert
-            v-else-if="modemStatus?.state === ModemStates.Error && modemStatus.errorMessage"
+            v-else-if="m.state === ModemStates.Error && m.errorMessage"
             type="error"
             density="compact"
           >
-            {{ modemStatus.errorMessage }}
+            {{ m.errorMessage }}
           </v-alert>
-          <div v-else class="text-caption text-medium-emphasis">
-            Enable the sound modem in Settings to decode RF here.
+        </v-card>
+
+        <v-card v-if="modemStatuses.length === 0" variant="outlined" class="mb-4 pa-4">
+          <div class="text-subtitle-1 font-weight-medium mb-1">Sound Modem</div>
+          <div class="text-caption text-medium-emphasis">
+            No radios have a modem audio feed configured — enable one in a radio's settings.
           </div>
         </v-card>
 
@@ -283,18 +322,22 @@ onUnmounted(() => {
           </div>
         </v-card>
 
-        <!-- Radios -->
-        <v-card variant="outlined" class="pa-4">
-          <div class="text-subtitle-1 font-weight-medium mb-2">Radios</div>
-          <div v-if="radios.length === 0" class="text-caption text-medium-emphasis">
-            No radios configured
-          </div>
-          <div v-for="radio in radios" :key="radio.id" class="d-flex align-center ga-2 mb-1">
+        <!-- Radios without a modem feed -->
+        <v-card v-if="radiosWithoutModem.length > 0" variant="outlined" class="pa-4">
+          <div class="text-subtitle-1 font-weight-medium mb-2">Other Radios</div>
+          <div
+            v-for="radio in radiosWithoutModem"
+            :key="radio.id"
+            class="d-flex align-center ga-2 mb-1 flex-wrap"
+          >
             <v-chip :color="radio.isActive ? 'green' : 'grey'" size="x-small" variant="tonal">
               {{ radio.fullCallsign }}
             </v-chip>
             <span class="text-body-2">{{ radio.name }}</span>
             <span class="text-caption text-medium-emphasis">ch {{ radio.channelNumber }}</span>
+            <span v-if="radio.frequencyMhz" class="text-caption text-medium-emphasis">
+              · {{ radio.frequencyMhz.toFixed(3) }} MHz{{ radio.mode ? ` ${radio.mode}` : '' }}
+            </span>
           </div>
         </v-card>
       </div>

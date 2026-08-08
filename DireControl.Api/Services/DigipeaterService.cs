@@ -32,10 +32,11 @@ public sealed class DigipeaterService(
     public long DigipeatedFrames => Interlocked.Read(ref _digipeatedFrames);
 
     /// <summary>
-    /// Considers one RF-received frame for digipeating.  Safe to call for
+    /// Considers one RF-received frame for digipeating; repeats go back out
+    /// on the channel (radio) the frame was heard on.  Safe to call for
     /// every ingested frame — all filtering happens here.
     /// </summary>
-    public async Task ConsiderAsync(Ax25Frame frame, CancellationToken ct)
+    public async Task ConsiderAsync(Ax25Frame frame, int channel, CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
@@ -67,7 +68,7 @@ public sealed class DigipeaterService(
         }
 
         var encoded = Ax25Encoder.Encode(rewritten);
-        if (!transmitter.TrySend(encoded))
+        if (!transmitter.TrySend(encoded, channel))
         {
             logger.LogWarning("Cannot digipeat {Source}: no RF transmit backend available.", frame.Source);
             return;

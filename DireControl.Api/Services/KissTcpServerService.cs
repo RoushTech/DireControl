@@ -130,14 +130,15 @@ public sealed class KissTcpServerService(
     private async Task ServeClientAsync(TcpClient client, CancellationToken ct)
     {
         var decoder = new KissDecoder();
-        decoder.FrameReceived += (command, _, payload) =>
+        decoder.FrameReceived += (command, channel, payload) =>
         {
             // Only data frames transmit; TXDELAY/persistence/etc. are accepted
             // and ignored — channel timing is DireControl's own configuration.
+            // The client's channel nibble routes to the matching radio.
             if (command != KissCodec.DataFrameCommand || payload.Length == 0)
                 return;
 
-            if (transmitter.TrySend(payload))
+            if (transmitter.TrySend(payload, channel))
                 logger.LogInformation("KISS client frame queued for TX ({Bytes} bytes).", payload.Length);
             else
                 logger.LogWarning("KISS client frame dropped: no RF transmit backend available.");

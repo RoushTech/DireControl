@@ -36,9 +36,24 @@ public sealed class HdlcDeframer
     /// <summary>Frames dropped due to bad FCS, bad length, or overflow.</summary>
     public long InvalidFrameCount { get; private set; }
 
+    /// <summary>
+    /// Opening flags required before a bad-CRC candidate counts as a damaged
+    /// packet.  Real transmissions start with a TXDelay preamble of many
+    /// flags; random noise essentially never produces two in a row, so this
+    /// keeps the damaged-packet counter meaningful on a noisy channel.
+    /// </summary>
+    private const int MinOpeningFlagsForDamageCount = 2;
+
     // 8-bit delay line; newest bit enters at bit 7, the matured bit leaves from bit 0.
     private byte _delayLine;
     private int _delayCount;
+
+    // Consecutive flags immediately preceding the current frame's content.
+    private int _flagRun;
+
+    // Whether any bit matured since the last flag — aborts clear the assembly
+    // buffers, so this is tracked explicitly to keep the flag run honest.
+    private bool _dataSinceFlag;
 
     // Destuffing / octet assembly state for matured bits.
     private bool _inFrame;
@@ -69,6 +84,8 @@ public sealed class HdlcDeframer
             if (delayWasFull)
                 ConsumeMaturedBit(maturedBit);
             EndFrame();
+            _flagRun = _dataSinceFlag ? 1 : _flagRun + 1;
+            _dataSinceFlag = false;
             _delayCount = 0;
             _inFrame = true;
             ResetAssembly();
@@ -88,11 +105,15 @@ public sealed class HdlcDeframer
         _inFrame = false;
         _delayLine = 0;
         _delayCount = 0;
+        _flagRun = 0;
+        _dataSinceFlag = false;
         ResetAssembly();
     }
 
     private void ConsumeMaturedBit(bool bit)
     {
+        _dataSinceFlag = true;
+
         if (!_inFrame)
             return;
 
@@ -131,8 +152,8 @@ public sealed class HdlcDeframer
         {
             if (_frame.Count >= MaxFrameLengthWithFcs)
             {
-                // Runaway "frame" (noise with no closing flag) — give up on it.
-                InvalidFrameCount++;
+                // Runaway "frame" (noise with no closing flag) — give up on it
+                // silently; this is channel noise, not a damaged packet.
                 _inFrame = false;
                 ResetAssembly();
                 return;
@@ -151,15 +172,21 @@ public sealed class HdlcDeframer
 
         // A valid frame is a whole number of octets within AX.25 size limits
         // and must pass the FCS check.
-        if (_bitPosition == 0 &&
-            _frame.Count is >= MinFrameLengthWithFcs and <= MaxFrameLengthWithFcs &&
+        var plausible = _bitPosition == 0 &&
+            _frame.Count is >= MinFrameLengthWithFcs and <= MaxFrameLengthWithFcs;
+
+        if (plausible &&
             Crc16Ccitt.IsFrameValid(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_frame)))
         {
             ValidFrameCount++;
             FrameReceived?.Invoke(_frame[..^2].ToArray());
         }
-        else if (_frame.Count > 0 || _bitPosition > 0)
+        else if (plausible && _flagRun >= MinOpeningFlagsForDamageCount)
         {
+            // Right shape, wrong checksum, arrived behind a real preamble —
+            // a genuinely damaged packet.  Anything short, misaligned, or
+            // without consecutive opening flags is just channel noise between
+            // spurious flag patterns and is not worth counting.
             InvalidFrameCount++;
         }
     }

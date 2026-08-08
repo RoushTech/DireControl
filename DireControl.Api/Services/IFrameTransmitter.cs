@@ -8,10 +8,12 @@ namespace DireControl.Api.Services;
 public interface IFrameTransmitter
 {
     /// <summary>
-    /// Queues the frame for transmission.  Returns <see langword="false"/>
-    /// when no transmit-capable backend is available.
+    /// Queues the frame for transmission.  <paramref name="channel"/> selects
+    /// the radio (KISS channel number); when no radio matches, any
+    /// TX-capable backend is used.  Returns <see langword="false"/> when
+    /// nothing can transmit.
     /// </summary>
-    bool TrySend(byte[] ax25Frame);
+    bool TrySend(byte[] ax25Frame, int channel = 0);
 }
 
 /// <summary>
@@ -30,9 +32,9 @@ public sealed class FrameTransmitService(
 {
     private SoundModemService? _modemService;
 
-    public bool TrySend(byte[] ax25Frame)
+    public bool TrySend(byte[] ax25Frame, int channel = 0)
     {
         _modemService ??= services.GetRequiredService<SoundModemService>();
-        return _modemService.TryEnqueueTransmit(ax25Frame) || kissConnectionHolder.TrySend(ax25Frame);
+        return _modemService.TryEnqueueTransmit(ax25Frame, channel) || kissConnectionHolder.TrySend(ax25Frame);
     }
 }

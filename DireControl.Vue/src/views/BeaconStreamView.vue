@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { HubConnectionBuilder, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { getPacketsSince } from '@/api/stationsApi'
@@ -47,7 +43,8 @@ function packetDtoToStreamEntry(p: PacketDto): PacketBroadcastDto {
     id: p.id,
     callsign: p.stationCallsign,
     parsedType: PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown',
-    receivedAt: typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
+    receivedAt:
+      typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
     latitude: p.latitude,
     longitude: p.longitude,
     summary: p.comment || (PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown'),
@@ -104,9 +101,22 @@ async function connectSignalR() {
     store.addPacket(packet)
   })
 
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
+  connection.on(
+    'packetSourceUpgraded',
+    (upgrade: { id: number; source: PacketBroadcastDto['source'] }) => {
+      store.upgradeSource(upgrade.id, upgrade.source)
+    },
+  )
+
+  connection.onreconnecting(() => {
+    connectionStatus.value = 'connecting'
+  })
+  connection.onreconnected(() => {
+    connectionStatus.value = 'connected'
+  })
+  connection.onclose(() => {
+    connectionStatus.value = 'disconnected'
+  })
 
   try {
     await connection.start()
@@ -184,7 +194,13 @@ function openPopOut() {
 
       <div class="d-flex align-center ga-2">
         <v-chip
-          :color="connectionStatus === 'connected' ? 'success' : connectionStatus === 'connecting' ? 'warning' : 'error'"
+          :color="
+            connectionStatus === 'connected'
+              ? 'success'
+              : connectionStatus === 'connecting'
+                ? 'warning'
+                : 'error'
+          "
           size="x-small"
           variant="flat"
           label
@@ -203,13 +219,7 @@ function openPopOut() {
         >
           Pause
         </v-btn>
-        <v-btn
-          v-else
-          color="green"
-          size="small"
-          variant="tonal"
-          @click="store.unpause()"
-        >
+        <v-btn v-else color="green" size="small" variant="tonal" @click="store.unpause()">
           <v-icon start>mdi-play</v-icon>
           Unpause
           <v-badge
@@ -236,9 +246,15 @@ function openPopOut() {
 
     <!-- Header row -->
     <div class="beacon-header">
-      <span style="width: 80px" class="text-caption font-weight-medium text-medium-emphasis">Time</span>
-      <span style="width: 110px" class="text-caption font-weight-medium text-medium-emphasis">Callsign</span>
-      <span style="width: 90px" class="text-caption font-weight-medium text-medium-emphasis">Type</span>
+      <span style="width: 80px" class="text-caption font-weight-medium text-medium-emphasis"
+        >Time</span
+      >
+      <span style="width: 110px" class="text-caption font-weight-medium text-medium-emphasis"
+        >Callsign</span
+      >
+      <span style="width: 90px" class="text-caption font-weight-medium text-medium-emphasis"
+        >Type</span
+      >
       <span class="text-caption font-weight-medium text-medium-emphasis">Summary</span>
     </div>
 
@@ -248,19 +264,17 @@ function openPopOut() {
     <div v-if="store.filteredPackets.length === 0" class="text-center text-medium-emphasis py-8">
       No packets heard yet — waiting for Direwolf…
     </div>
-    <v-virtual-scroll
-      v-else
-      class="beacon-list"
-      :items="store.filteredPackets"
-      :item-height="36"
-    >
+    <v-virtual-scroll v-else class="beacon-list" :items="store.filteredPackets" :item-height="36">
       <template #default="{ item: p }">
         <div
           :key="`${p.callsign}-${p.receivedAt}`"
           class="beacon-row"
           @click="openInspectDialog(p.id)"
         >
-          <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatUtc(p.receivedAt)">
+          <span
+            class="beacon-cell beacon-time text-caption text-medium-emphasis"
+            :title="formatUtc(p.receivedAt)"
+          >
             {{ timeAgo(p.receivedAt) }}
           </span>
           <span class="beacon-cell beacon-callsign">

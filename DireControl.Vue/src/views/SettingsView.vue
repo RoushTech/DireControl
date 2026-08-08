@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import L from 'leaflet'
 import {
   getGeofences,
@@ -17,7 +18,7 @@ import {
   deleteRadio,
   toggleRadioActive,
 } from '@/api/radiosApi'
-import type { RadioDto } from '@/types/radio'
+import { defaultRadioModemConfig, type RadioDto, type RadioModemConfig } from '@/types/radio'
 import {
   getSettings,
   updateOutboundPath,
@@ -25,19 +26,7 @@ import {
   updateWeatherApiKeys,
   RadarProvider,
 } from '@/api/stationsApi'
-import {
-  getModemDevices,
-  getModemStatus,
-  updateModemSettings,
-  ModemStates,
-  modemStateLabels,
-  PttMethods,
-  type PttMethod,
-  type ModemDevicesDto,
-  type ModemStatusDto,
-} from '@/api/modemApi'
-import { updateRfServices, decodeSpectrumPayload } from '@/api/modemApi'
-import { HubConnectionBuilder, type HubConnection } from '@microsoft/signalr'
+import { getModemDevices, updateRfServices, PttMethods, type ModemDevicesDto } from '@/api/modemApi'
 import { getWeatherStatus } from '@/api/weatherApi'
 import {
   getMaintenanceStatus,
@@ -49,10 +38,20 @@ import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
 import { getSymbolStyle } from '@/utils/aprsIcon'
 import AprsSymbolPicker from '@/components/AprsSymbolPicker.vue'
-import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
 
 // ─── Units ────────────────────────────────────────────────────────────────────
 const { distanceUnit, formatDistance, setDistanceUnit } = useUnits()
+
+// ─── Tab navigation (deep-linked via ?tab=) ───────────────────────────────────
+const route = useRoute()
+const router = useRouter()
+const TAB_VALUES = ['station', 'radios', 'rf', 'aprsis', 'map', 'zones', 'maintenance']
+const activeTab = ref<string>(
+  TAB_VALUES.includes(route.query.tab as string) ? (route.query.tab as string) : 'station',
+)
+watch(activeTab, (tab) => {
+  router.replace({ query: { ...route.query, tab } })
+})
 
 // ─── Retry settings (read-only display) ──────────────────────────────────────
 const retrySettings = ref<Pick<
@@ -133,34 +132,8 @@ async function saveAprsIsSettings() {
   }
 }
 
-// ─── Sound modem settings ─────────────────────────────────────────────────────
-const modemEnabled = ref(false)
-const modemCaptureDevice = ref('default')
-const modemKissChannel = ref(0)
-const modemTxEnabled = ref(false)
-const modemPlaybackDevice = ref('default')
-const modemTxAudioLevelPct = ref(80)
-const modemTxDelayMs = ref(300)
-const modemTxTailMs = ref(50)
-const modemPersistence = ref(63)
-const modemSlotTimeMs = ref(100)
-const modemPttMethod = ref<PttMethod>(PttMethods.None)
-const modemPttSerialPort = ref('')
-const modemPttSerialUseRts = ref(true)
-const modemPttSerialUseDtr = ref(false)
-const modemPttHidDevice = ref('')
-const modemPttHidPin = ref(3)
-const modemPttGpioChip = ref(0)
-const modemPttGpioLine = ref(0)
-const modemPttGpioActiveLow = ref(false)
-const modemPttRigctldHost = ref('localhost')
-const modemPttRigctldPort = ref(4532)
+// ─── Modem device lists (for the per-radio dialog) ───────────────────────────
 const modemDevices = ref<ModemDevicesDto>({ audio: [], serialPorts: [], hidDevices: [] })
-const modemStatus = ref<ModemStatusDto | null>(null)
-const modemSaving = ref(false)
-const modemSaveError = ref('')
-const modemSaveSuccess = ref(false)
-let modemStatusTimer: ReturnType<typeof setInterval> | null = null
 
 const pttMethodItems = [
   { title: 'None (VOX)', value: PttMethods.None },
@@ -185,96 +158,6 @@ const modemPlaybackDeviceItems = computed(() =>
 const modemHidDeviceItems = computed(() =>
   modemDevices.value.hidDevices.map((d) => ({ title: `${d.path} — ${d.name}`, value: d.path })),
 )
-
-const modemStateColor = computed(() => {
-  switch (modemStatus.value?.state) {
-    case ModemStates.Running:
-      return 'green'
-    case ModemStates.Error:
-      return 'error'
-    default:
-      return 'grey'
-  }
-})
-
-const rigFrequencyMhz = computed(() => {
-  const hz = modemStatus.value?.rigFrequencyHz
-  return hz ? (hz / 1_000_000).toFixed(4) : null
-})
-
-async function refreshModemStatus() {
-  try {
-    modemStatus.value = await getModemStatus()
-  } catch {
-    /* ignore */
-  }
-}
-
-function loadModemSettings(s: SettingsDto) {
-  modemEnabled.value = s.modemEnabled
-  modemCaptureDevice.value = s.modemCaptureDevice
-  modemKissChannel.value = s.modemKissChannel
-  modemTxEnabled.value = s.modemTxEnabled
-  modemPlaybackDevice.value = s.modemPlaybackDevice
-  modemTxAudioLevelPct.value = s.modemTxAudioLevelPct
-  modemTxDelayMs.value = s.modemTxDelayMs
-  modemTxTailMs.value = s.modemTxTailMs
-  modemPersistence.value = s.modemPersistence
-  modemSlotTimeMs.value = s.modemSlotTimeMs
-  modemPttMethod.value = s.modemPttMethod as PttMethod
-  modemPttSerialPort.value = s.modemPttSerialPort ?? ''
-  modemPttSerialUseRts.value = s.modemPttSerialUseRts
-  modemPttSerialUseDtr.value = s.modemPttSerialUseDtr
-  modemPttHidDevice.value = s.modemPttHidDevice ?? ''
-  modemPttHidPin.value = s.modemPttHidPin
-  modemPttGpioChip.value = s.modemPttGpioChip
-  modemPttGpioLine.value = s.modemPttGpioLine
-  modemPttGpioActiveLow.value = s.modemPttGpioActiveLow
-  modemPttRigctldHost.value = s.modemPttRigctldHost
-  modemPttRigctldPort.value = s.modemPttRigctldPort
-}
-
-async function saveModemSettings() {
-  modemSaving.value = true
-  modemSaveError.value = ''
-  modemSaveSuccess.value = false
-  try {
-    await updateModemSettings({
-      modemEnabled: modemEnabled.value,
-      modemCaptureDevice: modemCaptureDevice.value.trim() || 'default',
-      modemKissChannel: modemKissChannel.value,
-      modemTxEnabled: modemTxEnabled.value,
-      modemPlaybackDevice: modemPlaybackDevice.value.trim() || 'default',
-      modemTxAudioLevelPct: modemTxAudioLevelPct.value,
-      modemTxDelayMs: modemTxDelayMs.value,
-      modemTxTailMs: modemTxTailMs.value,
-      modemPersistence: modemPersistence.value,
-      modemSlotTimeMs: modemSlotTimeMs.value,
-      modemPttMethod: modemPttMethod.value,
-      modemPttSerialPort: modemPttSerialPort.value.trim() || null,
-      modemPttSerialUseRts: modemPttSerialUseRts.value,
-      modemPttSerialUseDtr: modemPttSerialUseDtr.value,
-      modemPttHidDevice: modemPttHidDevice.value.trim() || null,
-      modemPttHidPin: modemPttHidPin.value,
-      modemPttGpioChip: modemPttGpioChip.value,
-      modemPttGpioLine: modemPttGpioLine.value,
-      modemPttGpioActiveLow: modemPttGpioActiveLow.value,
-      modemPttRigctldHost: modemPttRigctldHost.value.trim() || 'localhost',
-      modemPttRigctldPort: modemPttRigctldPort.value,
-    })
-    modemSaveSuccess.value = true
-    setTimeout(() => {
-      modemSaveSuccess.value = false
-    }, 3000)
-    await refreshModemStatus()
-  } catch (e: unknown) {
-    const detail = (e as { response?: { data?: unknown } })?.response?.data
-    modemSaveError.value =
-      typeof detail === 'string' && detail ? detail : 'Failed to save modem settings.'
-  } finally {
-    modemSaving.value = false
-  }
-}
 
 // ─── RF services (digipeater / KISS server / iGate) ──────────────────────────
 const digipeaterEnabled = ref(false)
@@ -331,31 +214,6 @@ async function saveRfServices() {
   }
 }
 
-// ─── Waterfall ────────────────────────────────────────────────────────────────
-const waterfall = ref<InstanceType<typeof WaterfallCanvas> | null>(null)
-let waterfallConnection: HubConnection | null = null
-
-async function startWaterfall() {
-  if (waterfallConnection) return
-  waterfallConnection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .build()
-  waterfallConnection.on('modemSpectrum', (bins: number[] | string) => {
-    waterfall.value?.drawRow(decodeSpectrumPayload(bins))
-  })
-  try {
-    await waterfallConnection.start()
-  } catch {
-    /* retried by automatic reconnect on next event loop */
-  }
-}
-
-function stopWaterfall() {
-  waterfallConnection?.stop()
-  waterfallConnection = null
-}
-
 // ─── Radios ───────────────────────────────────────────────────────────────────
 const radios = ref<RadioDto[]>([])
 const radioDialogOpen = ref(false)
@@ -371,6 +229,9 @@ const rNotes = ref('')
 const rBeaconPath = ref('')
 const rBeaconSymbol = ref('')
 const rBeaconComment = ref('')
+const rFrequencyMhz = ref<number | null>(null)
+const rMode = ref('')
+const rModem = ref<RadioModemConfig>(defaultRadioModemConfig())
 
 const radioFormValid = computed(
   () => rName.value.trim().length > 0 && /^[A-Z0-9]{3,6}$/i.test(rCallsign.value.trim()),
@@ -418,6 +279,9 @@ function openAddRadio() {
   rBeaconPath.value = ''
   rBeaconSymbol.value = ''
   rBeaconComment.value = ''
+  rFrequencyMhz.value = null
+  rMode.value = ''
+  rModem.value = defaultRadioModemConfig()
   radioDialogOpen.value = true
 }
 
@@ -432,6 +296,9 @@ function openEditRadio(radio: RadioDto) {
   rBeaconPath.value = radio.beaconPath ?? ''
   rBeaconSymbol.value = radio.beaconSymbol ?? ''
   rBeaconComment.value = radio.beaconComment ?? ''
+  rFrequencyMhz.value = radio.frequencyMhz
+  rMode.value = radio.mode ?? ''
+  rModem.value = { ...radio.modem }
   radioDialogOpen.value = true
 }
 
@@ -448,6 +315,15 @@ async function saveRadio() {
     beaconSymbol: rBeaconSymbol.value.trim() || null,
     beaconComment: rBeaconComment.value.trim() || null,
     expectedIntervalSeconds: rExpectedInterval.value,
+    frequencyMhz: rFrequencyMhz.value,
+    mode: rMode.value.trim() || null,
+    modem: {
+      ...rModem.value,
+      modemCaptureDevice: rModem.value.modemCaptureDevice.trim() || 'default',
+      modemPlaybackDevice: rModem.value.modemPlaybackDevice.trim() || 'default',
+      pttSerialPort: rModem.value.pttSerialPort?.trim() || null,
+      pttHidDevice: rModem.value.pttHidDevice?.trim() || null,
+    },
   }
   try {
     if (editingRadioId.value) {
@@ -694,7 +570,6 @@ onMounted(async () => {
     aprsIsPasscodeComputed.value = s.aprsIsPasscodeComputed
     aprsIsFilter.value = s.aprsIsFilter
     deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
-    loadModemSettings(s)
     loadRfServicesSettings(s)
   } catch {
     /* ignore */
@@ -704,9 +579,6 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
-  await refreshModemStatus()
-  modemStatusTimer = setInterval(refreshModemStatus, 2000)
-  await startWaterfall()
   try {
     const status = await getWeatherStatus()
     owmKeyConfigured.value = status.wind.available
@@ -721,11 +593,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopCleanupPolling()
-  if (modemStatusTimer) {
-    clearInterval(modemStatusTimer)
-    modemStatusTimer = null
-  }
-  stopWaterfall()
   if (map) {
     map.remove()
     map = null
@@ -886,82 +753,837 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="settings-view pa-4">
-    <div class="text-h5 font-weight-bold mb-4">Settings</div>
+  <div class="settings-view">
+    <v-tabs
+      v-model="activeTab"
+      direction="vertical"
+      color="primary"
+      density="comfortable"
+      class="settings-nav"
+    >
+      <v-tab value="station" prepend-icon="mdi-account">Station</v-tab>
+      <v-tab value="radios" prepend-icon="mdi-radio">Radios</v-tab>
+      <v-tab value="rf" prepend-icon="mdi-radio-tower">RF Services</v-tab>
+      <v-tab value="aprsis" prepend-icon="mdi-web">APRS-IS</v-tab>
+      <v-tab value="map" prepend-icon="mdi-map">Map &amp; Weather</v-tab>
+      <v-tab value="zones" prepend-icon="mdi-map-marker-radius">Alert Zones</v-tab>
+      <v-tab value="maintenance" prepend-icon="mdi-database">Maintenance</v-tab>
+    </v-tabs>
 
-    <!-- ================================================================ -->
-    <!-- Radios -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Radios</span>
-      <v-spacer />
-      <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRadio">
-        Add Radio
-      </v-btn>
-    </div>
-
-    <v-card variant="outlined" class="mb-6">
-      <div v-if="radios.length === 0" class="text-center text-medium-emphasis py-4">
-        No radios configured
-      </div>
-      <template v-else>
-        <v-card
-          v-for="radio in radios"
-          :key="radio.id"
-          variant="flat"
-          class="radio-card pa-3 ma-2"
-          rounded="sm"
-          border
-        >
-          <div class="d-flex align-center justify-space-between">
-            <div class="d-flex align-center ga-2">
-              <div
-                v-if="radio.beaconSymbol && radio.beaconSymbol.length >= 2"
-                :style="getSymbolStyle(radio.beaconSymbol[0]!, radio.beaconSymbol[1]!)"
-                class="radio-symbol-icon"
-              />
-              <div class="text-body-1 font-weight-medium">{{ radio.name }}</div>
-            </div>
-            <div class="d-flex align-center ga-1">
-              <v-btn
-                icon="mdi-pencil"
-                size="x-small"
-                variant="text"
-                @click="openEditRadio(radio)"
-              />
-              <v-btn
-                icon="mdi-close"
-                size="x-small"
-                variant="text"
-                color="error"
-                @click="promptDeleteRadio(radio)"
+    <v-tabs-window v-model="activeTab" class="settings-content">
+      <v-tabs-window-item value="station" class="pa-4">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Messaging -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Messaging</span>
+              <v-progress-circular
+                v-if="outboundPathSaving"
+                indeterminate
+                size="16"
+                width="2"
+                class="ml-3"
               />
             </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="text-subtitle-2 font-weight-medium mb-1">Default outbound path</div>
+              <v-text-field
+                v-model="outboundPath"
+                density="compact"
+                variant="outlined"
+                clearable
+                :error-messages="outboundPathError"
+                hide-details="auto"
+                placeholder="e.g. WIDE1-1,WIDE2-1"
+                class="mb-2"
+                style="max-width: 360px"
+                @update:model-value="schedulePathSave"
+              />
+              <div class="d-flex align-center flex-wrap gap-1 mb-3">
+                <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
+                <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE1-1,WIDE2-1')"
+                  >WIDE1-1,WIDE2-1</v-btn
+                >
+                <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE2-1')"
+                  >WIDE2-1</v-btn
+                >
+                <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE1-1')"
+                  >WIDE1-1</v-btn
+                >
+                <v-btn size="x-small" variant="tonal" @click="applyPathPreset('')"
+                  >Direct (no path)</v-btn
+                >
+              </div>
+              <div class="text-body-2 text-medium-emphasis">
+                Added to all outbound messages. <code>WIDE1-1,WIDE2-1</code> is recommended for most
+                fixed and mobile stations. Leave blank to transmit direct with no digipeating.
+              </div>
+              <v-alert v-if="outboundPathSaveError" type="error" density="compact" class="mt-3">
+                {{ outboundPathSaveError }}
+              </v-alert>
+            </v-card>
           </div>
-          <div class="d-flex align-center ga-2 mt-1">
-            <span class="text-caption font-weight-bold">{{ radio.fullCallsign }}</span>
-            <span class="text-caption text-medium-emphasis">·</span>
-            <span class="text-caption text-medium-emphasis">Channel {{ radio.channelNumber }}</span>
-            <span class="text-caption text-medium-emphasis">·</span>
-            <v-chip
-              :color="radio.isActive ? 'green' : 'grey'"
-              size="x-small"
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Message Retry -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Message Retry</span>
+            </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="text-body-2 text-medium-emphasis mb-3">
+                Configure via <code>appsettings.json</code> or
+                <code>appsettings.local.json</code> under the <code>DireControl</code> section.
+              </div>
+              <v-table density="compact">
+                <tbody>
+                  <tr>
+                    <td class="text-body-2 font-weight-medium" style="width: 260px">
+                      Max retry attempts
+                    </td>
+                    <td class="text-body-2">{{ retrySettings?.maxRetryAttempts ?? '—' }}</td>
+                  </tr>
+                  <tr>
+                    <td class="text-body-2 font-weight-medium">Initial retry delay</td>
+                    <td class="text-body-2">
+                      {{
+                        retrySettings != null
+                          ? `${retrySettings.initialRetryDelaySeconds} seconds`
+                          : '—'
+                      }}
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </v-card>
+          </div>
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Units -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Units</span>
+            </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="d-flex align-center ga-6">
+                <span class="text-body-2">Distance units</span>
+                <v-radio-group
+                  :model-value="distanceUnit"
+                  inline
+                  hide-details
+                  density="compact"
+                  @update:model-value="(v) => setDistanceUnit(v as 'km' | 'mi')"
+                >
+                  <v-radio label="Kilometres" value="km" />
+                  <v-radio label="Miles" value="mi" />
+                </v-radio-group>
+              </div>
+            </v-card>
+          </div>
+        </div>
+      </v-tabs-window-item>
+
+      <v-tabs-window-item value="radios" class="pa-4">
+        <div class="settings-single">
+          <!-- Radios -->
+          <div class="section-header d-flex align-center mb-2">
+            <span class="text-h6">Radios</span>
+            <v-spacer />
+            <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRadio">
+              Add Radio
+            </v-btn>
+          </div>
+          <v-card variant="outlined" class="mb-6">
+            <v-table v-if="radios.length > 0" density="comfortable">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Callsign</th>
+                  <th>Ch</th>
+                  <th>Frequency</th>
+                  <th>Modem</th>
+                  <th>Beacons</th>
+                  <th>Status</th>
+                  <th class="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="radio in radios" :key="radio.id">
+                  <td>
+                    <div class="d-flex align-center ga-2">
+                      <div
+                        v-if="radio.beaconSymbol && radio.beaconSymbol.length >= 2"
+                        :style="getSymbolStyle(radio.beaconSymbol[0]!, radio.beaconSymbol[1]!)"
+                        class="radio-symbol-icon"
+                      />
+                      {{ radio.name }}
+                    </div>
+                  </td>
+                  <td class="font-weight-medium">{{ radio.fullCallsign }}</td>
+                  <td>{{ radio.channelNumber }}</td>
+                  <td>
+                    <template v-if="radio.frequencyMhz">
+                      {{ radio.frequencyMhz.toFixed(3) }} MHz<span
+                        v-if="radio.mode"
+                        class="text-medium-emphasis"
+                      >
+                        {{ radio.mode }}</span
+                      >
+                    </template>
+                    <span v-else class="text-medium-emphasis">—</span>
+                  </td>
+                  <td>
+                    <v-chip
+                      v-if="radio.modem.modemEnabled"
+                      size="x-small"
+                      variant="tonal"
+                      color="green"
+                    >
+                      {{ radio.modem.txEnabled ? 'RX/TX' : 'RX' }}
+                    </v-chip>
+                    <span v-else class="text-medium-emphasis">—</span>
+                  </td>
+                  <td>{{ radio.beaconCount }}</td>
+                  <td>
+                    <v-chip
+                      :color="radio.isActive ? 'green' : 'grey'"
+                      size="x-small"
+                      variant="tonal"
+                      class="cursor-pointer"
+                      @click="toggleActive(radio.id)"
+                    >
+                      {{ radio.isActive ? 'Active' : 'Inactive' }}
+                    </v-chip>
+                  </td>
+                  <td class="text-right" style="white-space: nowrap">
+                    <v-btn
+                      icon="mdi-pencil"
+                      size="x-small"
+                      variant="text"
+                      @click="openEditRadio(radio)"
+                    />
+                    <v-btn
+                      icon="mdi-close"
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      @click="promptDeleteRadio(radio)"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+            <div v-else class="text-center text-medium-emphasis py-4">No radios configured</div>
+          </v-card>
+        </div>
+      </v-tabs-window-item>
+
+      <v-tabs-window-item value="rf" class="pa-4">
+        <div class="settings-single">
+          <!-- ================================================================ -->
+          <!-- RF Services -->
+          <!-- ================================================================ -->
+          <div class="section-header d-flex align-center mb-2">
+            <span class="text-h6">RF Services</span>
+          </div>
+
+          <v-card variant="outlined" class="mb-6 pa-4">
+            <!-- Digipeater -->
+            <div class="text-body-2 font-weight-medium mb-1">Digipeater</div>
+            <v-switch
+              v-model="digipeaterEnabled"
+              label="Enable WIDEn-N digipeater"
+              hide-details
+              density="compact"
+            />
+            <div v-if="digipeaterEnabled" class="d-flex ga-4 align-center flex-wrap mb-2 mt-1">
+              <v-text-field
+                v-model.number="digipeaterMaxWideN"
+                label="Max WIDEn"
+                density="compact"
+                type="number"
+                style="max-width: 140px"
+                hint="Larger n is trapped"
+                persistent-hint
+              />
+              <v-checkbox
+                v-model="digipeaterFillInOnly"
+                label="Fill-in only (WIDE1-1)"
+                hide-details
+                density="compact"
+              />
+            </div>
+
+            <v-divider class="my-4" />
+
+            <!-- KISS server -->
+            <div class="text-body-2 font-weight-medium mb-1">KISS TCP Server</div>
+            <div class="text-caption text-medium-emphasis mb-1">
+              Lets other applications use DireControl as their TNC.
+            </div>
+            <div class="d-flex ga-4 align-center flex-wrap">
+              <v-switch
+                v-model="kissServerEnabled"
+                label="Enable KISS server"
+                hide-details
+                density="compact"
+              />
+              <v-text-field
+                v-if="kissServerEnabled"
+                v-model.number="kissServerPort"
+                label="Port"
+                density="compact"
+                type="number"
+                style="max-width: 140px"
+              />
+            </div>
+
+            <v-divider class="my-4" />
+
+            <!-- iGate -->
+            <div class="text-body-2 font-weight-medium mb-1">iGate</div>
+            <div class="text-caption text-medium-emphasis mb-1">
+              Requires APRS-IS to be enabled with a valid passcode.
+            </div>
+            <v-switch
+              v-model="rfToIsGatingEnabled"
+              label="Gate RF → APRS-IS (qAR)"
+              hide-details
+              density="compact"
+            />
+            <v-switch
+              v-model="isToRfGatingEnabled"
+              label="Gate APRS-IS messages → RF (third-party format)"
+              hide-details
+              density="compact"
+            />
+            <div v-if="isToRfGatingEnabled" class="d-flex ga-4 align-center flex-wrap mb-2 mt-1">
+              <v-text-field
+                v-model="isToRfPath"
+                label="IS→RF path"
+                density="compact"
+                style="max-width: 240px"
+                hint="Empty = direct"
+                persistent-hint
+              />
+              <v-text-field
+                v-model.number="isToRfRecentHeardMinutes"
+                label="Heard-on-RF window (min)"
+                density="compact"
+                type="number"
+                style="max-width: 200px"
+              />
+            </div>
+
+            <div class="d-flex align-center ga-3 mt-4">
+              <v-btn
+                size="small"
+                color="primary"
+                prepend-icon="mdi-content-save"
+                :loading="rfServicesSaving"
+                @click="saveRfServices"
+              >
+                Save RF Services
+              </v-btn>
+              <v-fade-transition>
+                <span v-if="rfServicesSaveSuccess" class="text-caption text-success">
+                  <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+                </span>
+              </v-fade-transition>
+            </div>
+            <v-alert v-if="rfServicesSaveError" type="error" density="compact" class="mt-3">
+              {{ rfServicesSaveError }}
+            </v-alert>
+          </v-card>
+        </div>
+      </v-tabs-window-item>
+
+      <v-tabs-window-item value="aprsis" class="pa-4">
+        <div class="settings-single">
+          <!-- ================================================================ -->
+          <!-- APRS-IS -->
+          <!-- ================================================================ -->
+          <div class="section-header d-flex align-center mb-2">
+            <span class="text-h6">APRS-IS</span>
+          </div>
+
+          <v-card variant="outlined" class="mb-6 pa-4">
+            <v-switch
+              v-model="aprsIsEnabled"
+              label="Enable APRS-IS connection"
+              hide-details
+              density="compact"
+              class="mb-4"
+            />
+
+            <div class="d-flex ga-2 mb-2">
+              <v-text-field v-model="aprsIsHost" label="Server" density="compact" style="flex: 3" />
+              <v-text-field
+                v-model.number="aprsIsPort"
+                label="Port"
+                density="compact"
+                type="number"
+                style="flex: 1"
+              />
+            </div>
+
+            <div class="text-body-2 text-medium-emphasis mb-1">
+              Passcode (auto-computed: <strong>{{ aprsIsPasscodeComputed }}</strong
+              >)
+            </div>
+            <v-text-field
+              v-model.number="aprsIsPasscodeOverride"
+              label="Passcode override (leave blank to use auto-computed)"
+              density="compact"
+              type="number"
+              clearable
+              class="mb-2"
+              style="max-width: 360px"
+            />
+
+            <v-text-field
+              v-model="aprsIsFilter"
+              label="Server-side filter"
+              density="compact"
+              class="mb-2"
+              hint="e.g. r/39.0/-98.0/500 t/m — restricts what packets the server sends to you"
+              persistent-hint
+            />
+
+            <v-text-field
+              v-model.number="deduplicationWindowSeconds"
+              label="Deduplication window (seconds)"
+              density="compact"
+              type="number"
+              class="mb-3 mt-2"
+              style="max-width: 240px"
+              hint="Packets with the same callsign and info field within this window are counted as duplicates"
+              persistent-hint
+            />
+
+            <div class="d-flex align-center ga-3 mt-4">
+              <v-btn
+                size="small"
+                color="primary"
+                prepend-icon="mdi-content-save"
+                :loading="aprsIsSaving"
+                @click="saveAprsIsSettings"
+              >
+                Save APRS-IS Settings
+              </v-btn>
+              <v-fade-transition>
+                <span v-if="aprsIsSaveSuccess" class="text-caption text-success">
+                  <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+                </span>
+              </v-fade-transition>
+            </div>
+            <v-alert v-if="aprsIsSaveError" type="error" density="compact" class="mt-3">
+              {{ aprsIsSaveError }}
+            </v-alert>
+          </v-card>
+        </div>
+      </v-tabs-window-item>
+
+      <v-tabs-window-item value="map" class="pa-4">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- API Keys -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Map API Keys</span>
+            </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="text-body-2 text-medium-emphasis mb-4">
+                API keys are stored only in your browser's local storage and are never sent to the
+                server.
+              </div>
+              <v-text-field
+                v-model="jawgApiKey"
+                label="Jawg Maps API key"
+                density="compact"
+                :type="showJawgKey ? 'text' : 'password'"
+                :append-inner-icon="showJawgKey ? 'mdi-eye-off' : 'mdi-eye'"
+                hint="Required for the Jawg Dark tile provider. Get a free key at jawg.io."
+                persistent-hint
+                class="mb-3"
+                @click:append-inner="showJawgKey = !showJawgKey"
+              />
+              <div class="d-flex align-center ga-3 mt-2">
+                <v-btn
+                  size="small"
+                  color="primary"
+                  prepend-icon="mdi-content-save"
+                  @click="saveApiKeys"
+                >
+                  Save Keys
+                </v-btn>
+                <v-fade-transition>
+                  <span v-if="apiKeySaved" class="text-caption text-success">
+                    <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+                  </span>
+                </v-fade-transition>
+              </div>
+            </v-card>
+          </div>
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Weather Overlays -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Weather Overlays</span>
+            </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <!-- Radar provider selector -->
+              <div class="text-body-2 font-weight-medium mb-2">Rainfall Radar Provider</div>
+              <v-select
+                v-model="selectedRadarProvider"
+                :items="[
+                  { title: 'IEM NEXRAD — Free · US · zoom 8 · 5-min updates', value: 0 },
+                  { title: 'RainViewer — Free · Global · zoom 7 · 10-min updates', value: 1 },
+                  {
+                    title: 'RainViewer Pro — $40/yr · Global · zoom 12 · 10-min updates',
+                    value: 2,
+                  },
+                ]"
+                item-title="title"
+                item-value="value"
+                density="compact"
+                class="mb-3"
+              />
+
+              <!-- RainViewer Pro API key — shown only when Pro is selected -->
+              <template v-if="selectedRadarProvider === 2">
+                <div class="text-body-2 font-weight-medium mb-2">RainViewer Pro API Key</div>
+                <v-text-field
+                  v-model="rainViewerProApiKey"
+                  label="RainViewer Pro API Key"
+                  density="compact"
+                  :type="showRainViewerProKey ? 'text' : 'password'"
+                  :append-inner-icon="showRainViewerProKey ? 'mdi-eye-off' : 'mdi-eye'"
+                  :placeholder="
+                    rvProKeyConfigured ? 'Key saved — enter a new value to replace' : ''
+                  "
+                  class="mb-1"
+                  :prepend-inner-icon="
+                    rainViewerProApiKey.trim() || rvProKeyConfigured
+                      ? 'mdi-check-circle'
+                      : 'mdi-alert-circle-outline'
+                  "
+                  :color="rainViewerProApiKey.trim() || rvProKeyConfigured ? 'success' : 'warning'"
+                  @click:append-inner="showRainViewerProKey = !showRainViewerProKey"
+                />
+                <div class="text-caption text-medium-emphasis mb-4">
+                  Get a key at
+                  <a href="https://www.rainviewer.com" target="_blank" rel="noopener"
+                    >rainviewer.com</a
+                  >
+                </div>
+              </template>
+
+              <v-divider class="mb-4" />
+
+              <!-- OpenWeatherMap wind key -->
+              <div class="text-body-2 font-weight-medium mb-2">Wind Layer (OpenWeatherMap)</div>
+              <v-text-field
+                v-model="owmApiKey"
+                label="OpenWeatherMap API Key"
+                density="compact"
+                :type="showOwmKey ? 'text' : 'password'"
+                :append-inner-icon="showOwmKey ? 'mdi-eye-off' : 'mdi-eye'"
+                :placeholder="owmKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
+                class="mb-1"
+                :prepend-inner-icon="
+                  owmApiKey.trim() || owmKeyConfigured
+                    ? 'mdi-check-circle'
+                    : 'mdi-alert-circle-outline'
+                "
+                :color="owmApiKey.trim() || owmKeyConfigured ? 'success' : 'warning'"
+                @click:append-inner="showOwmKey = !showOwmKey"
+              />
+              <div class="text-caption text-medium-emphasis mb-4">
+                Get a free key at
+                <a href="https://openweathermap.org/api" target="_blank" rel="noopener"
+                  >openweathermap.org</a
+                >
+              </div>
+
+              <!-- Tomorrow.io lightning key -->
+              <div class="text-body-2 font-weight-medium mb-2">Lightning (Tomorrow.io)</div>
+              <v-text-field
+                v-model="tomorrowIoApiKey"
+                label="Tomorrow.io API Key"
+                density="compact"
+                :type="showTomorrowKey ? 'text' : 'password'"
+                :append-inner-icon="showTomorrowKey ? 'mdi-eye-off' : 'mdi-eye'"
+                :placeholder="
+                  tomorrowKeyConfigured ? 'Key saved — enter a new value to replace' : ''
+                "
+                class="mb-1"
+                :prepend-inner-icon="
+                  tomorrowIoApiKey.trim() || tomorrowKeyConfigured
+                    ? 'mdi-check-circle'
+                    : 'mdi-alert-circle-outline'
+                "
+                :color="tomorrowIoApiKey.trim() || tomorrowKeyConfigured ? 'success' : 'warning'"
+                @click:append-inner="showTomorrowKey = !showTomorrowKey"
+              />
+              <div class="text-caption text-medium-emphasis mb-4">
+                Get a free key at
+                <a href="https://www.tomorrow.io" target="_blank" rel="noopener">tomorrow.io</a>
+              </div>
+
+              <v-alert v-if="weatherKeysSaveError" type="error" density="compact" class="mb-3">
+                {{ weatherKeysSaveError }}
+              </v-alert>
+
+              <div class="d-flex align-center ga-3">
+                <v-btn
+                  size="small"
+                  color="primary"
+                  prepend-icon="mdi-content-save"
+                  :loading="weatherKeysSaving"
+                  @click="saveWeatherApiKeys"
+                >
+                  Save Keys
+                </v-btn>
+                <v-fade-transition>
+                  <span v-if="weatherKeysSaveSuccess" class="text-caption text-success">
+                    <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+                  </span>
+                </v-fade-transition>
+              </div>
+            </v-card>
+          </div>
+        </div>
+      </v-tabs-window-item>
+
+      <v-tabs-window-item value="zones" class="pa-4">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Geofences -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Geofences</span>
+              <v-spacer />
+              <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddGeofence">
+                Add Geofence
+              </v-btn>
+            </div>
+
+            <v-card variant="outlined" class="mb-6">
+              <div v-if="geofences.length === 0" class="text-center text-medium-emphasis py-4">
+                No geofences defined
+              </div>
+              <v-list v-else density="compact">
+                <v-list-item v-for="gf in geofences" :key="gf.id">
+                  <template #prepend>
+                    <v-icon :color="gf.isActive ? 'green' : 'grey'" size="20"
+                      >mdi-map-marker-radius</v-icon
+                    >
+                  </template>
+                  <v-list-item-title>{{ gf.name }}</v-list-item-title>
+                  <v-list-item-subtitle>
+                    {{ gf.centerLat.toFixed(5) }}, {{ gf.centerLon.toFixed(5) }} —
+                    {{ formatDistance(gf.radiusMeters / 1000) }}
+                    <span v-if="gf.alertOnEnter" class="ml-1 text-caption">↓Enter</span>
+                    <span v-if="gf.alertOnExit" class="ml-1 text-caption">↑Exit</span>
+                  </v-list-item-subtitle>
+                  <template #append>
+                    <v-btn
+                      icon="mdi-delete"
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      @click="promptDeleteGeofence(gf.id, gf.name)"
+                    />
+                  </template>
+                </v-list-item>
+              </v-list>
+            </v-card>
+          </div>
+          <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Proximity Rules -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Proximity Rules</span>
+              <v-spacer />
+              <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRule">
+                Add Rule
+              </v-btn>
+            </div>
+
+            <v-card variant="outlined">
+              <div v-if="rules.length === 0" class="text-center text-medium-emphasis py-4">
+                No proximity rules defined
+              </div>
+              <v-list v-else density="compact">
+                <v-list-item v-for="rule in rules" :key="rule.id">
+                  <template #prepend>
+                    <v-icon :color="rule.isActive ? 'blue' : 'grey'" size="20">mdi-radar</v-icon>
+                  </template>
+                  <v-list-item-title>{{ rule.name }}</v-list-item-title>
+                  <v-list-item-subtitle>
+                    <span v-if="rule.targetCallsign">{{ rule.targetCallsign }} — </span>
+                    {{ rule.centerLat.toFixed(5) }}, {{ rule.centerLon.toFixed(5) }} —
+                    {{ formatDistance(rule.radiusMetres / 1000) }}
+                  </v-list-item-subtitle>
+                  <template #append>
+                    <v-btn
+                      icon="mdi-delete"
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      @click="promptDeleteRule(rule.id, rule.name)"
+                    />
+                  </template>
+                </v-list-item>
+              </v-list>
+            </v-card>
+          </div>
+        </div>
+      </v-tabs-window-item>
+
+      <v-tabs-window-item value="maintenance" class="pa-4">
+        <div class="settings-single">
+          <!-- ================================================================ -->
+          <!-- Database maintenance -->
+          <!-- ================================================================ -->
+          <div class="section-header d-flex align-center mb-2">
+            <span class="text-h6">Database Maintenance</span>
+          </div>
+
+          <v-card variant="outlined" class="mb-6 pa-4">
+            <div class="d-flex align-center mb-4">
+              <div>
+                <div class="text-caption text-medium-emphasis">Database size</div>
+                <div class="text-h6">{{ formatBytes(dbSizeBytes) }}</div>
+              </div>
+              <v-spacer />
+              <v-btn
+                color="primary"
+                :loading="cleanupRunning"
+                :disabled="cleanupRunning"
+                prepend-icon="mdi-broom"
+                @click="runCleanupNow"
+              >
+                {{ cleanupRunning ? 'Cleaning…' : 'Run Cleanup Now' }}
+              </v-btn>
+            </div>
+
+            <div class="text-body-2 mb-2">
+              Packet retention — how long to keep received packets before pruning.
+              <strong>0 = keep forever.</strong>
+            </div>
+
+            <div class="d-flex flex-wrap ga-4 mb-1">
+              <v-text-field
+                v-model.number="retentionRfDays"
+                type="number"
+                min="0"
+                label="RF (days)"
+                density="compact"
+                variant="outlined"
+                hide-details
+                style="max-width: 160px"
+              />
+              <v-text-field
+                v-model.number="retentionAprsIsDays"
+                type="number"
+                min="0"
+                label="APRS-IS (days)"
+                density="compact"
+                variant="outlined"
+                hide-details
+                style="max-width: 160px"
+              />
+              <v-text-field
+                v-model.number="retentionOwnDays"
+                type="number"
+                min="0"
+                label="Own (days)"
+                density="compact"
+                variant="outlined"
+                hide-details
+                style="max-width: 160px"
+              />
+              <v-btn
+                variant="tonal"
+                color="primary"
+                :loading="retentionSaving"
+                prepend-icon="mdi-content-save"
+                @click="saveRetention"
+              >
+                Save
+              </v-btn>
+            </div>
+
+            <v-alert
+              v-if="retentionSaveError"
+              type="error"
               variant="tonal"
-              class="cursor-pointer"
-              @click="toggleActive(radio.id)"
+              density="compact"
+              class="mt-2"
             >
-              {{ radio.isActive ? 'Active' : 'Inactive' }}
-            </v-chip>
-          </div>
-          <div v-if="radio.notes" class="text-caption text-medium-emphasis mt-1">
-            {{ radio.notes }}
-          </div>
-        </v-card>
-      </template>
-    </v-card>
+              {{ retentionSaveError }}
+            </v-alert>
 
+            <div class="text-caption text-medium-emphasis mt-3">
+              Cleanup runs automatically
+              <template v-if="cleanupIntervalHours > 0">every {{ cleanupIntervalHours }}h</template>
+              <template v-else>only when triggered manually</template>, and
+              {{ vacuumOnCleanup ? 'reclaims freed space (VACUUM)' : 'does not VACUUM' }} after
+              pruning.
+            </div>
+
+            <v-divider class="my-3" />
+
+            <div class="text-caption text-medium-emphasis mb-1">Last cleanup</div>
+            <div v-if="!lastCleanup" class="text-body-2 text-medium-emphasis">
+              No cleanup has run yet.
+            </div>
+            <div v-else-if="lastCleanup.error" class="text-body-2 text-error">
+              Failed: {{ lastCleanup.error }}
+            </div>
+            <div v-else class="text-body-2">
+              Deleted
+              <strong>{{
+                (
+                  lastCleanup.rfDeleted +
+                  lastCleanup.aprsIsDeleted +
+                  lastCleanup.ownDeleted
+                ).toLocaleString()
+              }}</strong>
+              packets ({{ lastCleanup.aprsIsDeleted.toLocaleString() }} APRS-IS,
+              {{ lastCleanup.rfDeleted.toLocaleString() }} RF,
+              {{ lastCleanup.ownDeleted.toLocaleString() }} Own) ·
+              {{ formatBytes(lastCleanup.sizeBeforeBytes) }} →
+              {{ formatBytes(lastCleanup.sizeAfterBytes) }}
+              <span v-if="lastCleanup.vacuumed" class="text-success">· vacuumed</span>
+              <span v-else-if="lastCleanup.vacuumError" class="text-warning"
+                >· VACUUM skipped (busy)</span
+              >
+              <span class="text-medium-emphasis">
+                · {{ new Date(lastCleanup.completedAt).toLocaleString() }}</span
+              >
+            </div>
+          </v-card>
+        </div>
+      </v-tabs-window-item>
+    </v-tabs-window>
+
+    <!-- ── Dialogs ── -->
     <!-- Add / Edit Radio dialog -->
-    <v-dialog v-model="radioDialogOpen" max-width="480">
+    <v-dialog v-model="radioDialogOpen" max-width="640">
       <v-card>
         <v-card-title>{{ editingRadioId ? 'Edit Radio' : 'Add Radio' }}</v-card-title>
         <v-card-text>
@@ -1007,7 +1629,7 @@ async function confirmDelete() {
             density="compact"
             type="number"
             :rules="[(v: number) => (v >= 0 && v <= 15) || '0–15']"
-            hint="Matches the CHANNEL number in your direwolf.conf (0-based). Most single-radio setups use channel 0."
+            hint="KISS channel identifying this radio's traffic. Most single-radio setups use channel 0."
             persistent-hint
             class="mb-3"
           />
@@ -1018,6 +1640,24 @@ async function confirmDelete() {
             type="number"
             class="mb-2"
           />
+          <div class="d-flex ga-2">
+            <v-text-field
+              v-model.number="rFrequencyMhz"
+              label="Frequency (MHz)"
+              density="compact"
+              type="number"
+              step="0.005"
+              placeholder="e.g. 144.390"
+              style="flex: 1"
+            />
+            <v-text-field
+              v-model="rMode"
+              label="Mode"
+              density="compact"
+              placeholder="e.g. FM"
+              style="flex: 1"
+            />
+          </div>
           <v-text-field v-model="rNotes" label="Notes" density="compact" class="mb-3" />
           <div class="text-subtitle-2 font-weight-medium mb-2">Beacon Config (optional)</div>
           <v-text-field
@@ -1040,6 +1680,173 @@ async function confirmDelete() {
               style="flex: 2; min-width: 0"
             />
           </div>
+
+          <v-divider class="my-3" />
+          <div class="text-subtitle-2 font-weight-medium mb-1">Sound Modem (audio feed)</div>
+          <v-switch
+            v-model="rModem.modemEnabled"
+            label="Decode RF for this radio with the native modem"
+            hide-details
+            density="compact"
+            class="mb-2"
+          />
+          <template v-if="rModem.modemEnabled">
+            <v-combobox
+              v-model="rModem.modemCaptureDevice"
+              :items="modemCaptureDeviceItems"
+              label="Capture device"
+              density="compact"
+              class="mb-2"
+              :return-object="false"
+            />
+            <v-switch
+              v-model="rModem.txEnabled"
+              label="Transmit (beacons, messages, digipeats)"
+              hide-details
+              density="compact"
+              class="mb-2"
+            />
+            <template v-if="rModem.txEnabled">
+              <v-combobox
+                v-model="rModem.modemPlaybackDevice"
+                :items="modemPlaybackDeviceItems"
+                label="Playback device"
+                density="compact"
+                class="mb-2"
+                :return-object="false"
+              />
+              <div class="d-flex ga-2 flex-wrap mb-1">
+                <v-text-field
+                  v-model.number="rModem.txAudioLevelPct"
+                  label="TX level (%)"
+                  density="compact"
+                  type="number"
+                  style="max-width: 120px"
+                />
+                <v-text-field
+                  v-model.number="rModem.txDelayMs"
+                  label="TX delay (ms)"
+                  density="compact"
+                  type="number"
+                  style="max-width: 130px"
+                />
+                <v-text-field
+                  v-model.number="rModem.txTailMs"
+                  label="Tail (ms)"
+                  density="compact"
+                  type="number"
+                  style="max-width: 110px"
+                />
+                <v-text-field
+                  v-model.number="rModem.txPersistence"
+                  label="Persistence"
+                  density="compact"
+                  type="number"
+                  style="max-width: 120px"
+                />
+                <v-text-field
+                  v-model.number="rModem.txSlotTimeMs"
+                  label="Slot (ms)"
+                  density="compact"
+                  type="number"
+                  style="max-width: 110px"
+                />
+              </div>
+              <v-select
+                v-model="rModem.pttMethod"
+                :items="pttMethodItems"
+                label="PTT method"
+                density="compact"
+                class="mb-2"
+                style="max-width: 300px"
+              />
+              <div
+                v-if="rModem.pttMethod === PttMethods.SerialRtsDtr"
+                class="d-flex ga-2 align-center flex-wrap mb-2"
+              >
+                <v-combobox
+                  v-model="rModem.pttSerialPort"
+                  :items="modemDevices.serialPorts"
+                  label="Serial port"
+                  density="compact"
+                  style="max-width: 260px"
+                  :return-object="false"
+                />
+                <v-checkbox
+                  v-model="rModem.pttSerialUseRts"
+                  label="RTS"
+                  hide-details
+                  density="compact"
+                />
+                <v-checkbox
+                  v-model="rModem.pttSerialUseDtr"
+                  label="DTR"
+                  hide-details
+                  density="compact"
+                />
+              </div>
+              <div
+                v-else-if="rModem.pttMethod === PttMethods.Cm108"
+                class="d-flex ga-2 align-center flex-wrap mb-2"
+              >
+                <v-combobox
+                  v-model="rModem.pttHidDevice"
+                  :items="modemHidDeviceItems"
+                  label="HID device"
+                  density="compact"
+                  style="max-width: 340px"
+                  :return-object="false"
+                />
+                <v-text-field
+                  v-model.number="rModem.pttHidPin"
+                  label="Pin"
+                  density="compact"
+                  type="number"
+                  style="max-width: 90px"
+                />
+              </div>
+              <div
+                v-else-if="rModem.pttMethod === PttMethods.Gpio"
+                class="d-flex ga-2 align-center flex-wrap mb-2"
+              >
+                <v-text-field
+                  v-model.number="rModem.pttGpioChip"
+                  label="Chip"
+                  density="compact"
+                  type="number"
+                  style="max-width: 100px"
+                />
+                <v-text-field
+                  v-model.number="rModem.pttGpioLine"
+                  label="Line"
+                  density="compact"
+                  type="number"
+                  style="max-width: 100px"
+                />
+                <v-checkbox
+                  v-model="rModem.pttGpioActiveLow"
+                  label="Active low"
+                  hide-details
+                  density="compact"
+                />
+              </div>
+              <div v-else-if="rModem.pttMethod === PttMethods.Rigctld" class="d-flex ga-2 mb-2">
+                <v-text-field
+                  v-model="rModem.pttRigctldHost"
+                  label="rigctld host"
+                  density="compact"
+                  style="max-width: 240px"
+                />
+                <v-text-field
+                  v-model.number="rModem.pttRigctldPort"
+                  label="Port"
+                  density="compact"
+                  type="number"
+                  style="max-width: 110px"
+                />
+              </div>
+            </template>
+          </template>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -1055,221 +1862,6 @@ async function confirmDelete() {
         </v-card-actions>
       </v-card>
     </v-dialog>
-
-    <!-- ================================================================ -->
-    <!-- API Keys -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Map API Keys</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <div class="text-body-2 text-medium-emphasis mb-4">
-        API keys are stored only in your browser's local storage and are never sent to the server.
-      </div>
-      <v-text-field
-        v-model="jawgApiKey"
-        label="Jawg Maps API key"
-        density="compact"
-        :type="showJawgKey ? 'text' : 'password'"
-        :append-inner-icon="showJawgKey ? 'mdi-eye-off' : 'mdi-eye'"
-        hint="Required for the Jawg Dark tile provider. Get a free key at jawg.io."
-        persistent-hint
-        class="mb-3"
-        @click:append-inner="showJawgKey = !showJawgKey"
-      />
-      <div class="d-flex align-center ga-3 mt-2">
-        <v-btn size="small" color="primary" prepend-icon="mdi-content-save" @click="saveApiKeys">
-          Save Keys
-        </v-btn>
-        <v-fade-transition>
-          <span v-if="apiKeySaved" class="text-caption text-success">
-            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
-          </span>
-        </v-fade-transition>
-      </div>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- Weather Overlays -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Weather Overlays</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <!-- Radar provider selector -->
-      <div class="text-body-2 font-weight-medium mb-2">Rainfall Radar Provider</div>
-      <v-select
-        v-model="selectedRadarProvider"
-        :items="[
-          { title: 'IEM NEXRAD — Free · US · zoom 8 · 5-min updates', value: 0 },
-          { title: 'RainViewer — Free · Global · zoom 7 · 10-min updates', value: 1 },
-          { title: 'RainViewer Pro — $40/yr · Global · zoom 12 · 10-min updates', value: 2 },
-        ]"
-        item-title="title"
-        item-value="value"
-        density="compact"
-        class="mb-3"
-      />
-
-      <!-- RainViewer Pro API key — shown only when Pro is selected -->
-      <template v-if="selectedRadarProvider === 2">
-        <div class="text-body-2 font-weight-medium mb-2">RainViewer Pro API Key</div>
-        <v-text-field
-          v-model="rainViewerProApiKey"
-          label="RainViewer Pro API Key"
-          density="compact"
-          :type="showRainViewerProKey ? 'text' : 'password'"
-          :append-inner-icon="showRainViewerProKey ? 'mdi-eye-off' : 'mdi-eye'"
-          :placeholder="rvProKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
-          class="mb-1"
-          :prepend-inner-icon="
-            rainViewerProApiKey.trim() || rvProKeyConfigured
-              ? 'mdi-check-circle'
-              : 'mdi-alert-circle-outline'
-          "
-          :color="rainViewerProApiKey.trim() || rvProKeyConfigured ? 'success' : 'warning'"
-          @click:append-inner="showRainViewerProKey = !showRainViewerProKey"
-        />
-        <div class="text-caption text-medium-emphasis mb-4">
-          Get a key at
-          <a href="https://www.rainviewer.com" target="_blank" rel="noopener">rainviewer.com</a>
-        </div>
-      </template>
-
-      <v-divider class="mb-4" />
-
-      <!-- OpenWeatherMap wind key -->
-      <div class="text-body-2 font-weight-medium mb-2">Wind Layer (OpenWeatherMap)</div>
-      <v-text-field
-        v-model="owmApiKey"
-        label="OpenWeatherMap API Key"
-        density="compact"
-        :type="showOwmKey ? 'text' : 'password'"
-        :append-inner-icon="showOwmKey ? 'mdi-eye-off' : 'mdi-eye'"
-        :placeholder="owmKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
-        class="mb-1"
-        :prepend-inner-icon="
-          owmApiKey.trim() || owmKeyConfigured ? 'mdi-check-circle' : 'mdi-alert-circle-outline'
-        "
-        :color="owmApiKey.trim() || owmKeyConfigured ? 'success' : 'warning'"
-        @click:append-inner="showOwmKey = !showOwmKey"
-      />
-      <div class="text-caption text-medium-emphasis mb-4">
-        Get a free key at
-        <a href="https://openweathermap.org/api" target="_blank" rel="noopener"
-          >openweathermap.org</a
-        >
-      </div>
-
-      <!-- Tomorrow.io lightning key -->
-      <div class="text-body-2 font-weight-medium mb-2">Lightning (Tomorrow.io)</div>
-      <v-text-field
-        v-model="tomorrowIoApiKey"
-        label="Tomorrow.io API Key"
-        density="compact"
-        :type="showTomorrowKey ? 'text' : 'password'"
-        :append-inner-icon="showTomorrowKey ? 'mdi-eye-off' : 'mdi-eye'"
-        :placeholder="tomorrowKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
-        class="mb-1"
-        :prepend-inner-icon="
-          tomorrowIoApiKey.trim() || tomorrowKeyConfigured
-            ? 'mdi-check-circle'
-            : 'mdi-alert-circle-outline'
-        "
-        :color="tomorrowIoApiKey.trim() || tomorrowKeyConfigured ? 'success' : 'warning'"
-        @click:append-inner="showTomorrowKey = !showTomorrowKey"
-      />
-      <div class="text-caption text-medium-emphasis mb-4">
-        Get a free key at
-        <a href="https://www.tomorrow.io" target="_blank" rel="noopener">tomorrow.io</a>
-      </div>
-
-      <v-alert v-if="weatherKeysSaveError" type="error" density="compact" class="mb-3">
-        {{ weatherKeysSaveError }}
-      </v-alert>
-
-      <div class="d-flex align-center ga-3">
-        <v-btn
-          size="small"
-          color="primary"
-          prepend-icon="mdi-content-save"
-          :loading="weatherKeysSaving"
-          @click="saveWeatherApiKeys"
-        >
-          Save Keys
-        </v-btn>
-        <v-fade-transition>
-          <span v-if="weatherKeysSaveSuccess" class="text-caption text-success">
-            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
-          </span>
-        </v-fade-transition>
-      </div>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- Units -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Units</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <div class="d-flex align-center ga-6">
-        <span class="text-body-2">Distance units</span>
-        <v-radio-group
-          :model-value="distanceUnit"
-          inline
-          hide-details
-          density="compact"
-          @update:model-value="(v) => setDistanceUnit(v as 'km' | 'mi')"
-        >
-          <v-radio label="Kilometres" value="km" />
-          <v-radio label="Miles" value="mi" />
-        </v-radio-group>
-      </div>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- Geofences -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Geofences</span>
-      <v-spacer />
-      <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddGeofence">
-        Add Geofence
-      </v-btn>
-    </div>
-
-    <v-card variant="outlined" class="mb-6">
-      <div v-if="geofences.length === 0" class="text-center text-medium-emphasis py-4">
-        No geofences defined
-      </div>
-      <v-list v-else density="compact">
-        <v-list-item v-for="gf in geofences" :key="gf.id">
-          <template #prepend>
-            <v-icon :color="gf.isActive ? 'green' : 'grey'" size="20">mdi-map-marker-radius</v-icon>
-          </template>
-          <v-list-item-title>{{ gf.name }}</v-list-item-title>
-          <v-list-item-subtitle>
-            {{ gf.centerLat.toFixed(5) }}, {{ gf.centerLon.toFixed(5) }} —
-            {{ formatDistance(gf.radiusMeters / 1000) }}
-            <span v-if="gf.alertOnEnter" class="ml-1 text-caption">↓Enter</span>
-            <span v-if="gf.alertOnExit" class="ml-1 text-caption">↑Exit</span>
-          </v-list-item-subtitle>
-          <template #append>
-            <v-btn
-              icon="mdi-delete"
-              size="x-small"
-              variant="text"
-              color="error"
-              @click="promptDeleteGeofence(gf.id, gf.name)"
-            />
-          </template>
-        </v-list-item>
-      </v-list>
-    </v-card>
 
     <!-- Add Geofence dialog -->
     <v-dialog v-model="showAddGeofence" max-width="600">
@@ -1327,45 +1919,6 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
-    <!-- ================================================================ -->
-    <!-- Proximity Rules -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2">
-      <span class="text-h6">Proximity Rules</span>
-      <v-spacer />
-      <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openAddRule">
-        Add Rule
-      </v-btn>
-    </div>
-
-    <v-card variant="outlined">
-      <div v-if="rules.length === 0" class="text-center text-medium-emphasis py-4">
-        No proximity rules defined
-      </div>
-      <v-list v-else density="compact">
-        <v-list-item v-for="rule in rules" :key="rule.id">
-          <template #prepend>
-            <v-icon :color="rule.isActive ? 'blue' : 'grey'" size="20">mdi-radar</v-icon>
-          </template>
-          <v-list-item-title>{{ rule.name }}</v-list-item-title>
-          <v-list-item-subtitle>
-            <span v-if="rule.targetCallsign">{{ rule.targetCallsign }} — </span>
-            {{ rule.centerLat.toFixed(5) }}, {{ rule.centerLon.toFixed(5) }} —
-            {{ formatDistance(rule.radiusMetres / 1000) }}
-          </v-list-item-subtitle>
-          <template #append>
-            <v-btn
-              icon="mdi-delete"
-              size="x-small"
-              variant="text"
-              color="error"
-              @click="promptDeleteRule(rule.id, rule.name)"
-            />
-          </template>
-        </v-list-item>
-      </v-list>
-    </v-card>
-
     <!-- Add Proximity Rule dialog -->
     <v-dialog v-model="showAddRule" max-width="600">
       <v-card>
@@ -1414,694 +1967,6 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
-    <!-- ================================================================ -->
-    <!-- Message Retry -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Message Retry</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <div class="text-body-2 text-medium-emphasis mb-3">
-        Configure via <code>appsettings.json</code> or <code>appsettings.local.json</code> under the
-        <code>DireControl</code> section.
-      </div>
-      <v-table density="compact">
-        <tbody>
-          <tr>
-            <td class="text-body-2 font-weight-medium" style="width: 260px">Max retry attempts</td>
-            <td class="text-body-2">{{ retrySettings?.maxRetryAttempts ?? '—' }}</td>
-          </tr>
-          <tr>
-            <td class="text-body-2 font-weight-medium">Initial retry delay</td>
-            <td class="text-body-2">
-              {{
-                retrySettings != null ? `${retrySettings.initialRetryDelaySeconds} seconds` : '—'
-              }}
-            </td>
-          </tr>
-        </tbody>
-      </v-table>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- Messaging -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Messaging</span>
-      <v-progress-circular
-        v-if="outboundPathSaving"
-        indeterminate
-        size="16"
-        width="2"
-        class="ml-3"
-      />
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <div class="text-subtitle-2 font-weight-medium mb-1">Default outbound path</div>
-      <v-text-field
-        v-model="outboundPath"
-        density="compact"
-        variant="outlined"
-        clearable
-        :error-messages="outboundPathError"
-        hide-details="auto"
-        placeholder="e.g. WIDE1-1,WIDE2-1"
-        class="mb-2"
-        style="max-width: 360px"
-        @update:model-value="schedulePathSave"
-      />
-      <div class="d-flex align-center flex-wrap gap-1 mb-3">
-        <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
-        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE1-1,WIDE2-1')"
-          >WIDE1-1,WIDE2-1</v-btn
-        >
-        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE2-1')">WIDE2-1</v-btn>
-        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE1-1')">WIDE1-1</v-btn>
-        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('')">Direct (no path)</v-btn>
-      </div>
-      <div class="text-body-2 text-medium-emphasis">
-        Added to all outbound messages. <code>WIDE1-1,WIDE2-1</code> is recommended for most fixed
-        and mobile stations. Leave blank to transmit direct with no digipeating.
-      </div>
-      <v-alert v-if="outboundPathSaveError" type="error" density="compact" class="mt-3">
-        {{ outboundPathSaveError }}
-      </v-alert>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- Sound Modem -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Sound Modem</span>
-      <v-chip
-        v-if="modemStatus"
-        :color="modemStateColor"
-        size="x-small"
-        variant="tonal"
-        class="ml-3"
-      >
-        {{ modemStateLabels[modemStatus.state] ?? 'Unknown' }}
-      </v-chip>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <div class="text-body-2 text-medium-emphasis mb-4">
-        Native AFSK-1200 soundcard modem — decodes RF directly from an audio device with no external
-        TNC (DireWolf) required.
-      </div>
-
-      <v-switch
-        v-model="modemEnabled"
-        label="Enable sound modem"
-        hide-details
-        density="compact"
-        class="mb-4"
-      />
-
-      <v-combobox
-        v-model="modemCaptureDevice"
-        :items="modemCaptureDeviceItems"
-        label="Capture device"
-        density="compact"
-        class="mb-2"
-        hint="ALSA PCM name, e.g. default or plughw:CARD=Device — pick from the list or type your own"
-        persistent-hint
-        :return-object="false"
-      />
-
-      <v-text-field
-        v-model.number="modemKissChannel"
-        label="KISS channel"
-        density="compact"
-        type="number"
-        class="mb-3 mt-2"
-        style="max-width: 240px"
-        hint="Channel number stamped on decoded packets — lets statistics tell the modem apart from an external TNC"
-        persistent-hint
-      />
-
-      <!-- Transmit -->
-      <v-divider class="mb-4" />
-      <v-switch
-        v-model="modemTxEnabled"
-        label="Enable transmit (beacons, messages, ACKs)"
-        hide-details
-        density="compact"
-        class="mb-4"
-      />
-
-      <template v-if="modemTxEnabled">
-        <v-combobox
-          v-model="modemPlaybackDevice"
-          :items="modemPlaybackDeviceItems"
-          label="Playback device"
-          density="compact"
-          class="mb-2"
-          hint="ALSA PCM name feeding the transmitter's audio input"
-          persistent-hint
-          :return-object="false"
-        />
-
-        <div class="d-flex ga-2 mb-2 mt-2 flex-wrap">
-          <v-text-field
-            v-model.number="modemTxAudioLevelPct"
-            label="TX audio level (%)"
-            density="compact"
-            type="number"
-            style="max-width: 160px"
-            hint="Deviation control"
-            persistent-hint
-          />
-          <v-text-field
-            v-model.number="modemTxDelayMs"
-            label="TX delay (ms)"
-            density="compact"
-            type="number"
-            style="max-width: 140px"
-            hint="Key-up preamble"
-            persistent-hint
-          />
-          <v-text-field
-            v-model.number="modemTxTailMs"
-            label="TX tail (ms)"
-            density="compact"
-            type="number"
-            style="max-width: 140px"
-          />
-          <v-text-field
-            v-model.number="modemPersistence"
-            label="Persistence (0–255)"
-            density="compact"
-            type="number"
-            style="max-width: 160px"
-            hint="CSMA aggressiveness"
-            persistent-hint
-          />
-          <v-text-field
-            v-model.number="modemSlotTimeMs"
-            label="Slot time (ms)"
-            density="compact"
-            type="number"
-            style="max-width: 140px"
-          />
-        </div>
-
-        <!-- PTT -->
-        <v-select
-          v-model="modemPttMethod"
-          :items="pttMethodItems"
-          label="PTT method"
-          density="compact"
-          class="mb-2 mt-2"
-          style="max-width: 360px"
-        />
-
-        <template v-if="modemPttMethod === PttMethods.SerialRtsDtr">
-          <div class="d-flex ga-2 align-center flex-wrap mb-2">
-            <v-combobox
-              v-model="modemPttSerialPort"
-              :items="modemDevices.serialPorts"
-              label="Serial port"
-              density="compact"
-              style="max-width: 300px"
-              :return-object="false"
-            />
-            <v-checkbox v-model="modemPttSerialUseRts" label="RTS" hide-details density="compact" />
-            <v-checkbox v-model="modemPttSerialUseDtr" label="DTR" hide-details density="compact" />
-          </div>
-        </template>
-
-        <template v-else-if="modemPttMethod === PttMethods.Cm108">
-          <div class="d-flex ga-2 align-center flex-wrap mb-2">
-            <v-combobox
-              v-model="modemPttHidDevice"
-              :items="modemHidDeviceItems"
-              label="HID device"
-              density="compact"
-              style="max-width: 420px"
-              :return-object="false"
-            />
-            <v-text-field
-              v-model.number="modemPttHidPin"
-              label="GPIO pin"
-              density="compact"
-              type="number"
-              style="max-width: 120px"
-              hint="Usually 3"
-              persistent-hint
-            />
-          </div>
-        </template>
-
-        <template v-else-if="modemPttMethod === PttMethods.Gpio">
-          <div class="d-flex ga-2 align-center flex-wrap mb-2">
-            <v-text-field
-              v-model.number="modemPttGpioChip"
-              label="GPIO chip"
-              density="compact"
-              type="number"
-              style="max-width: 140px"
-              hint="/dev/gpiochipN"
-              persistent-hint
-            />
-            <v-text-field
-              v-model.number="modemPttGpioLine"
-              label="GPIO line"
-              density="compact"
-              type="number"
-              style="max-width: 140px"
-            />
-            <v-checkbox
-              v-model="modemPttGpioActiveLow"
-              label="Active low"
-              hide-details
-              density="compact"
-            />
-          </div>
-        </template>
-
-        <template v-else-if="modemPttMethod === PttMethods.Rigctld">
-          <div class="d-flex ga-2 mb-2">
-            <v-text-field
-              v-model="modemPttRigctldHost"
-              label="rigctld host"
-              density="compact"
-              style="max-width: 300px"
-            />
-            <v-text-field
-              v-model.number="modemPttRigctldPort"
-              label="Port"
-              density="compact"
-              type="number"
-              style="max-width: 120px"
-            />
-          </div>
-        </template>
-      </template>
-
-      <template v-if="modemStatus && modemStatus.state === ModemStates.Running">
-        <v-divider class="mb-3 mt-2" />
-        <div class="d-flex align-center ga-4 mb-2 mt-2 flex-wrap">
-          <div class="d-flex align-center ga-2" style="flex: 1; max-width: 360px; min-width: 200px">
-            <span class="text-caption text-medium-emphasis">Audio</span>
-            <v-progress-linear
-              :model-value="Math.min(100, modemStatus.audioLevel * 100)"
-              :color="
-                modemStatus.audioLevel > 0.9
-                  ? 'error'
-                  : modemStatus.audioLevel > 0.05
-                    ? 'green'
-                    : 'grey'
-              "
-              height="8"
-              rounded
-            />
-          </div>
-          <v-chip
-            :color="modemStatus.carrierDetected ? 'green' : 'grey'"
-            size="x-small"
-            variant="tonal"
-          >
-            DCD
-          </v-chip>
-          <v-chip
-            v-if="modemStatus.txEnabled"
-            :color="modemStatus.transmitting ? 'red' : 'grey'"
-            size="x-small"
-            variant="tonal"
-          >
-            TX
-          </v-chip>
-          <span class="text-caption text-medium-emphasis">
-            {{ modemStatus.decodedFrames.toLocaleString() }} decoded ·
-            {{ modemStatus.invalidFrames.toLocaleString() }} bad CRC<template
-              v-if="modemStatus.txEnabled"
-            >
-              · {{ modemStatus.transmittedFrames.toLocaleString() }} sent</template
-            >
-          </span>
-          <span v-if="rigFrequencyMhz" class="text-caption text-medium-emphasis">
-            {{ rigFrequencyMhz }} MHz
-          </span>
-        </div>
-
-        <!-- Waterfall: 0–4 kHz spectrum, newest row on top -->
-        <div class="mt-2" style="max-width: 342px">
-          <WaterfallCanvas ref="waterfall" />
-        </div>
-      </template>
-      <v-alert
-        v-if="modemStatus?.state === ModemStates.Error && modemStatus.errorMessage"
-        type="error"
-        density="compact"
-        class="mb-3"
-      >
-        {{ modemStatus.errorMessage }}
-      </v-alert>
-
-      <div class="d-flex align-center ga-3 mt-4">
-        <v-btn
-          size="small"
-          color="primary"
-          prepend-icon="mdi-content-save"
-          :loading="modemSaving"
-          @click="saveModemSettings"
-        >
-          Save Modem Settings
-        </v-btn>
-        <v-fade-transition>
-          <span v-if="modemSaveSuccess" class="text-caption text-success">
-            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
-          </span>
-        </v-fade-transition>
-      </div>
-      <v-alert v-if="modemSaveError" type="error" density="compact" class="mt-3">
-        {{ modemSaveError }}
-      </v-alert>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- RF Services -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">RF Services</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <!-- Digipeater -->
-      <div class="text-body-2 font-weight-medium mb-1">Digipeater</div>
-      <v-switch
-        v-model="digipeaterEnabled"
-        label="Enable WIDEn-N digipeater"
-        hide-details
-        density="compact"
-      />
-      <div v-if="digipeaterEnabled" class="d-flex ga-4 align-center flex-wrap mb-2 mt-1">
-        <v-text-field
-          v-model.number="digipeaterMaxWideN"
-          label="Max WIDEn"
-          density="compact"
-          type="number"
-          style="max-width: 140px"
-          hint="Larger n is trapped"
-          persistent-hint
-        />
-        <v-checkbox
-          v-model="digipeaterFillInOnly"
-          label="Fill-in only (WIDE1-1)"
-          hide-details
-          density="compact"
-        />
-      </div>
-
-      <v-divider class="my-4" />
-
-      <!-- KISS server -->
-      <div class="text-body-2 font-weight-medium mb-1">KISS TCP Server</div>
-      <div class="text-caption text-medium-emphasis mb-1">
-        Lets other applications use DireControl as their TNC.
-      </div>
-      <div class="d-flex ga-4 align-center flex-wrap">
-        <v-switch
-          v-model="kissServerEnabled"
-          label="Enable KISS server"
-          hide-details
-          density="compact"
-        />
-        <v-text-field
-          v-if="kissServerEnabled"
-          v-model.number="kissServerPort"
-          label="Port"
-          density="compact"
-          type="number"
-          style="max-width: 140px"
-        />
-      </div>
-
-      <v-divider class="my-4" />
-
-      <!-- iGate -->
-      <div class="text-body-2 font-weight-medium mb-1">iGate</div>
-      <div class="text-caption text-medium-emphasis mb-1">
-        Requires APRS-IS to be enabled with a valid passcode.
-      </div>
-      <v-switch
-        v-model="rfToIsGatingEnabled"
-        label="Gate RF → APRS-IS (qAR)"
-        hide-details
-        density="compact"
-      />
-      <v-switch
-        v-model="isToRfGatingEnabled"
-        label="Gate APRS-IS messages → RF (third-party format)"
-        hide-details
-        density="compact"
-      />
-      <div v-if="isToRfGatingEnabled" class="d-flex ga-4 align-center flex-wrap mb-2 mt-1">
-        <v-text-field
-          v-model="isToRfPath"
-          label="IS→RF path"
-          density="compact"
-          style="max-width: 240px"
-          hint="Empty = direct"
-          persistent-hint
-        />
-        <v-text-field
-          v-model.number="isToRfRecentHeardMinutes"
-          label="Heard-on-RF window (min)"
-          density="compact"
-          type="number"
-          style="max-width: 200px"
-        />
-      </div>
-
-      <div class="d-flex align-center ga-3 mt-4">
-        <v-btn
-          size="small"
-          color="primary"
-          prepend-icon="mdi-content-save"
-          :loading="rfServicesSaving"
-          @click="saveRfServices"
-        >
-          Save RF Services
-        </v-btn>
-        <v-fade-transition>
-          <span v-if="rfServicesSaveSuccess" class="text-caption text-success">
-            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
-          </span>
-        </v-fade-transition>
-      </div>
-      <v-alert v-if="rfServicesSaveError" type="error" density="compact" class="mt-3">
-        {{ rfServicesSaveError }}
-      </v-alert>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- APRS-IS -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">APRS-IS</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <v-switch
-        v-model="aprsIsEnabled"
-        label="Enable APRS-IS connection"
-        hide-details
-        density="compact"
-        class="mb-4"
-      />
-
-      <div class="d-flex ga-2 mb-2">
-        <v-text-field v-model="aprsIsHost" label="Server" density="compact" style="flex: 3" />
-        <v-text-field
-          v-model.number="aprsIsPort"
-          label="Port"
-          density="compact"
-          type="number"
-          style="flex: 1"
-        />
-      </div>
-
-      <div class="text-body-2 text-medium-emphasis mb-1">
-        Passcode (auto-computed: <strong>{{ aprsIsPasscodeComputed }}</strong
-        >)
-      </div>
-      <v-text-field
-        v-model.number="aprsIsPasscodeOverride"
-        label="Passcode override (leave blank to use auto-computed)"
-        density="compact"
-        type="number"
-        clearable
-        class="mb-2"
-        style="max-width: 360px"
-      />
-
-      <v-text-field
-        v-model="aprsIsFilter"
-        label="Server-side filter"
-        density="compact"
-        class="mb-2"
-        hint="e.g. r/39.0/-98.0/500 t/m — restricts what packets the server sends to you"
-        persistent-hint
-      />
-
-      <v-text-field
-        v-model.number="deduplicationWindowSeconds"
-        label="Deduplication window (seconds)"
-        density="compact"
-        type="number"
-        class="mb-3 mt-2"
-        style="max-width: 240px"
-        hint="Packets with the same callsign and info field within this window are counted as duplicates"
-        persistent-hint
-      />
-
-      <div class="d-flex align-center ga-3 mt-4">
-        <v-btn
-          size="small"
-          color="primary"
-          prepend-icon="mdi-content-save"
-          :loading="aprsIsSaving"
-          @click="saveAprsIsSettings"
-        >
-          Save APRS-IS Settings
-        </v-btn>
-        <v-fade-transition>
-          <span v-if="aprsIsSaveSuccess" class="text-caption text-success">
-            <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
-          </span>
-        </v-fade-transition>
-      </div>
-      <v-alert v-if="aprsIsSaveError" type="error" density="compact" class="mt-3">
-        {{ aprsIsSaveError }}
-      </v-alert>
-    </v-card>
-
-    <!-- ================================================================ -->
-    <!-- Database maintenance -->
-    <!-- ================================================================ -->
-    <div class="section-header d-flex align-center mb-2 mt-6">
-      <span class="text-h6">Database Maintenance</span>
-    </div>
-
-    <v-card variant="outlined" class="mb-6 pa-4">
-      <div class="d-flex align-center mb-4">
-        <div>
-          <div class="text-caption text-medium-emphasis">Database size</div>
-          <div class="text-h6">{{ formatBytes(dbSizeBytes) }}</div>
-        </div>
-        <v-spacer />
-        <v-btn
-          color="primary"
-          :loading="cleanupRunning"
-          :disabled="cleanupRunning"
-          prepend-icon="mdi-broom"
-          @click="runCleanupNow"
-        >
-          {{ cleanupRunning ? 'Cleaning…' : 'Run Cleanup Now' }}
-        </v-btn>
-      </div>
-
-      <div class="text-body-2 mb-2">
-        Packet retention — how long to keep received packets before pruning.
-        <strong>0 = keep forever.</strong>
-      </div>
-
-      <div class="d-flex flex-wrap ga-4 mb-1">
-        <v-text-field
-          v-model.number="retentionRfDays"
-          type="number"
-          min="0"
-          label="RF (days)"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="max-width: 160px"
-        />
-        <v-text-field
-          v-model.number="retentionAprsIsDays"
-          type="number"
-          min="0"
-          label="APRS-IS (days)"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="max-width: 160px"
-        />
-        <v-text-field
-          v-model.number="retentionOwnDays"
-          type="number"
-          min="0"
-          label="Own (days)"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="max-width: 160px"
-        />
-        <v-btn
-          variant="tonal"
-          color="primary"
-          :loading="retentionSaving"
-          prepend-icon="mdi-content-save"
-          @click="saveRetention"
-        >
-          Save
-        </v-btn>
-      </div>
-
-      <v-alert
-        v-if="retentionSaveError"
-        type="error"
-        variant="tonal"
-        density="compact"
-        class="mt-2"
-      >
-        {{ retentionSaveError }}
-      </v-alert>
-
-      <div class="text-caption text-medium-emphasis mt-3">
-        Cleanup runs automatically
-        <template v-if="cleanupIntervalHours > 0">every {{ cleanupIntervalHours }}h</template>
-        <template v-else>only when triggered manually</template>, and
-        {{ vacuumOnCleanup ? 'reclaims freed space (VACUUM)' : 'does not VACUUM' }} after pruning.
-      </div>
-
-      <v-divider class="my-3" />
-
-      <div class="text-caption text-medium-emphasis mb-1">Last cleanup</div>
-      <div v-if="!lastCleanup" class="text-body-2 text-medium-emphasis">
-        No cleanup has run yet.
-      </div>
-      <div v-else-if="lastCleanup.error" class="text-body-2 text-error">
-        Failed: {{ lastCleanup.error }}
-      </div>
-      <div v-else class="text-body-2">
-        Deleted
-        <strong>{{
-          (
-            lastCleanup.rfDeleted +
-            lastCleanup.aprsIsDeleted +
-            lastCleanup.ownDeleted
-          ).toLocaleString()
-        }}</strong>
-        packets ({{ lastCleanup.aprsIsDeleted.toLocaleString() }} APRS-IS,
-        {{ lastCleanup.rfDeleted.toLocaleString() }} RF,
-        {{ lastCleanup.ownDeleted.toLocaleString() }} Own) ·
-        {{ formatBytes(lastCleanup.sizeBeforeBytes) }} →
-        {{ formatBytes(lastCleanup.sizeAfterBytes) }}
-        <span v-if="lastCleanup.vacuumed" class="text-success">· vacuumed</span>
-        <span v-else-if="lastCleanup.vacuumError" class="text-warning"
-          >· VACUUM skipped (busy)</span
-        >
-        <span class="text-medium-emphasis">
-          · {{ new Date(lastCleanup.completedAt).toLocaleString() }}</span
-        >
-      </div>
-    </v-card>
-
     <!-- Delete confirmation dialog -->
     <v-dialog v-model="deleteConfirmOpen" max-width="400">
       <v-card>
@@ -2123,8 +1988,41 @@ async function confirmDelete() {
 <style scoped>
 .settings-view {
   height: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+.settings-nav {
+  flex-shrink: 0;
+  min-width: 176px;
+  border-right: 1px solid rgba(128, 128, 128, 0.2);
+  padding-top: 8px;
+}
+
+.settings-nav :deep(.v-tab) {
+  justify-content: flex-start;
+}
+
+.settings-content {
+  flex: 1;
+  height: 100%;
   overflow-y: auto;
-  max-width: 800px;
+}
+
+.settings-single {
+  max-width: 900px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 0 24px;
+  align-items: start;
+  max-width: 1280px;
+}
+
+.settings-section {
+  min-width: 0;
 }
 
 .section-header {

@@ -26,6 +26,10 @@ export const PttMethods = {
 export type PttMethod = (typeof PttMethods)[keyof typeof PttMethods]
 
 export interface ModemStatusDto {
+  radioId: string
+  radioName: string
+  fullCallsign: string
+  channel: number
   state: ModemState
   captureDevice: string | null
   errorMessage: string | null
@@ -74,34 +78,17 @@ export interface ModemDevicesDto {
   hidDevices: HidDeviceDto[]
 }
 
-export interface ModemSettingsPayload {
-  modemEnabled: boolean
-  modemCaptureDevice: string
-  modemKissChannel: number
-  modemTxEnabled: boolean
-  modemPlaybackDevice: string
-  modemTxAudioLevelPct: number
-  modemTxDelayMs: number
-  modemTxTailMs: number
-  modemPersistence: number
-  modemSlotTimeMs: number
-  modemPttMethod: PttMethod
-  modemPttSerialPort: string | null
-  modemPttSerialUseRts: boolean
-  modemPttSerialUseDtr: boolean
-  modemPttHidDevice: string | null
-  modemPttHidPin: number
-  modemPttGpioChip: number
-  modemPttGpioLine: number
-  modemPttGpioActiveLow: boolean
-  modemPttRigctldHost: string
-  modemPttRigctldPort: number
-}
-
 export interface ModemLevelDto {
+  radioId: string
+  channel: number
   audioLevel: number
   carrierDetected: boolean
   transmitting: boolean
+}
+
+export interface ModemSpectrumDto {
+  radioId: string
+  bins: number[] | string
 }
 
 /** SignalR's JSON protocol delivers byte[] as base64 — normalise either form. */
@@ -109,8 +96,8 @@ export function decodeSpectrumPayload(bins: number[] | string): number[] {
   return typeof bins === 'string' ? Array.from(atob(bins), (c) => c.charCodeAt(0)) : bins
 }
 
-export async function getModemStatus(): Promise<ModemStatusDto> {
-  const { data } = await http.get<ModemStatusDto>('/api/v0/modem/status')
+export async function getModemStatus(): Promise<ModemStatusDto[]> {
+  const { data } = await http.get<ModemStatusDto[]>('/api/v0/modem/status')
   return data
 }
 
@@ -121,8 +108,4 @@ export async function getModemDevices(): Promise<ModemDevicesDto> {
 
 export async function restartModem(): Promise<void> {
   await http.post('/api/v0/modem/restart')
-}
-
-export async function updateModemSettings(payload: ModemSettingsPayload): Promise<void> {
-  await http.put('/api/v0/settings/modem', payload)
 }

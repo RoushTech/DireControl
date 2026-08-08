@@ -121,31 +121,8 @@ public sealed class SettingsDto
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
 
-    // Native sound modem settings
+    // RF backend / services
     public bool DirewolfEnabled { get; init; }
-    public bool ModemEnabled { get; init; }
-    public required string ModemCaptureDevice { get; init; }
-    public int ModemKissChannel { get; init; }
-    public bool ModemTxEnabled { get; init; }
-    public required string ModemPlaybackDevice { get; init; }
-    public int ModemTxAudioLevelPct { get; init; }
-    public int ModemTxDelayMs { get; init; }
-    public int ModemTxTailMs { get; init; }
-    public int ModemPersistence { get; init; }
-    public int ModemSlotTimeMs { get; init; }
-    public PttMethod ModemPttMethod { get; init; }
-    public string? ModemPttSerialPort { get; init; }
-    public bool ModemPttSerialUseRts { get; init; }
-    public bool ModemPttSerialUseDtr { get; init; }
-    public string? ModemPttHidDevice { get; init; }
-    public int ModemPttHidPin { get; init; }
-    public int ModemPttGpioChip { get; init; }
-    public int ModemPttGpioLine { get; init; }
-    public bool ModemPttGpioActiveLow { get; init; }
-    public required string ModemPttRigctldHost { get; init; }
-    public int ModemPttRigctldPort { get; init; }
-
-    // RF services (digipeater / KISS server / iGate)
     public bool DigipeaterEnabled { get; init; }
     public int DigipeaterMaxWideN { get; init; }
     public bool DigipeaterFillInOnly { get; init; }
@@ -155,35 +132,6 @@ public sealed class SettingsDto
     public bool IsToRfGatingEnabled { get; init; }
     public required string IsToRfPath { get; init; }
     public int IsToRfRecentHeardMinutes { get; init; }
-}
-
-public sealed class UpdateModemSettingsRequest
-{
-    public bool ModemEnabled { get; init; }
-    public required string ModemCaptureDevice { get; init; }
-    public int ModemKissChannel { get; init; }
-
-    // Transmit
-    public bool ModemTxEnabled { get; init; }
-    public required string ModemPlaybackDevice { get; init; }
-    public int ModemTxAudioLevelPct { get; init; } = 80;
-    public int ModemTxDelayMs { get; init; } = 300;
-    public int ModemTxTailMs { get; init; } = 50;
-    public int ModemPersistence { get; init; } = 63;
-    public int ModemSlotTimeMs { get; init; } = 100;
-
-    // PTT
-    public PttMethod ModemPttMethod { get; init; } = PttMethod.None;
-    public string? ModemPttSerialPort { get; init; }
-    public bool ModemPttSerialUseRts { get; init; } = true;
-    public bool ModemPttSerialUseDtr { get; init; }
-    public string? ModemPttHidDevice { get; init; }
-    public int ModemPttHidPin { get; init; } = 3;
-    public int ModemPttGpioChip { get; init; }
-    public int ModemPttGpioLine { get; init; }
-    public bool ModemPttGpioActiveLow { get; init; }
-    public string ModemPttRigctldHost { get; init; } = "localhost";
-    public int ModemPttRigctldPort { get; init; } = 4532;
 }
 
 public sealed class ModemDeviceDto
@@ -209,6 +157,10 @@ public sealed class ModemDevicesDto
 
 public sealed class ModemStatusDto
 {
+    public required string RadioId { get; init; }
+    public required string RadioName { get; init; }
+    public required string FullCallsign { get; init; }
+    public int Channel { get; init; }
     public ModemState State { get; init; }
     public string? CaptureDevice { get; init; }
     public string? ErrorMessage { get; init; }
@@ -547,6 +499,31 @@ public sealed class CoverageGridSquareDto
 
 // ─── Radio management ────────────────────────────────────────────────────────
 
+/// <summary>Per-radio sound modem + PTT configuration (audio feed).</summary>
+public sealed class RadioModemConfigDto
+{
+    public bool ModemEnabled { get; init; }
+    public string ModemCaptureDevice { get; init; } = "default";
+    public string ModemPlaybackDevice { get; init; } = "default";
+    public bool TxEnabled { get; init; }
+    public int TxAudioLevelPct { get; init; } = 80;
+    public int TxDelayMs { get; init; } = 300;
+    public int TxTailMs { get; init; } = 50;
+    public int TxPersistence { get; init; } = 63;
+    public int TxSlotTimeMs { get; init; } = 100;
+    public PttMethod PttMethod { get; init; } = PttMethod.None;
+    public string? PttSerialPort { get; init; }
+    public bool PttSerialUseRts { get; init; } = true;
+    public bool PttSerialUseDtr { get; init; }
+    public string? PttHidDevice { get; init; }
+    public int PttHidPin { get; init; } = 3;
+    public int PttGpioChip { get; init; }
+    public int PttGpioLine { get; init; }
+    public bool PttGpioActiveLow { get; init; }
+    public string PttRigctldHost { get; init; } = "localhost";
+    public int PttRigctldPort { get; init; } = 4532;
+}
+
 public sealed class RadioDto
 {
     public required string Id { get; init; }
@@ -561,10 +538,13 @@ public sealed class RadioDto
     public string? BeaconComment { get; init; }
     public bool IsActive { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
+    public double? FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
     public DateTime? LastBeaconedAt { get; init; }
     public int? SecondsSinceBeacon { get; init; }
     public int ConfirmationCount { get; init; }
     public int BeaconCount { get; init; }
+    public required RadioModemConfigDto Modem { get; init; }
 }
 
 public sealed class CreateRadioRequest
@@ -578,6 +558,9 @@ public sealed class CreateRadioRequest
     public string? BeaconSymbol { get; init; }
     public string? BeaconComment { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 600;
+    public double? FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
+    public RadioModemConfigDto? Modem { get; init; }
 }
 
 public sealed class UpdateRadioRequest
@@ -591,6 +574,9 @@ public sealed class UpdateRadioRequest
     public string? BeaconSymbol { get; init; }
     public string? BeaconComment { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
+    public double? FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
+    public RadioModemConfigDto? Modem { get; init; }
 }
 
 public sealed class DigiConfirmationDto

@@ -2,6 +2,7 @@ using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
 using DireControl.Modem.Ax25;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -18,6 +19,7 @@ public sealed class RfFrameIngestService(
     DigipeaterService digipeaterService,
     KissTcpServerService kissServer,
     AprsIsTxQueue aprsIsTxQueue,
+    Microsoft.AspNetCore.SignalR.IHubContext<Hubs.PacketHub> hubContext,
     IOptions<DireControlOptions> options,
     ILogger<RfFrameIngestService> logger)
 {
@@ -58,7 +60,7 @@ public sealed class RfFrameIngestService(
         // WIDEn-N digipeating (never our own transmissions).
         if (!isOwnTransmission)
         {
-            _ = digipeaterService.ConsiderAsync(frame, ct).ContinueWith(
+            _ = digipeaterService.ConsiderAsync(frame, kissChannel, ct).ContinueWith(
                 t => logger.LogError(t.Exception, "Unhandled digipeater error."),
                 TaskContinuationOptions.OnlyOnFaulted);
         }
@@ -116,6 +118,7 @@ public sealed class RfFrameIngestService(
         if (existingAprsIs is not null)
         {
             existingAprsIs.Source = PacketSource.Rf;
+            existingAprsIs.KissChannel = kissChannel;
             existingAprsIs.SignalData ??= signalData;
             var rfStation = await db.Stations.FindAsync([callsign], ct);
             if (rfStation is not null)
@@ -124,6 +127,15 @@ public sealed class RfFrameIngestService(
                 rfStation.LastHeardRf = DateTime.UtcNow;
             }
             await db.SaveChangesAsync(ct);
+
+            // Tell the live views the packet was actually heard on RF — without
+            // this the stream shows it as an APRS-IS packet forever and the
+            // radio appears "deaf" whenever the internet copy arrives first.
+            await hubContext.Clients.All.SendAsync(
+                Hubs.PacketHub.PacketSourceUpgradedMethod,
+                new { Id = existingAprsIs.Id, Source = PacketSource.Rf },
+                ct);
+
             logger.LogDebug(
                 "RF upgrade: APRS-IS packet id={Id} from {Callsign} upgraded to RF.",
                 existingAprsIs.Id, callsign);

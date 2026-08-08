@@ -19,7 +19,6 @@ public class StatusController(
     public ActionResult<StatusDto> GetStatus()
     {
         var s = aprsIsStatus;
-        var modem = modemService.Status;
         return Ok(new StatusDto
         {
             DirewolfConnected = connectionHolder.IsConnected,
@@ -34,8 +33,8 @@ public class StatusController(
             AprsIsLastConnectAttemptAt = s.LastConnectAttemptAt,
             AprsIsFailedAttempts = s.FailedAttempts,
             AprsIsLastError = s.LastError,
-            ModemState = modem.State,
-            ModemCarrierDetected = modem.CarrierDetected,
+            ModemState = modemService.AggregateState,
+            ModemCarrierDetected = modemService.AnyCarrierDetected,
         });
     }
 

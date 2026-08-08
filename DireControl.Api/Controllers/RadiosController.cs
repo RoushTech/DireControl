@@ -2,6 +2,7 @@ using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,7 +10,10 @@ namespace DireControl.Api.Controllers;
 
 [ApiController]
 [Route("api/v0/radios")]
-public class RadiosController(DireControlContext db, BeaconService beaconService) : ControllerBase
+public class RadiosController(
+    DireControlContext db,
+    BeaconService beaconService,
+    ModemRestartTrigger modemRestartTrigger) : ControllerBase
 {
     // ─── List ──────────────────────────────────────────────────────────────────
 
@@ -83,12 +87,22 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
             ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600,
+            FrequencyMhz = request.FrequencyMhz,
+            Mode = string.IsNullOrWhiteSpace(request.Mode) ? null : request.Mode.Trim(),
         };
 
         radio.FullCallsign = Radio.ComputeFullCallsign(radio.Callsign, radio.Ssid);
 
+        if (request.Modem is { } modem)
+        {
+            if (ValidateModemConfig(modem) is { } error)
+                return BadRequest(error);
+            ApplyModemConfig(radio, modem);
+        }
+
         db.Radios.Add(radio);
         await db.SaveChangesAsync(ct);
+        modemRestartTrigger.Trigger();
 
         var now = DateTime.UtcNow;
         return CreatedAtAction(nameof(GetRadio), new { id = radio.Id },
@@ -150,9 +164,19 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
         radio.BeaconSymbol = string.IsNullOrWhiteSpace(request.BeaconSymbol) ? null : request.BeaconSymbol.Trim();
         radio.BeaconComment = string.IsNullOrWhiteSpace(request.BeaconComment) ? null : request.BeaconComment.Trim();
         radio.ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600;
+        radio.FrequencyMhz = request.FrequencyMhz;
+        radio.Mode = string.IsNullOrWhiteSpace(request.Mode) ? null : request.Mode.Trim();
         radio.FullCallsign = Radio.ComputeFullCallsign(radio.Callsign, radio.Ssid);
 
+        if (request.Modem is { } modem)
+        {
+            if (ValidateModemConfig(modem) is { } error)
+                return BadRequest(error);
+            ApplyModemConfig(radio, modem);
+        }
+
         await db.SaveChangesAsync(ct);
+        modemRestartTrigger.Trigger();
 
         var now = DateTime.UtcNow;
         var lastBeacon = await db.OwnBeacons
@@ -179,6 +203,7 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
 
         db.Radios.Remove(radio);
         await db.SaveChangesAsync(ct);
+        modemRestartTrigger.Trigger();
         return NoContent();
     }
 
@@ -192,6 +217,7 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
 
         radio.IsActive = !radio.IsActive;
         await db.SaveChangesAsync(ct);
+        modemRestartTrigger.Trigger();
 
         var now = DateTime.UtcNow;
         return Ok(ToDto(radio, [], [], [], now));
@@ -332,6 +358,105 @@ public class RadiosController(DireControlContext db, BeaconService beaconService
                 : null,
             ConfirmationCount = confirmMap.GetValueOrDefault(radio.Id),
             BeaconCount = beaconMap.GetValueOrDefault(radio.Id),
+            FrequencyMhz = radio.FrequencyMhz,
+            Mode = radio.Mode,
+            Modem = new RadioModemConfigDto
+            {
+                ModemEnabled = radio.ModemEnabled,
+                ModemCaptureDevice = radio.ModemCaptureDevice,
+                ModemPlaybackDevice = radio.ModemPlaybackDevice,
+                TxEnabled = radio.TxEnabled,
+                TxAudioLevelPct = radio.TxAudioLevelPct,
+                TxDelayMs = radio.TxDelayMs,
+                TxTailMs = radio.TxTailMs,
+                TxPersistence = radio.TxPersistence,
+                TxSlotTimeMs = radio.TxSlotTimeMs,
+                PttMethod = radio.PttMethod,
+                PttSerialPort = radio.PttSerialPort,
+                PttSerialUseRts = radio.PttSerialUseRts,
+                PttSerialUseDtr = radio.PttSerialUseDtr,
+                PttHidDevice = radio.PttHidDevice,
+                PttHidPin = radio.PttHidPin,
+                PttGpioChip = radio.PttGpioChip,
+                PttGpioLine = radio.PttGpioLine,
+                PttGpioActiveLow = radio.PttGpioActiveLow,
+                PttRigctldHost = radio.PttRigctldHost,
+                PttRigctldPort = radio.PttRigctldPort,
+            },
         };
+    }
+
+    /// <summary>Returns an error message when the modem config is invalid, else null.</summary>
+    private static string? ValidateModemConfig(RadioModemConfigDto modem)
+    {
+        if (!modem.ModemEnabled)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(modem.ModemCaptureDevice))
+            return "Capture device is required (e.g. \"default\").";
+
+        if (!modem.TxEnabled)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(modem.ModemPlaybackDevice))
+            return "Playback device is required when TX is enabled.";
+        if (modem.TxAudioLevelPct is < 1 or > 100)
+            return "TX audio level must be between 1 and 100 percent.";
+        if (modem.TxDelayMs is < 0 or > 2000)
+            return "TX delay must be between 0 and 2000 ms.";
+        if (modem.TxTailMs is < 0 or > 1000)
+            return "TX tail must be between 0 and 1000 ms.";
+        if (modem.TxPersistence is < 0 or > 255)
+            return "Persistence must be between 0 and 255.";
+        if (modem.TxSlotTimeMs is < 10 or > 1000)
+            return "Slot time must be between 10 and 1000 ms.";
+
+        return modem.PttMethod switch
+        {
+            PttMethod.SerialRtsDtr when string.IsNullOrWhiteSpace(modem.PttSerialPort) =>
+                "Serial PTT requires a serial port.",
+            PttMethod.SerialRtsDtr when modem is { PttSerialUseRts: false, PttSerialUseDtr: false } =>
+                "Serial PTT requires at least one of RTS or DTR.",
+            PttMethod.Cm108 when string.IsNullOrWhiteSpace(modem.PttHidDevice) =>
+                "CM108 PTT requires a hidraw device.",
+            PttMethod.Cm108 when modem.PttHidPin is < 1 or > 8 =>
+                "CM108 GPIO pin must be between 1 and 8.",
+            PttMethod.Rigctld when string.IsNullOrWhiteSpace(modem.PttRigctldHost) =>
+                "Rigctld PTT requires a hostname.",
+            PttMethod.Rigctld when modem.PttRigctldPort is < 1 or > 65535 =>
+                "Rigctld port must be between 1 and 65535.",
+            PttMethod.Unknown => "Choose a PTT method (or None for VOX).",
+            _ => null,
+        };
+    }
+
+    private static void ApplyModemConfig(Radio radio, RadioModemConfigDto modem)
+    {
+        radio.ModemEnabled = modem.ModemEnabled;
+        radio.ModemCaptureDevice = string.IsNullOrWhiteSpace(modem.ModemCaptureDevice)
+            ? "default"
+            : modem.ModemCaptureDevice.Trim();
+        radio.ModemPlaybackDevice = string.IsNullOrWhiteSpace(modem.ModemPlaybackDevice)
+            ? "default"
+            : modem.ModemPlaybackDevice.Trim();
+        radio.TxEnabled = modem.TxEnabled;
+        radio.TxAudioLevelPct = modem.TxAudioLevelPct;
+        radio.TxDelayMs = modem.TxDelayMs;
+        radio.TxTailMs = modem.TxTailMs;
+        radio.TxPersistence = modem.TxPersistence;
+        radio.TxSlotTimeMs = modem.TxSlotTimeMs;
+        radio.PttMethod = modem.PttMethod;
+        radio.PttSerialPort = modem.PttSerialPort?.Trim();
+        radio.PttSerialUseRts = modem.PttSerialUseRts;
+        radio.PttSerialUseDtr = modem.PttSerialUseDtr;
+        radio.PttHidDevice = modem.PttHidDevice?.Trim();
+        radio.PttHidPin = modem.PttHidPin;
+        radio.PttGpioChip = modem.PttGpioChip;
+        radio.PttGpioLine = modem.PttGpioLine;
+        radio.PttGpioActiveLow = modem.PttGpioActiveLow;
+        radio.PttRigctldHost = string.IsNullOrWhiteSpace(modem.PttRigctldHost)
+            ? "localhost"
+            : modem.PttRigctldHost.Trim();
+        radio.PttRigctldPort = modem.PttRigctldPort;
     }
 }

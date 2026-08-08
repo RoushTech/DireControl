@@ -17,5 +17,6 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string ModemStatusChangedMethod = "modemStatusChanged";
     public const string ModemSpectrumMethod = "modemSpectrum";
     public const string ModemLevelMethod = "modemLevel";
+    public const string PacketSourceUpgradedMethod = "packetSourceUpgraded";
     public const string BeaconConfirmedHeardMethod = "beaconConfirmedHeard";
 }

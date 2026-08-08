@@ -62,23 +62,84 @@ public sealed class HdlcDeframerTests
         Assert.That(decoded[0], Is.EqualTo(frame).AsCollection);
     }
 
+    /// <summary>
+    /// Builds a correctly stuffed HDLC bit stream whose FCS is deliberately
+    /// wrong — a byte-aligned, plausible-length frame that must fail the CRC.
+    /// </summary>
+    private static List<bool> BuildStreamWithBadFcs(byte[] frame)
+    {
+        var bits = new List<bool>();
+
+        static void AppendFlag(List<bool> b)
+        {
+            b.Add(false);
+            for (var i = 0; i < 6; i++)
+                b.Add(true);
+            b.Add(false);
+        }
+
+        for (var i = 0; i < 4; i++)
+            AppendFlag(bits);
+
+        var onesCount = 0;
+        void AppendByteStuffed(byte value)
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                var bit = (value & (1 << i)) != 0;
+                bits.Add(bit);
+                if (bit && ++onesCount == 5)
+                {
+                    bits.Add(false);
+                    onesCount = 0;
+                }
+                else if (!bit)
+                {
+                    onesCount = 0;
+                }
+            }
+        }
+
+        foreach (var b in frame)
+            AppendByteStuffed(b);
+
+        var badFcs = (ushort)(Crc16Ccitt.ComputeFcs(frame) ^ 0x0001);
+        AppendByteStuffed((byte)(badFcs & 0xFF));
+        AppendByteStuffed((byte)(badFcs >> 8));
+
+        AppendFlag(bits);
+        return bits;
+    }
+
     [Test]
     public void Deframer_RejectsCorruptedFcs()
     {
-        var frame = MakeFrame(25);
-        var bits = AfskModulator.BuildHdlcBitStream(frame, 4, 2);
-
-        // Flip one mid-frame data bit (after the 4 lead flags = 32 bits).
-        bits[40] = !bits[40];
-
         var deframer = new HdlcDeframer();
         var frames = new List<byte[]>();
         deframer.FrameReceived += frames.Add;
-        foreach (var bit in bits)
+        foreach (var bit in BuildStreamWithBadFcs(MakeFrame(25)))
             deframer.ProcessBit(bit);
 
         Assert.That(frames, Is.Empty);
-        Assert.That(deframer.InvalidFrameCount, Is.GreaterThanOrEqualTo(1));
+        Assert.That(deframer.InvalidFrameCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Deframer_NoiseDoesNotCountAsCrcErrors()
+    {
+        // Deterministic pseudo-random noise bits — spurious flag patterns will
+        // appear, but the short/misaligned garbage between them must not be
+        // reported as damaged packets.
+        var rng = new Random(42);
+        var deframer = new HdlcDeframer();
+        var frames = new List<byte[]>();
+        deframer.FrameReceived += frames.Add;
+
+        for (var i = 0; i < 200_000; i++)
+            deframer.ProcessBit(rng.Next(2) == 1);
+
+        Assert.That(frames, Is.Empty, "noise must not decode");
+        Assert.That(deframer.InvalidFrameCount, Is.EqualTo(0), "noise must not count as CRC errors");
     }
 
     [Test]
