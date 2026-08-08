@@ -6,6 +6,7 @@ import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useUiStore } from '@/stores/uiStore'
 import { getStatus, reconnectAprsIs } from '@/api/statusApi'
+import { ModemStates, type ModemState } from '@/api/modemApi'
 import { getAbout } from '@/api/aboutApi'
 import { recordServerSync } from '@/utils/serverTime'
 
@@ -24,6 +25,7 @@ const uiStore = useUiStore()
 const isDark = ref(theme.global.current.value.dark)
 const apiOffline = ref(false)
 const direwolfDisconnected = ref(false)
+const modemState = ref<ModemState>(ModemStates.Disabled)
 const aprsIsState = ref('Disabled')
 const aprsIsServerName = ref<string | null>(null)
 const aprsIsFilter = ref('')
@@ -60,21 +62,31 @@ let statusInterval: ReturnType<typeof setInterval> | null = null
 
 const aprsIsStateColor = computed(() => {
   switch (aprsIsState.value) {
-    case 'Connected': return 'success'
-    case 'Connecting': return 'warning'
-    case 'AuthFailed': return 'error'
-    case 'Disconnected': return 'warning'
-    default: return 'grey'
+    case 'Connected':
+      return 'success'
+    case 'Connecting':
+      return 'warning'
+    case 'AuthFailed':
+      return 'error'
+    case 'Disconnected':
+      return 'warning'
+    default:
+      return 'grey'
   }
 })
 
 const aprsIsStateLabel = computed(() => {
   switch (aprsIsState.value) {
-    case 'Connected': return 'Connected'
-    case 'Connecting': return 'Connecting…'
-    case 'AuthFailed': return 'Auth Failed'
-    case 'Disconnected': return 'Disconnected'
-    default: return 'Disabled'
+    case 'Connected':
+      return 'Connected'
+    case 'Connecting':
+      return 'Connecting…'
+    case 'AuthFailed':
+      return 'Auth Failed'
+    case 'Disconnected':
+      return 'Disconnected'
+    default:
+      return 'Disabled'
   }
 })
 
@@ -83,6 +95,7 @@ async function pollStatus() {
     const status = await getStatus()
     apiOffline.value = false
     direwolfDisconnected.value = !status.direwolfConnected
+    modemState.value = status.modemState
     aprsIsState.value = status.aprsIsState
     aprsIsServerName.value = status.aprsIsServerName
     aprsIsFilter.value = status.aprsIsFilter
@@ -119,11 +132,7 @@ async function reconnectAprsIsNow() {
 function onKeydown(e: KeyboardEvent) {
   // Don't fire when user is typing in an input
   const target = e.target as HTMLElement
-  if (
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.isContentEditable
-  ) {
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
     return
   }
 
@@ -208,10 +217,11 @@ async function syncServerClock() {
       location="left"
     >
       <v-list density="compact" nav>
+        <v-list-item to="/" prepend-icon="mdi-map" title="Map" @click="mobileDrawerOpen = false" />
         <v-list-item
-          to="/"
-          prepend-icon="mdi-map"
-          title="Map"
+          to="/radio"
+          prepend-icon="mdi-radio-handheld"
+          title="Radio"
           @click="mobileDrawerOpen = false"
         />
         <v-list-item
@@ -294,6 +304,7 @@ async function syncServerClock() {
         <!-- Desktop nav — hidden on mobile -->
         <div class="desktop-nav">
           <v-btn to="/" variant="text" size="small">Map</v-btn>
+          <v-btn to="/radio" variant="text" size="small">Radio</v-btn>
           <v-btn to="/beacons" variant="text" size="small">Beacon Stream</v-btn>
 
           <v-btn to="/messages" variant="text" size="small" class="position-relative">
@@ -411,15 +422,17 @@ async function syncServerClock() {
       <v-banner-text>Backend API is unreachable — retrying…</v-banner-text>
     </v-banner>
 
+    <!-- Only warn about the missing TNC when the native sound modem is not
+         carrying RF either — with the modem running, RF still flows. -->
     <v-banner
-      v-else-if="direwolfDisconnected"
+      v-else-if="direwolfDisconnected && modemState !== ModemStates.Running"
       color="warning"
       density="compact"
       icon="mdi-radio-tower"
       lines="one"
       :sticky="true"
     >
-      <v-banner-text>Direwolf is not connected — no new packets will be received</v-banner-text>
+      <v-banner-text>No RF backend is connected — no new packets will be received</v-banner-text>
     </v-banner>
 
     <v-main class="fill-height">

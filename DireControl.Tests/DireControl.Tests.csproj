@@ -18,9 +18,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\RawPackets.txt" Link="RawPackets.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="RoushTech.APRSsharp.AprsParser" Version="0.5.1-rc.2" />
     <ProjectReference Include="..\DireControl\DireControl.csproj" />
     <ProjectReference Include="..\DireControl.Api\DireControl.Api.csproj" />
+    <ProjectReference Include="..\DireControl.Modem\DireControl.Modem.csproj" />
   </ItemGroup>
 
 </Project>

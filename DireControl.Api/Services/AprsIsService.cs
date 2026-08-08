@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
+using DireControl.Modem.Ax25;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AprsConnectionState = AprsSharp.AprsIsClient.ConnectionState;
@@ -18,6 +19,7 @@ public sealed class AprsIsService(
     IServiceScopeFactory scopeFactory,
     IAprsIsStatusService statusService,
     AprsIsReconnectTrigger reconnectTrigger,
+    IFrameTransmitter transmitter,
     IOptions<DireControlOptions> options,
     ILogger<AprsIsService> logger) : BackgroundService
 {
@@ -172,12 +174,13 @@ public sealed class AprsIsService(
                             "Connected to APRS-IS server {Server} as {Callsign} (filter: {Filter}).",
                             serverName ?? "(unknown)", options.Value.OurCallsign,
                             string.IsNullOrEmpty(settings.AprsIsFilter) ? "(none)" : settings.AprsIsFilter);
+
                     }
                     continue;
                 }
 
                 statusService.IncrementPacketCount();
-                await ProcessLineAsync(raw, settings.DeduplicationWindowSeconds, ct);
+                await ProcessLineAsync(raw, settings, ct);
             }
         }
         catch (OperationCanceledException)
@@ -197,7 +200,7 @@ public sealed class AprsIsService(
         throw new EndOfStreamException("APRS-IS connection closed.");
     }
 
-    private async Task ProcessLineAsync(string tnc2, int dedupWindowSeconds, CancellationToken ct)
+    private async Task ProcessLineAsync(string tnc2, UserSetting settings, CancellationToken ct)
     {
         var callsign = ExtractCallsign(tnc2);
         if (string.IsNullOrWhiteSpace(callsign))
@@ -211,7 +214,7 @@ public sealed class AprsIsService(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
 
-        var dedupWindow = DateTime.UtcNow.AddSeconds(-dedupWindowSeconds);
+        var dedupWindow = DateTime.UtcNow.AddSeconds(-settings.DeduplicationWindowSeconds);
 
         // Check for duplicate within window.
         var duplicate = await db.Packets
@@ -261,6 +264,46 @@ public sealed class AprsIsService(
         await db.SaveChangesAsync(ct);
 
         logger.LogDebug("Stored APRS-IS packet from {Callsign}: {Line}", callsign, tnc2);
+
+        if (settings.IsToRfGatingEnabled)
+            await TryGateToRfAsync(db, tnc2, settings, ct);
+    }
+
+    /// <summary>
+    /// IS→RF gating (standard rule): forward APRS-IS <em>messages</em> to RF,
+    /// wrapped in third-party format, when the addressee was heard on RF
+    /// recently — they are in range of our transmitter but not on the internet.
+    /// </summary>
+    private async Task TryGateToRfAsync(
+        DireControlContext db,
+        string tnc2,
+        UserSetting settings,
+        CancellationToken ct)
+    {
+        var addressee = IgateLogic.ExtractMessageAddressee(ExtractInfoField(tnc2));
+        if (addressee is null)
+            return;
+
+        var ourCallsign = options.Value.OurCallsign;
+        if (addressee.Equals(ourCallsign, StringComparison.OrdinalIgnoreCase))
+            return; // messages to us are handled by the normal message pipeline
+
+        var heardCutoff = DateTime.UtcNow.AddMinutes(-Math.Max(1, settings.IsToRfRecentHeardMinutes));
+        var heardOnRf = await db.Stations.AnyAsync(
+            s => s.Callsign == addressee && s.LastHeardRf != null && s.LastHeardRf >= heardCutoff,
+            ct);
+        if (!heardOnRf)
+            return;
+
+        var thirdPartyInfo = IgateLogic.BuildIsToRfThirdPartyInfo(tnc2, ourCallsign);
+        if (thirdPartyInfo is null)
+            return;
+
+        var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, thirdPartyInfo, settings.IsToRfPath);
+        if (transmitter.TrySend(frame))
+            logger.LogInformation("Gated IS→RF for {Addressee}: {Info}", addressee, thirdPartyInfo);
+        else
+            logger.LogWarning("Cannot gate IS→RF for {Addressee}: no RF transmit backend available.", addressee);
     }
 
     private async Task<UserSetting> GetSettingsAsync(CancellationToken ct)

@@ -586,6 +586,97 @@ namespace DireControl.Migrations
                     b.Property<int>("DeduplicationWindowSeconds")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("DigipeaterEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("DigipeaterFillInOnly")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DigipeaterMaxWideN")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsToRfGatingEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("IsToRfPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("IsToRfRecentHeardMinutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("KissServerEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("KissServerPort")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ModemCaptureDevice")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ModemEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemKissChannel")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemPersistence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ModemPlaybackDevice")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ModemPttGpioActiveLow")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemPttGpioChip")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemPttGpioLine")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ModemPttHidDevice")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ModemPttHidPin")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemPttMethod")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ModemPttRigctldHost")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ModemPttRigctldPort")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ModemPttSerialPort")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ModemPttSerialUseDtr")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ModemPttSerialUseRts")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemSlotTimeMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemTxAudioLevelPct")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemTxDelayMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ModemTxEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModemTxTailMs")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("OpenWeatherMapApiKey")
                         .HasColumnType("TEXT");
 
@@ -608,6 +699,9 @@ namespace DireControl.Migrations
                     b.Property<string>("RainViewerProApiKey")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("RfToIsGatingEnabled")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("TomorrowIoApiKey")
                         .HasColumnType("TEXT");
 
@@ -624,11 +718,39 @@ namespace DireControl.Migrations
                             AprsIsHost = "rotate.aprs2.net",
                             AprsIsPort = 14580,
                             DeduplicationWindowSeconds = 60,
+                            DigipeaterEnabled = false,
+                            DigipeaterFillInOnly = false,
+                            DigipeaterMaxWideN = 2,
+                            IsToRfGatingEnabled = false,
+                            IsToRfPath = "",
+                            IsToRfRecentHeardMinutes = 30,
+                            KissServerEnabled = false,
+                            KissServerPort = 8010,
+                            ModemCaptureDevice = "default",
+                            ModemEnabled = false,
+                            ModemKissChannel = 0,
+                            ModemPersistence = 63,
+                            ModemPlaybackDevice = "default",
+                            ModemPttGpioActiveLow = false,
+                            ModemPttGpioChip = 0,
+                            ModemPttGpioLine = 0,
+                            ModemPttHidPin = 3,
+                            ModemPttMethod = 1,
+                            ModemPttRigctldHost = "localhost",
+                            ModemPttRigctldPort = 4532,
+                            ModemPttSerialUseDtr = false,
+                            ModemPttSerialUseRts = true,
+                            ModemSlotTimeMs = 100,
+                            ModemTxAudioLevelPct = 80,
+                            ModemTxDelayMs = 300,
+                            ModemTxEnabled = false,
+                            ModemTxTailMs = 50,
                             OutboundPath = "WIDE1-1,WIDE2-1",
                             PacketRetentionAprsIsDays = 14,
                             PacketRetentionOwnDays = 0,
                             PacketRetentionRfDays = 0,
-                            RadarProvider = 0
+                            RadarProvider = 0,
+                            RfToIsGatingEnabled = false
                         });
                 });
 

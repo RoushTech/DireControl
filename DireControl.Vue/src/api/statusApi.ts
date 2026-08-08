@@ -1,4 +1,5 @@
 import http from './axios'
+import type { ModemState } from './modemApi'
 
 export interface StatusDto {
   direwolfConnected: boolean
@@ -11,6 +12,11 @@ export interface StatusDto {
   aprsIsLastConnectAttemptAt: string | null
   aprsIsFailedAttempts: number
   aprsIsLastError: string | null
+  modemState: ModemState
+  modemCarrierDetected: boolean
+  digipeatedFrames: number
+  kissServerClients: number
+  rfToIsGatedLines: number
 }
 
 export async function getStatus(): Promise<StatusDto> {

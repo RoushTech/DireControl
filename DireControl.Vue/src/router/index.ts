@@ -10,6 +10,11 @@ const router = createRouter({
       component: MapView,
     },
     {
+      path: '/radio',
+      name: 'radio',
+      component: () => import('@/views/RadioView.vue'),
+    },
+    {
       path: '/beacons',
       name: 'beacons',
       component: () => import('@/views/BeaconStreamView.vue'),

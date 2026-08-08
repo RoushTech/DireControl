@@ -120,6 +120,120 @@ public sealed class SettingsDto
     public int AprsIsPasscodeComputed { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
+
+    // Native sound modem settings
+    public bool DirewolfEnabled { get; init; }
+    public bool ModemEnabled { get; init; }
+    public required string ModemCaptureDevice { get; init; }
+    public int ModemKissChannel { get; init; }
+    public bool ModemTxEnabled { get; init; }
+    public required string ModemPlaybackDevice { get; init; }
+    public int ModemTxAudioLevelPct { get; init; }
+    public int ModemTxDelayMs { get; init; }
+    public int ModemTxTailMs { get; init; }
+    public int ModemPersistence { get; init; }
+    public int ModemSlotTimeMs { get; init; }
+    public PttMethod ModemPttMethod { get; init; }
+    public string? ModemPttSerialPort { get; init; }
+    public bool ModemPttSerialUseRts { get; init; }
+    public bool ModemPttSerialUseDtr { get; init; }
+    public string? ModemPttHidDevice { get; init; }
+    public int ModemPttHidPin { get; init; }
+    public int ModemPttGpioChip { get; init; }
+    public int ModemPttGpioLine { get; init; }
+    public bool ModemPttGpioActiveLow { get; init; }
+    public required string ModemPttRigctldHost { get; init; }
+    public int ModemPttRigctldPort { get; init; }
+
+    // RF services (digipeater / KISS server / iGate)
+    public bool DigipeaterEnabled { get; init; }
+    public int DigipeaterMaxWideN { get; init; }
+    public bool DigipeaterFillInOnly { get; init; }
+    public bool KissServerEnabled { get; init; }
+    public int KissServerPort { get; init; }
+    public bool RfToIsGatingEnabled { get; init; }
+    public bool IsToRfGatingEnabled { get; init; }
+    public required string IsToRfPath { get; init; }
+    public int IsToRfRecentHeardMinutes { get; init; }
+}
+
+public sealed class UpdateModemSettingsRequest
+{
+    public bool ModemEnabled { get; init; }
+    public required string ModemCaptureDevice { get; init; }
+    public int ModemKissChannel { get; init; }
+
+    // Transmit
+    public bool ModemTxEnabled { get; init; }
+    public required string ModemPlaybackDevice { get; init; }
+    public int ModemTxAudioLevelPct { get; init; } = 80;
+    public int ModemTxDelayMs { get; init; } = 300;
+    public int ModemTxTailMs { get; init; } = 50;
+    public int ModemPersistence { get; init; } = 63;
+    public int ModemSlotTimeMs { get; init; } = 100;
+
+    // PTT
+    public PttMethod ModemPttMethod { get; init; } = PttMethod.None;
+    public string? ModemPttSerialPort { get; init; }
+    public bool ModemPttSerialUseRts { get; init; } = true;
+    public bool ModemPttSerialUseDtr { get; init; }
+    public string? ModemPttHidDevice { get; init; }
+    public int ModemPttHidPin { get; init; } = 3;
+    public int ModemPttGpioChip { get; init; }
+    public int ModemPttGpioLine { get; init; }
+    public bool ModemPttGpioActiveLow { get; init; }
+    public string ModemPttRigctldHost { get; init; } = "localhost";
+    public int ModemPttRigctldPort { get; init; } = 4532;
+}
+
+public sealed class ModemDeviceDto
+{
+    public required string Name { get; init; }
+    public required string Description { get; init; }
+    public bool SupportsCapture { get; init; }
+    public bool SupportsPlayback { get; init; }
+}
+
+public sealed class HidDeviceDto
+{
+    public required string Path { get; init; }
+    public required string Name { get; init; }
+}
+
+public sealed class ModemDevicesDto
+{
+    public required List<ModemDeviceDto> Audio { get; init; }
+    public required List<string> SerialPorts { get; init; }
+    public required List<HidDeviceDto> HidDevices { get; init; }
+}
+
+public sealed class ModemStatusDto
+{
+    public ModemState State { get; init; }
+    public string? CaptureDevice { get; init; }
+    public string? ErrorMessage { get; init; }
+    public float AudioLevel { get; init; }
+    public bool CarrierDetected { get; init; }
+    public long DecodedFrames { get; init; }
+    public long InvalidFrames { get; init; }
+    public bool TxEnabled { get; init; }
+    public bool Transmitting { get; init; }
+    public long TransmittedFrames { get; init; }
+    public long? RigFrequencyHz { get; init; }
+    public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
+}
+
+public sealed class UpdateRfServicesRequest
+{
+    public bool DigipeaterEnabled { get; init; }
+    public int DigipeaterMaxWideN { get; init; } = 2;
+    public bool DigipeaterFillInOnly { get; init; }
+    public bool KissServerEnabled { get; init; }
+    public int KissServerPort { get; init; } = 8010;
+    public bool RfToIsGatingEnabled { get; init; }
+    public bool IsToRfGatingEnabled { get; init; }
+    public string IsToRfPath { get; init; } = string.Empty;
+    public int IsToRfRecentHeardMinutes { get; init; } = 30;
 }
 
 public sealed class UpdateAprsIsSettingsRequest
@@ -378,6 +492,9 @@ public sealed class StatusDto
 {
     public bool DirewolfConnected { get; init; }
     public bool ApiOnline { get; init; } = true;
+    public long DigipeatedFrames { get; init; }
+    public int KissServerClients { get; init; }
+    public long RfToIsGatedLines { get; init; }
     public required string AprsIsState { get; init; }
     public string? AprsIsServerName { get; init; }
     public string AprsIsFilter { get; init; } = string.Empty;
@@ -386,6 +503,8 @@ public sealed class StatusDto
     public DateTime? AprsIsLastConnectAttemptAt { get; init; }
     public int AprsIsFailedAttempts { get; init; }
     public string? AprsIsLastError { get; init; }
+    public ModemState ModemState { get; init; }
+    public bool ModemCarrierDetected { get; init; }
 }
 
 public sealed class SignalPointDto

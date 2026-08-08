@@ -114,6 +114,8 @@ export interface ResolvedPathEntry {
 export interface SignalData {
   decodeQuality: number | null
   frequencyOffsetHz: number | null
+  audioLevel: number | null
+  demodProfile: string | null
 }
 
 export interface SignalPointDto {

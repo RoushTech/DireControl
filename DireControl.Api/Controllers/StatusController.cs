@@ -9,15 +9,23 @@ namespace DireControl.Api.Controllers;
 public class StatusController(
     KissConnectionHolder connectionHolder,
     IAprsIsStatusService aprsIsStatus,
+    SoundModemService modemService,
+    DigipeaterService digipeaterService,
+    KissTcpServerService kissServer,
+    AprsIsTxQueue aprsIsTxQueue,
     AprsIsReconnectTrigger reconnectTrigger) : ControllerBase
 {
     [HttpGet]
     public ActionResult<StatusDto> GetStatus()
     {
         var s = aprsIsStatus;
+        var modem = modemService.Status;
         return Ok(new StatusDto
         {
             DirewolfConnected = connectionHolder.IsConnected,
+            DigipeatedFrames = digipeaterService.DigipeatedFrames,
+            KissServerClients = kissServer.ClientCount,
+            RfToIsGatedLines = aprsIsTxQueue.SentCount,
             AprsIsState = s.State.ToString(),
             AprsIsServerName = s.ServerName,
             AprsIsFilter = s.ActiveFilter,
@@ -26,6 +34,8 @@ public class StatusController(
             AprsIsLastConnectAttemptAt = s.LastConnectAttemptAt,
             AprsIsFailedAttempts = s.FailedAttempts,
             AprsIsLastError = s.LastError,
+            ModemState = modem.State,
+            ModemCarrierDetected = modem.CarrierDetected,
         });
     }
 

@@ -4,9 +4,27 @@ services:
     env_file: .env
     ports:
       - "${HTTP_PORT:-80}:5010"
+      # KISS TCP server — uncomment (and enable in Settings) to let other
+      # apps on your network use DireControl as their TNC
+      # - "8010:8010"
     volumes:
       - ./data:/data
     restart: unless-stopped
     # Allows the container to reach Direwolf running on the host via host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # ── Hardware passthrough for the native sound modem ──────────────────────
+    # Uncomment `devices:` plus the entries you actually use — compose fails to
+    # start if a listed device does not exist on the host.
+    # devices:
+    #   # Sound cards (required for the native modem — RX and TX audio).
+    #   # Passes through ALL ALSA devices; pick the specific card in Settings.
+    #   - /dev/snd:/dev/snd
+    #   # Serial PTT (RTS/DTR) — USB serial adapters usually appear as
+    #   # ttyUSB0 or ttyACM0; check `ls /dev/tty{USB,ACM}*` on the host
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    #   # CM108/CM119 PTT (DigiRig, AIOC, …) — check `ls /dev/hidraw*`; the
+    #   # modem device list in Settings shows which one is the C-Media chip
+    #   - /dev/hidraw0:/dev/hidraw0
+    #   # GPIO PTT (Raspberry Pi hats)
+    #   - /dev/gpiochip0:/dev/gpiochip0

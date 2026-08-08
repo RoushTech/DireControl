@@ -99,7 +99,7 @@ public sealed class PacketReprocessingTests
     {
         var options = Options.Create(new DireControlOptions { OurCallsign = "N0CALL-10" });
         var messageSending = new MessageSendingService(
-            new KissConnectionHolder(),
+            new NullFrameTransmitter(),
             new ThrowingScopeFactory(),
             options,
             NullLogger<MessageSendingService>.Instance);
@@ -177,6 +177,12 @@ public sealed class PacketReprocessingTests
     private sealed class ThrowingScopeFactory : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => throw new InvalidOperationException("scope factory must not be used during reprocessing");
+    }
+
+    /// <summary>Transmitter stand-in: no RF backend available.</summary>
+    private sealed class NullFrameTransmitter : IFrameTransmitter
+    {
+        public bool TrySend(byte[] ax25Frame) => false;
     }
 
     private sealed class ThrowingHubContext : IHubContext<PacketHub>

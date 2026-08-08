@@ -21,7 +21,7 @@ public class Packet : IEntityTypeConfiguration<Packet>
     /// </summary>
     public int ParserVersion { get; set; }
 
-    /// <summary>How this packet reached DireControl (RF via Direwolf KISS, or APRS-IS).</summary>
+    /// <summary>How this packet reached DireControl (RF via native modem / KISS TNC, or APRS-IS).</summary>
     public PacketSource Source { get; set; } = PacketSource.Rf;
 
     /// <summary>

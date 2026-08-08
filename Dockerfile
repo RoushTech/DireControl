@@ -15,6 +15,7 @@ ARG gitsha=unknown
 WORKDIR /src
 
 COPY DireControl/ DireControl/
+COPY DireControl.Modem/ DireControl.Modem/
 COPY DireControl.Api/ DireControl.Api/
 RUN shortsha=$(printf '%.8s' "$gitsha") \
     && echo "Building version $version+$shortsha from $gitsha" \
@@ -31,6 +32,14 @@ RUN shortsha=$(printf '%.8s' "$gitsha") \
 # Stage 3: Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+
+# libasound is required by the native sound modem (ALSA capture/playback);
+# libgpiod supports GPIO PTT.  The container additionally needs the relevant
+# devices passed through, e.g. `devices: ["/dev/snd:/dev/snd"]` in
+# docker-compose (plus /dev/ttyUSB0, /dev/hidraw0, or /dev/gpiochip0 for PTT).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libasound2 libgpiod3 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-build /app/publish .
 COPY --from=frontend-build /src/DireControl.Vue/dist ./wwwroot

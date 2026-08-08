@@ -1,8 +1,8 @@
-using System.Text;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Modem.Ax25;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -10,13 +10,13 @@ using Microsoft.Extensions.Options;
 namespace DireControl.Api.Services;
 
 /// <summary>
-/// Sends an immediate APRS position beacon via KISS and records it as an
+/// Sends an immediate APRS position beacon over RF and records it as an
 /// <see cref="OwnBeacon"/> in the database so it always appears in the UI
 /// regardless of whether it is heard back from RF (e.g. when a collision
 /// prevents the normal KISS echo from arriving).
 /// </summary>
 public sealed class BeaconService(
-    KissConnectionHolder connectionHolder,
+    IFrameTransmitter transmitter,
     IHubContext<PacketHub> hubContext,
     IServiceScopeFactory scopeFactory,
     IOptions<DireControlOptions> options,
@@ -47,12 +47,12 @@ public sealed class BeaconService(
         var path = radio.BeaconPath ?? string.Empty;
 
         var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", radio.BeaconComment);
-        var frame = BuildAx25Frame(radio.FullCallsign, info, path);
+        var frame = Ax25Encoder.EncodeUiFrame(radio.FullCallsign, info, path);
 
-        if (!connectionHolder.TrySend(frame))
+        if (!transmitter.TrySend(frame))
         {
             logger.LogWarning(
-                "Cannot beacon for {Callsign}: no active Direwolf connection.",
+                "Cannot beacon for {Callsign}: no RF transmit backend available.",
                 radio.FullCallsign);
             return null;
         }
@@ -115,54 +115,5 @@ public sealed class BeaconService(
         var commentPart = string.IsNullOrEmpty(comment) ? string.Empty : comment;
 
         return $"!{latDeg:D2}{latMin:00.00}{latDir}{symbolTable}{lonDeg:D3}{lonMin:00.00}{lonDir}{symbolCode}{commentPart}";
-    }
-
-    // ── AX.25 frame encoding (mirrors MessageSendingService) ──────────────────
-
-    private static byte[] BuildAx25Frame(string sourceCallsign, string aprsInfo, string path)
-    {
-        const string destination = "APRS";
-
-        var (destBase, destSsid) = SplitCallsign(destination);
-        var (srcBase, srcSsid) = SplitCallsign(sourceCallsign);
-
-        var pathItems = string.IsNullOrWhiteSpace(path)
-            ? []
-            : path.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var frame = new List<byte>(128);
-
-        frame.AddRange(EncodeAddress(destBase, destSsid, isLast: false));
-        frame.AddRange(EncodeAddress(srcBase, srcSsid, isLast: pathItems.Length == 0));
-
-        for (var i = 0; i < pathItems.Length; i++)
-        {
-            var (dBase, dSsid) = SplitCallsign(pathItems[i]);
-            frame.AddRange(EncodeAddress(dBase, dSsid, isLast: i == pathItems.Length - 1));
-        }
-
-        frame.Add(0x03); // Control: Unnumbered Information (UI)
-        frame.Add(0xF0); // PID: no layer-3 protocol
-
-        frame.AddRange(Encoding.ASCII.GetBytes(aprsInfo));
-
-        return [.. frame];
-    }
-
-    private static byte[] EncodeAddress(string callsign, int ssid, bool isLast)
-    {
-        var padded = callsign.ToUpperInvariant().PadRight(6)[..6];
-        var bytes = new byte[7];
-        for (var i = 0; i < 6; i++)
-            bytes[i] = (byte)((padded[i] & 0x7F) << 1);
-        bytes[6] = (byte)(0x60 | ((ssid & 0x0F) << 1) | (isLast ? 0x01 : 0x00));
-        return bytes;
-    }
-
-    private static (string callsign, int ssid) SplitCallsign(string raw)
-    {
-        var parts = raw.Split('-', 2);
-        var ssid = parts.Length > 1 && int.TryParse(parts[1], out var n) ? n : 0;
-        return (parts[0], ssid);
     }
 }

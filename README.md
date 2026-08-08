@@ -1,12 +1,18 @@
 # DireControl
 
-A real-time APRS (Automatic Packet Reporting System) monitoring and control application that interfaces with [Direwolf](https://github.com/wb2osz/direwolf) via KISS TCP. Aggregates packets from local RF and APRS-IS, provides interactive mapping, messaging, alerting, and beacon management for ham radio operators.
+A real-time APRS (Automatic Packet Reporting System) monitoring and control application with a built-in AFSK-1200 soundcard modem — point it at an ALSA audio device and receive RF directly, no external TNC required. An external KISS TCP TNC ([Direwolf](https://github.com/wb2osz/direwolf) or hardware) is still supported as an alternate/parallel RF backend. Aggregates packets from local RF and APRS-IS, provides interactive mapping, messaging, alerting, and beacon management for ham radio operators.
 
 ![DireControl screenshot](screenshot.png)
 
 ## Features
 
-- **Real-time packet capture** — Connects to Direwolf via KISS TCP, parses AX.25 frames, and classifies stations by type (Mobile, Fixed, Weather, Digipeater, IGate)
+- **Native sound modem** — Software AFSK-1200 modem (DSP in C#: tone correlators, PLL clock recovery, HDLC/AX.25 codec) reading and transmitting straight through an ALSA sound device, with live audio level/DCD/TX status in the UI
+- **Radio control** — PTT via serial RTS/DTR, CM108 USB HID (DigiRig), Linux GPIO, or hamlib rigctld (with rig frequency display); p-persistence CSMA channel access with carrier sense
+- **Digipeater** — WIDEn-N with callsign substitution, path trapping (WIDE7-7 abuse), fill-in mode, and 30 s duplicate suppression
+- **KISS TCP server** — other applications can use DireControl as their TNC
+- **Bidirectional iGate** — RF→IS gating with the qAR construct, and IS→RF message gating (third-party format) for stations recently heard on RF
+- **Signal telemetry** — live 0–4 kHz waterfall in the browser, per-packet audio level and demodulator profile, decode statistics
+- **Real-time packet capture** — Native modem and/or Direwolf via KISS TCP, parses AX.25 frames, and classifies stations by type (Mobile, Fixed, Weather, Digipeater, IGate)
 - **APRS-IS integration** — Dual-source packet aggregation from RF and internet with configurable filters and deduplication
 - **Interactive map** — Leaflet-based map with station plotting, APRS symbols, track history, range rings, heatmap overlay, and Maidenhead grid coverage analysis
 - **Messaging** — Send and receive APRS messages with automatic retry and acknowledgment tracking
@@ -48,12 +54,22 @@ services:
     env_file: .env
     ports:
       - "${HTTP_PORT:-80}:5010"
+      # KISS TCP server — uncomment (and enable in Settings) to let other
+      # apps on your network use DireControl as their TNC
+      # - "8010:8010"
     volumes:
       - ./data:/data
     restart: unless-stopped
     # Allows the container to reach Direwolf running on the host via host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Hardware passthrough for the native sound modem — uncomment `devices:`
+    # plus the entries you use (compose fails if a listed device is missing):
+    # devices:
+    #   - /dev/snd:/dev/snd            # sound cards (modem RX/TX audio)
+    #   - /dev/ttyUSB0:/dev/ttyUSB0    # serial RTS/DTR PTT
+    #   - /dev/hidraw0:/dev/hidraw0    # CM108 PTT (DigiRig etc.)
+    #   - /dev/gpiochip0:/dev/gpiochip0  # GPIO PTT (Pi hats)
 ```
 
 ### Configuration
