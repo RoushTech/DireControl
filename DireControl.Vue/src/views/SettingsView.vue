@@ -75,6 +75,12 @@ const outboundPathError = computed(() => {
 
 let pathSaveTimer: ReturnType<typeof setTimeout> | null = null
 
+/** Sets a common outbound path preset and saves it. */
+function applyPathPreset(path: string) {
+  outboundPath.value = path
+  schedulePathSave()
+}
+
 function schedulePathSave() {
   if (pathSaveTimer) clearTimeout(pathSaveTimer)
   pathSaveTimer = setTimeout(async () => {
@@ -1468,42 +1474,12 @@ async function confirmDelete() {
       />
       <div class="d-flex align-center flex-wrap gap-1 mb-3">
         <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
-        <v-btn
-          size="x-small"
-          variant="tonal"
-          @click="
-            outboundPath = 'WIDE1-1,WIDE2-1'
-            schedulePathSave()
-          "
+        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE1-1,WIDE2-1')"
           >WIDE1-1,WIDE2-1</v-btn
         >
-        <v-btn
-          size="x-small"
-          variant="tonal"
-          @click="
-            outboundPath = 'WIDE2-1'
-            schedulePathSave()
-          "
-          >WIDE2-1</v-btn
-        >
-        <v-btn
-          size="x-small"
-          variant="tonal"
-          @click="
-            outboundPath = 'WIDE1-1'
-            schedulePathSave()
-          "
-          >WIDE1-1</v-btn
-        >
-        <v-btn
-          size="x-small"
-          variant="tonal"
-          @click="
-            outboundPath = ''
-            schedulePathSave()
-          "
-          >Direct (no path)</v-btn
-        >
+        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE2-1')">WIDE2-1</v-btn>
+        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('WIDE1-1')">WIDE1-1</v-btn>
+        <v-btn size="x-small" variant="tonal" @click="applyPathPreset('')">Direct (no path)</v-btn>
       </div>
       <div class="text-body-2 text-medium-emphasis">
         Added to all outbound messages. <code>WIDE1-1,WIDE2-1</code> is recommended for most fixed
