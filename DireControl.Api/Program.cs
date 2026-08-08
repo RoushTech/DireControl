@@ -105,6 +105,7 @@ services
     .AddHostedService<StationExpiryService>()
     .AddHostedService<AlertingService>()
     .AddHostedService<MessageRetryService>()
+    .AddHostedService<AutoBeaconService>()
     .AddHostedService<WeatherCacheService>()
     .AddHostedService<StatisticsAggregationService>()
     .AddHostedService<LogBroadcastService>()

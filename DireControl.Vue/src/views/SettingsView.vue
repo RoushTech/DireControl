@@ -225,6 +225,8 @@ const rCallsign = ref('')
 const rSsid = ref('')
 const rChannel = ref(0)
 const rExpectedInterval = ref(600)
+const rAutoBeaconEnabled = ref(false)
+const rAutoBeaconInterval = ref(1800)
 const rNotes = ref('')
 const rBeaconPath = ref('')
 const rBeaconSymbol = ref('')
@@ -233,8 +235,17 @@ const rFrequencyMhz = ref<number | null>(null)
 const rMode = ref('')
 const rModem = ref<RadioModemConfig>(defaultRadioModemConfig())
 
+const autoBeaconError = computed(() =>
+  rAutoBeaconEnabled.value && rAutoBeaconInterval.value < 60
+    ? 'Auto-beacon interval must be at least 60 seconds'
+    : '',
+)
+
 const radioFormValid = computed(
-  () => rName.value.trim().length > 0 && /^[A-Z0-9]{3,6}$/i.test(rCallsign.value.trim()),
+  () =>
+    rName.value.trim().length > 0 &&
+    /^[A-Z0-9]{3,6}$/i.test(rCallsign.value.trim()) &&
+    !autoBeaconError.value,
 )
 
 const computedFullCallsign = computed(() => {
@@ -275,6 +286,8 @@ function openAddRadio() {
   rSsid.value = ''
   rChannel.value = 0
   rExpectedInterval.value = 600
+  rAutoBeaconEnabled.value = false
+  rAutoBeaconInterval.value = 1800
   rNotes.value = ''
   rBeaconPath.value = ''
   rBeaconSymbol.value = ''
@@ -292,6 +305,8 @@ function openEditRadio(radio: RadioDto) {
   rSsid.value = radio.ssid ?? ''
   rChannel.value = radio.channelNumber
   rExpectedInterval.value = radio.expectedIntervalSeconds
+  rAutoBeaconEnabled.value = radio.autoBeaconEnabled
+  rAutoBeaconInterval.value = radio.autoBeaconIntervalSeconds
   rNotes.value = radio.notes ?? ''
   rBeaconPath.value = radio.beaconPath ?? ''
   rBeaconSymbol.value = radio.beaconSymbol ?? ''
@@ -315,6 +330,8 @@ async function saveRadio() {
     beaconSymbol: rBeaconSymbol.value.trim() || null,
     beaconComment: rBeaconComment.value.trim() || null,
     expectedIntervalSeconds: rExpectedInterval.value,
+    autoBeaconEnabled: rAutoBeaconEnabled.value,
+    autoBeaconIntervalSeconds: rAutoBeaconInterval.value,
     frequencyMhz: rFrequencyMhz.value,
     mode: rMode.value.trim() || null,
     modem: {
@@ -1680,6 +1697,24 @@ async function confirmDelete() {
               style="flex: 2; min-width: 0"
             />
           </div>
+          <v-switch
+            v-model="rAutoBeaconEnabled"
+            label="Automatically beacon on a schedule"
+            hide-details
+            density="compact"
+            class="mb-2"
+          />
+          <v-text-field
+            v-if="rAutoBeaconEnabled"
+            v-model.number="rAutoBeaconInterval"
+            label="Auto-beacon interval (seconds)"
+            density="compact"
+            type="number"
+            class="mb-2"
+            :rules="[(v: number) => v >= 60 || 'Minimum 60 seconds']"
+            hint="How often to transmit automatically. Requires home position and a TX-enabled modem."
+            persistent-hint
+          />
 
           <v-divider class="my-3" />
           <div class="text-subtitle-2 font-weight-medium mb-1">Sound Modem (audio feed)</div>

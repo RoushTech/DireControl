@@ -65,6 +65,8 @@ export interface RadioDto {
   mode: string | null
   modem: RadioModemConfig
   expectedIntervalSeconds: number
+  autoBeaconEnabled: boolean
+  autoBeaconIntervalSeconds: number
   lastBeaconedAt: string | null
   secondsSinceBeacon: number | null
   confirmationCount: number
@@ -81,6 +83,8 @@ export interface CreateRadioRequest {
   beaconSymbol: string | null
   beaconComment: string | null
   expectedIntervalSeconds: number
+  autoBeaconEnabled: boolean
+  autoBeaconIntervalSeconds: number
   frequencyMhz: number | null
   mode: string | null
   modem: RadioModemConfig
@@ -96,6 +100,8 @@ export interface UpdateRadioRequest {
   beaconSymbol: string | null
   beaconComment: string | null
   expectedIntervalSeconds: number
+  autoBeaconEnabled: boolean
+  autoBeaconIntervalSeconds: number
   frequencyMhz: number | null
   mode: string | null
   modem: RadioModemConfig

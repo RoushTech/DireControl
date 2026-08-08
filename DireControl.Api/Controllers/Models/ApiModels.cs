@@ -538,6 +538,8 @@ public sealed class RadioDto
     public string? BeaconComment { get; init; }
     public bool IsActive { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
+    public bool AutoBeaconEnabled { get; init; }
+    public int AutoBeaconIntervalSeconds { get; init; }
     public double? FrequencyMhz { get; init; }
     public string? Mode { get; init; }
     public DateTime? LastBeaconedAt { get; init; }
@@ -558,6 +560,8 @@ public sealed class CreateRadioRequest
     public string? BeaconSymbol { get; init; }
     public string? BeaconComment { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 600;
+    public bool AutoBeaconEnabled { get; init; }
+    public int AutoBeaconIntervalSeconds { get; init; } = 1800;
     public double? FrequencyMhz { get; init; }
     public string? Mode { get; init; }
     public RadioModemConfigDto? Modem { get; init; }
@@ -574,6 +578,8 @@ public sealed class UpdateRadioRequest
     public string? BeaconSymbol { get; init; }
     public string? BeaconComment { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
+    public bool AutoBeaconEnabled { get; init; }
+    public int AutoBeaconIntervalSeconds { get; init; }
     public double? FrequencyMhz { get; init; }
     public string? Mode { get; init; }
     public RadioModemConfigDto? Modem { get; init; }

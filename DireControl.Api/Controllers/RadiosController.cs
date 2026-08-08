@@ -73,6 +73,9 @@ public class RadiosController(
         [FromBody] CreateRadioRequest request,
         CancellationToken ct)
     {
+        if (ValidateAutoBeacon(request.AutoBeaconEnabled, request.AutoBeaconIntervalSeconds) is { } beaconError)
+            return BadRequest(beaconError);
+
         var radio = new Radio
         {
             Id = Guid.NewGuid().ToString(),
@@ -87,6 +90,8 @@ public class RadiosController(
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
             ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600,
+            AutoBeaconEnabled = request.AutoBeaconEnabled,
+            AutoBeaconIntervalSeconds = request.AutoBeaconIntervalSeconds > 0 ? request.AutoBeaconIntervalSeconds : 1800,
             FrequencyMhz = request.FrequencyMhz,
             Mode = string.IsNullOrWhiteSpace(request.Mode) ? null : request.Mode.Trim(),
         };
@@ -155,6 +160,9 @@ public class RadiosController(
         var radio = await db.Radios.FirstOrDefaultAsync(r => r.Id == id, ct);
         if (radio is null) return NotFound();
 
+        if (ValidateAutoBeacon(request.AutoBeaconEnabled, request.AutoBeaconIntervalSeconds) is { } beaconError)
+            return BadRequest(beaconError);
+
         radio.Name = request.Name.Trim();
         radio.Callsign = request.Callsign.Trim().ToUpperInvariant();
         radio.Ssid = string.IsNullOrWhiteSpace(request.Ssid) ? null : request.Ssid.Trim();
@@ -164,6 +172,8 @@ public class RadiosController(
         radio.BeaconSymbol = string.IsNullOrWhiteSpace(request.BeaconSymbol) ? null : request.BeaconSymbol.Trim();
         radio.BeaconComment = string.IsNullOrWhiteSpace(request.BeaconComment) ? null : request.BeaconComment.Trim();
         radio.ExpectedIntervalSeconds = request.ExpectedIntervalSeconds > 0 ? request.ExpectedIntervalSeconds : 600;
+        radio.AutoBeaconEnabled = request.AutoBeaconEnabled;
+        radio.AutoBeaconIntervalSeconds = request.AutoBeaconIntervalSeconds > 0 ? request.AutoBeaconIntervalSeconds : 1800;
         radio.FrequencyMhz = request.FrequencyMhz;
         radio.Mode = string.IsNullOrWhiteSpace(request.Mode) ? null : request.Mode.Trim();
         radio.FullCallsign = Radio.ComputeFullCallsign(radio.Callsign, radio.Ssid);
@@ -352,6 +362,8 @@ public class RadiosController(
             BeaconComment = radio.BeaconComment,
             IsActive = radio.IsActive,
             ExpectedIntervalSeconds = radio.ExpectedIntervalSeconds,
+            AutoBeaconEnabled = radio.AutoBeaconEnabled,
+            AutoBeaconIntervalSeconds = radio.AutoBeaconIntervalSeconds,
             LastBeaconedAt = lastBeaconMap.ContainsKey(radio.Id) ? lastBeaconedAt : null,
             SecondsSinceBeacon = lastBeaconMap.ContainsKey(radio.Id)
                 ? (int)(now - lastBeaconedAt).TotalSeconds
@@ -385,6 +397,12 @@ public class RadiosController(
             },
         };
     }
+
+    /// <summary>Returns an error message when the auto-beacon config is invalid, else null.</summary>
+    private static string? ValidateAutoBeacon(bool enabled, int intervalSeconds) =>
+        enabled && intervalSeconds < AutoBeaconLogic.MinIntervalSeconds
+            ? $"Auto-beacon interval must be at least {AutoBeaconLogic.MinIntervalSeconds} seconds."
+            : null;
 
     /// <summary>Returns an error message when the modem config is invalid, else null.</summary>
     private static string? ValidateModemConfig(RadioModemConfigDto modem)

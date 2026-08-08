@@ -27,6 +27,17 @@ public class Radio : IEntityTypeConfiguration<Radio>
     public int ExpectedIntervalSeconds { get; set; } = 600;
 
     /// <summary>
+    /// Whether the background service automatically transmits a position beacon
+    /// for this radio on a fixed schedule.  Independent of
+    /// <see cref="ExpectedIntervalSeconds"/>, which only drives the staleness
+    /// indicator in the UI.
+    /// </summary>
+    public bool AutoBeaconEnabled { get; set; } = false;
+
+    /// <summary>Seconds between automatic beacons when <see cref="AutoBeaconEnabled"/> is set.</summary>
+    public int AutoBeaconIntervalSeconds { get; set; } = 1800;
+
+    /// <summary>
     /// Operating frequency in MHz, tracked manually — most packet radios
     /// (e.g. FT-8100R) have no CAT interface to read it from.  Radios with
     /// rigctld PTT get a live readout that supersedes this for display.
