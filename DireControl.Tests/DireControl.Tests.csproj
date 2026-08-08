@@ -17,7 +17,9 @@
     </PackageReference>
   </ItemGroup>
 
-  <ItemGroup>
+  <!-- Local-only captured packet corpus (git-ignored, ~2 MB). When present it
+       feeds the AX.25 codec corpus test; when absent that test self-ignores. -->
+  <ItemGroup Condition="Exists('..\RawPackets.txt')">
     <None Include="..\RawPackets.txt" Link="RawPackets.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

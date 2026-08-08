@@ -77,12 +77,18 @@ public sealed class Ax25CodecTests
     /// <summary>
     /// Encode a corpus of real captured TNC2 packets and confirm decode
     /// reproduces the same source/destination/info (path H bits aside — the
-    /// encoder is given the path without stars).
+    /// encoder is given the path without stars).  The corpus file is a local
+    /// capture that is deliberately not committed (git-ignored, ~2 MB), so
+    /// this test self-ignores when it is absent (fresh clones, CI).
     /// </summary>
     [Test]
     public void RealPacketCorpus_InfoFieldsRoundTrip()
     {
-        var lines = File.ReadLines(Path.Combine(TestContext.CurrentContext.TestDirectory, "RawPackets.txt"))
+        var corpusPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "RawPackets.txt");
+        if (!File.Exists(corpusPath))
+            Assert.Ignore("RawPackets.txt corpus not present (local-only capture).");
+
+        var lines = File.ReadLines(corpusPath)
             .Where(l => !string.IsNullOrWhiteSpace(l) && l.Contains('>') && l.Contains(':'))
             .Take(500);
 
