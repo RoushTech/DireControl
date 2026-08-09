@@ -354,106 +354,102 @@ async function syncServerClock() {
         @click="mobileDrawerOpen = !mobileDrawerOpen"
       />
 
-      <v-app-bar-title class="font-weight-bold">
-        DireControl
-        <span v-if="version" class="text-caption text-medium-emphasis ml-2">{{ version }}</span>
-      </v-app-bar-title>
-      <template #append>
-        <!-- Desktop nav — grouped: Map · Activity · Comms · Insights · Settings -->
-        <div class="desktop-nav">
-          <v-btn to="/" variant="text" size="small">Map</v-btn>
+      <!-- Brand sits left with the nav beside it, mock-style — not a growing title -->
+      <div class="app-brand font-weight-bold ml-2 flex-shrink-0">
+        <span class="text-primary mr-1">▲</span>DireControl
+        <span v-if="version" class="text-caption text-medium-emphasis ml-1">{{ version }}</span>
+      </div>
 
-          <v-menu open-on-hover :close-delay="100">
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                variant="text"
-                size="small"
-                :color="activityActive ? 'primary' : undefined"
-                append-icon="mdi-chevron-down"
-              >
-                Activity
-              </v-btn>
-            </template>
-            <v-list density="compact" nav>
-              <v-list-item to="/beacons" prepend-icon="mdi-radio-tower" title="Beacon Stream" />
-              <v-list-item to="/radio" prepend-icon="mdi-radio-handheld" title="Radio" />
-              <v-list-item to="/logs" prepend-icon="mdi-text-box-outline" title="Logs" />
-            </v-list>
-          </v-menu>
+      <!-- Desktop nav — grouped: Map · Activity · Comms · Insights · Settings -->
+      <div class="desktop-nav ml-4">
+        <v-btn to="/" variant="text" size="small">Map</v-btn>
 
-          <v-menu open-on-hover :close-delay="100">
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                variant="text"
-                size="small"
-                :color="commsActive ? 'primary' : undefined"
-                append-icon="mdi-chevron-down"
-                class="position-relative"
-              >
-                Comms
+        <v-menu open-on-hover :close-delay="100">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              variant="text"
+              size="small"
+              :color="activityActive ? 'primary' : undefined"
+              append-icon="mdi-chevron-down"
+            >
+              Activity
+            </v-btn>
+          </template>
+          <v-list density="compact" nav>
+            <v-list-item to="/beacons" prepend-icon="mdi-radio-tower" title="Beacon Stream" />
+            <v-list-item to="/radio" prepend-icon="mdi-radio-handheld" title="Radio" />
+            <v-list-item to="/logs" prepend-icon="mdi-text-box-outline" title="Logs" />
+          </v-list>
+        </v-menu>
+
+        <v-menu open-on-hover :close-delay="100">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              variant="text"
+              size="small"
+              :color="commsActive ? 'primary' : undefined"
+              append-icon="mdi-chevron-down"
+              class="position-relative"
+            >
+              Comms
+              <v-badge
+                v-if="commsBadgeCount > 0"
+                :content="commsBadgeCount"
+                color="error"
+                floating
+              />
+            </v-btn>
+          </template>
+          <v-list density="compact" nav>
+            <v-list-item to="/messages" prepend-icon="mdi-message-text" title="Messages">
+              <template #append>
                 <v-badge
-                  v-if="commsBadgeCount > 0"
-                  :content="commsBadgeCount"
+                  v-if="messagesStore.unreadCount > 0"
+                  :content="messagesStore.unreadCount"
                   color="error"
-                  floating
+                  inline
                 />
-              </v-btn>
-            </template>
-            <v-list density="compact" nav>
-              <v-list-item to="/messages" prepend-icon="mdi-message-text" title="Messages">
-                <template #append>
-                  <v-badge
-                    v-if="messagesStore.unreadCount > 0"
-                    :content="messagesStore.unreadCount"
-                    color="error"
-                    inline
-                  />
-                </template>
-              </v-list-item>
-              <v-list-item to="/alerts" prepend-icon="mdi-bell" title="Alerts">
-                <template #append>
-                  <v-badge
-                    v-if="alertsStore.unacknowledgedCount > 0"
-                    :content="alertsStore.unacknowledgedCount"
-                    color="warning"
-                    inline
-                  />
-                </template>
-              </v-list-item>
-            </v-list>
-          </v-menu>
+              </template>
+            </v-list-item>
+            <v-list-item to="/alerts" prepend-icon="mdi-bell" title="Alerts">
+              <template #append>
+                <v-badge
+                  v-if="alertsStore.unacknowledgedCount > 0"
+                  :content="alertsStore.unacknowledgedCount"
+                  color="warning"
+                  inline
+                />
+              </template>
+            </v-list-item>
+          </v-list>
+        </v-menu>
 
-          <v-menu open-on-hover :close-delay="100">
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                variant="text"
-                size="small"
-                :color="insightsActive ? 'primary' : undefined"
-                append-icon="mdi-chevron-down"
-              >
-                Insights
-              </v-btn>
-            </template>
-            <v-list density="compact" nav>
-              <v-list-item to="/statistics" prepend-icon="mdi-chart-bar" title="Statistics" />
-              <v-list-item to="/network" prepend-icon="mdi-access-point-network" title="Network" />
-            </v-list>
-          </v-menu>
+        <v-menu open-on-hover :close-delay="100">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              variant="text"
+              size="small"
+              :color="insightsActive ? 'primary' : undefined"
+              append-icon="mdi-chevron-down"
+            >
+              Insights
+            </v-btn>
+          </template>
+          <v-list density="compact" nav>
+            <v-list-item to="/statistics" prepend-icon="mdi-chart-bar" title="Statistics" />
+            <v-list-item to="/network" prepend-icon="mdi-access-point-network" title="Network" />
+          </v-list>
+        </v-menu>
 
-          <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
-        </div>
+        <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
+      </div>
 
-        <v-btn
-          :icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
-          variant="text"
-          size="small"
-          :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
-          @click="toggleTheme"
-        />
+      <v-spacer />
 
+      <template #append>
         <v-btn
           icon="mdi-keyboard-outline"
           variant="text"
@@ -547,6 +543,14 @@ async function syncServerClock() {
             </v-card-actions>
           </v-card>
         </v-menu>
+
+        <v-btn
+          :icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
+          variant="text"
+          size="small"
+          :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+          @click="toggleTheme"
+        />
       </template>
     </v-app-bar>
 

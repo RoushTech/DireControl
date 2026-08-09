@@ -85,40 +85,29 @@ const packetsNewData = ref(false)
 interface TabDef {
   value: TabValue
   label: string
-  icon: string
+  /** Short label used by the compact in-map tab row (mock: Info · Pkts · Wx · Stats · Sig). */
+  short: string
   badge: boolean
 }
 
 const visibleTabs = computed<TabDef[]>(() => [
-  { value: 'info', label: 'Info', icon: 'mdi-information-outline', badge: false },
-  {
-    value: 'packets',
-    label: 'Packets',
-    icon: 'mdi-format-list-bulleted',
-    badge: packetsNewData.value,
-  },
+  { value: 'info', label: 'Info', short: 'Info', badge: false },
+  { value: 'packets', label: 'Packets', short: 'Pkts', badge: packetsNewData.value },
   ...(station.value?.isWeatherStation
-    ? [
-        {
-          value: 'weather' as const,
-          label: 'Weather',
-          icon: 'mdi-weather-partly-cloudy',
-          badge: false,
-        },
-      ]
+    ? [{ value: 'weather' as const, label: 'Weather', short: 'Wx', badge: false }]
     : []),
-  { value: 'signal', label: 'Signal', icon: 'mdi-signal', badge: false },
-  { value: 'stats', label: 'Stats', icon: 'mdi-chart-bar', badge: false },
+  { value: 'stats', label: 'Stats', short: 'Stats', badge: false },
+  { value: 'signal', label: 'Signal', short: 'Sig', badge: false },
 ])
 
 function onTabKeydown(e: KeyboardEvent) {
   const tabs = visibleTabs.value
   const idx = tabs.findIndex((t) => t.value === tab.value)
-  if (e.key === 'ArrowDown') {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
     const next = tabs[(idx + 1) % tabs.length]
     if (next) tab.value = next.value
     e.preventDefault()
-  } else if (e.key === 'ArrowUp') {
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
     const prev = tabs[(idx - 1 + tabs.length) % tabs.length]
     if (prev) tab.value = prev.value
     e.preventDefault()
@@ -614,6 +603,23 @@ async function fetchStation() {
   } finally {
     loading.value = false
   }
+  void fetchLatestRaw()
+}
+
+// Latest raw packet line shown at the bottom of the Info tab (mock's mono box).
+const latestRaw = ref<string | null>(null)
+
+async function fetchLatestRaw() {
+  if (!props.callsign) {
+    latestRaw.value = null
+    return
+  }
+  try {
+    const { items } = await getStationPackets(props.callsign, 1, 1)
+    latestRaw.value = items[0]?.rawPacket ?? null
+  } catch {
+    latestRaw.value = null
+  }
 }
 
 async function fetchPackets() {
@@ -827,70 +833,63 @@ watch(tab, (newTab) => {
     class="detail-panel-content"
     :class="{ 'detail-panel-content--page': props.pageVariant }"
   >
-    <!-- Header (hidden in page mode — the page provides its own) -->
+    <!-- Header (hidden in page mode — the page provides its own).
+         Mock: one row — symbol · callsign · star ······ close -->
     <div v-if="!props.pageVariant" class="panel-header">
-      <div class="d-flex align-center ga-2">
-        <div :style="symbolStyle" class="symbol-icon flex-shrink-0" />
-        <div>
-          <div class="text-h6 font-weight-bold">{{ callsign }}</div>
-          <v-chip :color="stationTypeColor" size="x-small" class="mt-1">
-            {{ stationTypeLabel }}
-          </v-chip>
-          <v-chip v-if="station?.isWeatherStation" color="teal" size="x-small" class="mt-1 ml-1">
-            WX
-          </v-chip>
-        </div>
-      </div>
-      <div class="d-flex align-center">
-        <v-btn
-          :icon="station?.isOnWatchList ? 'mdi-star' : 'mdi-star-outline'"
-          :color="station?.isOnWatchList ? 'amber' : 'default'"
-          variant="text"
-          size="small"
-          :loading="watchLoading"
-          :disabled="!station"
-          title="Toggle watch list"
-          @click="toggleWatchStatus"
-        />
-        <v-btn
-          v-if="props.showPageLink && callsign"
-          icon="mdi-open-in-new"
-          variant="text"
-          size="small"
-          title="Open station page"
-          :to="`/stations/${encodeURIComponent(callsign)}`"
-        />
-        <v-btn icon="mdi-close" variant="text" size="small" @click="emit('close')" />
-      </div>
+      <div :style="symbolStyle" class="symbol-icon flex-shrink-0" />
+      <span class="panel-callsign">{{ callsign }}</span>
+      <v-btn
+        :icon="station?.isOnWatchList ? 'mdi-star' : 'mdi-star-outline'"
+        :color="station?.isOnWatchList ? 'amber' : 'default'"
+        variant="text"
+        size="x-small"
+        :loading="watchLoading"
+        :disabled="!station"
+        title="Toggle watch list"
+        @click="toggleWatchStatus"
+      />
+      <v-spacer />
+      <v-btn icon="mdi-close" variant="text" size="x-small" @click="emit('close')" />
     </div>
+
+    <!-- Horizontal text tabs under the header (mock: Info · Pkts · Wx · Stats · Sig) -->
+    <nav v-if="!props.pageVariant" class="tab-row" role="tablist" @keydown="onTabKeydown">
+      <button
+        v-for="t in visibleTabs"
+        :key="t.value"
+        role="tab"
+        :aria-selected="tab === t.value"
+        :class="['tab-btn', { 'tab-btn--active': tab === t.value }]"
+        :title="t.label"
+        @click="tab = t.value"
+      >
+        {{ t.short }}
+        <span v-if="t.badge" class="tab-new-dot" />
+      </button>
+    </nav>
     <v-divider v-if="!props.pageVariant" />
 
     <div class="panel-main">
-      <!-- Vertical tab sidebar -->
-      <nav v-if="!props.pageVariant" class="tab-sidebar" role="tablist" @keydown="onTabKeydown">
-        <button
-          v-for="t in visibleTabs"
-          :key="t.value"
-          role="tab"
-          :aria-selected="tab === t.value"
-          :class="['tab-btn', { 'tab-btn--active': tab === t.value }]"
-          :title="t.label"
-          @click="tab = t.value"
-        >
-          <span class="tab-btn-inner">
-            <v-icon size="18">{{ t.icon }}</v-icon>
-            <span class="tab-label">{{ t.label }}</span>
-            <span v-if="t.badge" class="tab-new-dot" />
-          </span>
-        </button>
-      </nav>
-
       <div class="panel-body" role="tabpanel">
         <v-progress-linear v-if="loading" indeterminate color="primary" />
 
         <!-- Info tab -->
         <template v-if="tab === 'info' && station">
           <div class="info-section">
+            <div class="info-label">Type</div>
+            <div class="info-value">
+              <v-chip :color="stationTypeColor" size="x-small" label>{{ stationTypeLabel }}</v-chip>
+              <v-chip
+                v-if="station.isWeatherStation"
+                color="teal"
+                size="x-small"
+                label
+                class="ml-1"
+              >
+                WX
+              </v-chip>
+            </div>
+
             <template v-if="station.status">
               <div class="info-label">Status</div>
               <div class="info-value">{{ station.status }}</div>
@@ -961,6 +960,11 @@ watch(tab, (newTab) => {
               <div class="info-label">Frequency</div>
               <div class="info-value">{{ station.lastFrequencyMhz }} MHz</div>
             </template>
+          </div>
+
+          <!-- Latest raw packet line (mock's mono box) -->
+          <div v-if="latestRaw" class="raw-packet-box mx-3 mt-2" :title="latestRaw">
+            {{ latestRaw }}
           </div>
 
           <!-- Operator lookup section -->
@@ -1359,6 +1363,26 @@ watch(tab, (newTab) => {
       </div>
     </div>
 
+    <!-- Footer (mock): Full page ↗ + message -->
+    <div v-if="!props.pageVariant && props.showPageLink && callsign" class="panel-foot">
+      <v-btn
+        variant="tonal"
+        color="primary"
+        size="small"
+        class="flex-grow-1"
+        :to="`/stations/${encodeURIComponent(callsign)}`"
+      >
+        Full page ↗
+      </v-btn>
+      <v-btn
+        icon="mdi-email-outline"
+        variant="text"
+        size="small"
+        title="Message station"
+        to="/messages"
+      />
+    </div>
+
     <PacketInspectionDialog
       :packet-id="inspectedPacketId"
       @close="inspectedPacketId = null"
@@ -1378,9 +1402,40 @@ watch(tab, (newTab) => {
 
 .panel-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 12px 12px 8px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 6px;
+}
+
+.panel-callsign {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  font-size: 1.05rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  flex-shrink: 0;
+}
+
+.raw-packet-box {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  border-radius: 7px;
+  padding: 7px 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .symbol-icon {
@@ -1390,43 +1445,39 @@ watch(tab, (newTab) => {
 
 .panel-main {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   flex: 1;
   overflow: hidden;
 }
 
-/* Vertical tab sidebar */
-.tab-sidebar {
+/* Horizontal text tabs under the header (mock: Info · Pkts · Wx · Stats · Sig) */
+.tab-row {
   display: flex;
-  flex-direction: column;
-  width: 60px;
+  gap: 2px;
+  padding: 0 10px;
+  overflow-x: auto;
   flex-shrink: 0;
-  overflow-y: auto;
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .tab-btn {
-  display: flex;
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 56px;
-  width: 100%;
+  padding: 7px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: none;
   border: none;
-  border-right: 3px solid transparent;
-  background: transparent;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
-  padding: 8px 4px;
-  color: rgba(var(--v-theme-on-surface), 0.55);
-  transition:
-    background 0.15s,
-    color 0.15s;
+  white-space: nowrap;
+  transition: color 0.15s;
   outline: none;
-  box-sizing: border-box;
 }
 
 .tab-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: rgba(var(--v-theme-on-surface), 0.87);
+  color: rgba(var(--v-theme-on-surface), 0.9);
 }
 
 .tab-btn:focus-visible {
@@ -1435,31 +1486,14 @@ watch(tab, (newTab) => {
 }
 
 .tab-btn--active {
-  background: rgba(var(--v-theme-primary), 0.1);
   color: rgb(var(--v-theme-primary));
-  border-right-color: rgb(var(--v-theme-primary));
-}
-
-.tab-btn-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  position: relative;
-}
-
-.tab-label {
-  font-size: 0.6rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  line-height: 1;
+  border-bottom-color: rgb(var(--v-theme-primary));
 }
 
 .tab-new-dot {
   position: absolute;
-  top: -4px;
-  right: -8px;
+  top: 5px;
+  right: 3px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -1609,42 +1643,5 @@ watch(tab, (newTab) => {
 
 .heard-via-dot--digi {
   background: #f9a825;
-}
-
-/* ── Page mode (/stations/:callsign): horizontal tabs, mock-style ── */
-.detail-panel-content--page .panel-main {
-  flex-direction: column;
-}
-
-.detail-panel-content--page .tab-sidebar {
-  flex-direction: row;
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  border-right: none;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  flex-shrink: 0;
-}
-
-.detail-panel-content--page .tab-btn {
-  width: auto;
-  min-height: 44px;
-  padding: 6px 18px;
-  border-right: none;
-  border-bottom: 3px solid transparent;
-}
-
-.detail-panel-content--page .tab-btn--active {
-  border-right-color: transparent;
-  border-bottom-color: rgb(var(--v-theme-primary));
-}
-
-.detail-panel-content--page .tab-btn-inner {
-  flex-direction: row;
-  gap: 7px;
-}
-
-.detail-panel-content--page .tab-label {
-  font-size: 0.72rem;
 }
 </style>

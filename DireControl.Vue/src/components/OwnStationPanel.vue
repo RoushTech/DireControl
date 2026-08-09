@@ -126,7 +126,9 @@ function txChip(radio: RadioDto): { label: string; color: string } {
       <div class="own-head mb-1">
         <v-icon :color="dotColor(radio)" size="10" class="flex-shrink-0">mdi-circle</v-icon>
         <span class="text-caption font-weight-bold flex-shrink-0">{{ radio.name }}</span>
-        <span class="text-caption text-medium-emphasis own-callsign">{{ radio.fullCallsign }}</span>
+        <v-chip size="x-small" variant="tonal" class="own-callsign">
+          {{ radio.fullCallsign }}
+        </v-chip>
         <v-chip
           :color="txChip(radio).color"
           size="x-small"
@@ -135,15 +137,6 @@ function txChip(radio: RadioDto): { label: string; color: string } {
         >
           {{ txChip(radio).label }}
         </v-chip>
-        <v-btn
-          icon="mdi-history"
-          size="x-small"
-          variant="text"
-          density="comfortable"
-          class="flex-shrink-0"
-          title="Beacon history"
-          @click="openHistory(radio.id)"
-        />
       </div>
 
       <!-- Labeled rows, mock-style -->
@@ -177,18 +170,28 @@ function txChip(radio: RadioDto): { label: string; color: string } {
         </span>
       </div>
 
-      <v-btn
-        size="small"
-        variant="tonal"
-        color="primary"
-        prepend-icon="mdi-access-point"
-        block
-        class="mt-2"
-        :loading="beaconing[radio.id]"
-        @click="doBeaconNow(radio)"
-      >
-        Beacon now
-      </v-btn>
+      <div class="d-flex align-center ga-1 mt-2">
+        <v-btn
+          size="small"
+          variant="tonal"
+          color="primary"
+          prepend-icon="mdi-access-point"
+          class="flex-grow-1"
+          :loading="beaconing[radio.id]"
+          @click="doBeaconNow(radio)"
+        >
+          Beacon now
+        </v-btn>
+        <v-btn
+          icon="mdi-history"
+          size="small"
+          variant="text"
+          density="comfortable"
+          class="flex-shrink-0"
+          title="Beacon history"
+          @click="openHistory(radio.id)"
+        />
+      </div>
     </div>
   </div>
 
@@ -233,12 +236,11 @@ function txChip(radio: RadioDto): { label: string; color: string } {
 /* The callsign is the only element allowed to shrink — chips and buttons keep
    their intrinsic size so labels never get crushed. */
 .own-callsign {
-  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .own-tx-chip {
