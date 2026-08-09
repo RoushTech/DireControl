@@ -681,6 +681,14 @@ body,
   align-items: center;
 }
 
+/* Every top-level nav item renders identically — the toolbar otherwise sizes
+   plain route buttons and menu activators differently. */
+.desktop-nav .v-btn {
+  font-size: 0.8125rem;
+  height: 32px;
+  letter-spacing: normal;
+}
+
 /* Hamburger: hidden on desktop, shown on mobile */
 .d-mobile-nav-hide {
   display: none !important;

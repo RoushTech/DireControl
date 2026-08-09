@@ -2945,6 +2945,8 @@ defineExpose({ TILE_PROVIDERS })
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   max-height: calc(100vh - 220px);
   overflow-y: auto;
+  /* Never scroll sideways — wide sub-rows (radar transport) wrap instead. */
+  overflow-x: hidden;
 }
 
 .layer-group {
@@ -2979,13 +2981,20 @@ defineExpose({ TILE_PROVIDERS })
 }
 
 .layer-sub {
-  margin: 0 0 6px 25px;
+  margin: 0 0 6px 12px;
   padding: 6px 8px;
   background: rgba(var(--v-theme-on-surface), 0.05);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+}
+
+/* Transport/opacity rows wrap rather than force the panel wider. */
+.layer-sub > div {
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .layer-panel-foot {

@@ -175,21 +175,23 @@ function identityLabel(m: ModemStatusDto): string {
   return parts.join(' · ')
 }
 
-/** Rigctld live frequency wins; manual radio frequency is the fallback. */
+/** Rigctld live frequency wins; manual radio frequency is the fallback.
+ *  Mock format: "144.390 FM" — the MHz unit is implied. */
 function frequencyLabel(m: ModemStatusDto): string | null {
-  if (m.rigFrequencyHz) return `${(m.rigFrequencyHz / 1_000_000).toFixed(4)} MHz`
+  if (m.rigFrequencyHz) return (m.rigFrequencyHz / 1_000_000).toFixed(4)
   const radio = radioFor(m)
   if (radio?.frequencyMhz) {
     const mode = radio.mode ? ` ${radio.mode}` : ''
-    return `${radio.frequencyMhz.toFixed(3)} MHz${mode}`
+    return `${radio.frequencyMhz.toFixed(3)}${mode}`
   }
   return null
 }
 
+// Short labels — the kv column is narrow and the mock shows "RTS/DTR ttyUSB0".
 const PTT_LABELS: Record<number, string> = {
   [PttMethods.None]: 'VOX / none',
-  [PttMethods.SerialRtsDtr]: 'Serial RTS/DTR',
-  [PttMethods.Cm108]: 'CM108 HID',
+  [PttMethods.SerialRtsDtr]: 'RTS/DTR',
+  [PttMethods.Cm108]: 'CM108',
   [PttMethods.Gpio]: 'GPIO',
   [PttMethods.Rigctld]: 'rigctld',
 }
@@ -199,9 +201,16 @@ function pttLabel(m: ModemStatusDto): string | null {
   if (!radio || !radio.modem.txEnabled) return null
   const label = PTT_LABELS[radio.modem.pttMethod] ?? null
   if (radio.modem.pttMethod === PttMethods.SerialRtsDtr && radio.modem.pttSerialPort) {
-    return `${label} · ${radio.modem.pttSerialPort.replace('/dev/', '')}`
+    return `${label} ${radio.modem.pttSerialPort.replace('/dev/', '')}`
   }
   return label
+}
+
+// Mock feed times are bare ("now", "28s", "1m") — no " ago" suffix.
+function feedTime(receivedAt: string): string {
+  const diff = Math.max(0, Math.floor((now.value - new Date(receivedAt).getTime()) / 1000))
+  if (diff < 10) return 'now'
+  return timeAgo(receivedAt, now.value).replace(/ ago$/, '')
 }
 
 function lastBeaconFor(m: ModemStatusDto): LastBeaconDto | undefined {
@@ -295,15 +304,6 @@ const rfStack = computed<RfStackEntry[]>(() => {
   })
 
   entries.push({
-    name: 'External TNC (KISS)',
-    chip: s?.direwolfConnected ? 'connected' : cfg?.direwolfEnabled ? 'disconnected' : 'off',
-    color: s?.direwolfConnected ? 'success' : cfg?.direwolfEnabled ? 'warning' : 'grey',
-    note: cfg?.direwolfEnabled
-      ? `${cfg.direwolfHost ?? 'localhost'}:${cfg.direwolfPort ?? 8001}`
-      : 'native modem carries RF',
-  })
-
-  entries.push({
     name: 'APRS-IS',
     chip: (s?.aprsIsState ?? '…').toLowerCase(),
     color:
@@ -325,7 +325,7 @@ const rfStack = computed<RfStackEntry[]>(() => {
   })
 
   entries.push({
-    name: 'KISS Server',
+    name: 'KISS server',
     chip: cfg?.kissServerEnabled ? 'on' : 'off',
     color: cfg?.kissServerEnabled ? 'success' : 'grey',
     note: cfg?.kissServerEnabled
@@ -343,6 +343,15 @@ const rfStack = computed<RfStackEntry[]>(() => {
     chip: gating ? 'on' : 'off',
     color: gating ? 'success' : 'grey',
     note: gating ? gateParts.join(' · ') : 'not gating',
+  })
+
+  entries.push({
+    name: 'External TNC (KISS)',
+    chip: s?.direwolfConnected ? 'connected' : cfg?.direwolfEnabled ? 'disconnected' : 'off',
+    color: s?.direwolfConnected ? 'success' : cfg?.direwolfEnabled ? 'warning' : 'grey',
+    note: cfg?.direwolfEnabled
+      ? `${cfg.direwolfHost ?? 'localhost'}:${cfg.direwolfPort ?? 8001}`
+      : 'native modem carries RF',
   })
 
   return entries
@@ -396,7 +405,7 @@ onUnmounted(() => {
 <template>
   <div class="radio-view pa-4">
     <div class="d-flex align-center ga-3 mb-4 flex-wrap">
-      <span class="text-h5 font-weight-bold">Radio</span>
+      <span class="page-title">Radio</span>
       <v-chip v-if="refreshFailed" color="warning" size="small" variant="tonal">
         <v-icon start size="14">mdi-lan-disconnect</v-icon>
         Backend unreachable · {{ staleLabel }}
@@ -408,8 +417,8 @@ onUnmounted(() => {
       <div class="stack-column">
         <!-- One card per radio with a modem instance -->
         <v-card v-for="m in modemStatuses" :key="m.radioId" variant="outlined" class="mb-4">
-          <div class="d-flex align-center flex-wrap ga-2 px-4 pt-3 pb-2">
-            <span class="text-subtitle-1 font-weight-medium">{{ m.radioName }}</span>
+          <div class="d-flex align-center flex-wrap ga-2 card-head">
+            <span class="card-title">{{ m.radioName }}</span>
             <v-chip size="x-small" variant="tonal" class="identity-chip">
               {{ identityLabel(m) }}
             </v-chip>
@@ -488,16 +497,12 @@ onUnmounted(() => {
                   </dd>
                   <template v-if="pttLabel(m)">
                     <dt>PTT</dt>
-                    <dd class="text-caption">{{ pttLabel(m) }}</dd>
-                  </template>
-                  <template v-if="m.captureDevice">
-                    <dt>Capture</dt>
-                    <dd class="text-caption text-truncate" :title="m.captureDevice">
-                      {{ m.captureDevice }}
+                    <dd class="kv-mono" :title="m.captureDevice ?? undefined">
+                      {{ pttLabel(m) }}
                     </dd>
                   </template>
                   <dt>Last beacon</dt>
-                  <dd class="text-caption">{{ lastBeaconLabel(m) }}</dd>
+                  <dd class="kv-wrap">{{ lastBeaconLabel(m) }}</dd>
                 </dl>
               </div>
             </template>
@@ -557,28 +562,28 @@ onUnmounted(() => {
 
         <!-- Other RF stack services -->
         <v-card variant="outlined" class="mb-4">
-          <div class="d-flex align-center px-4 pt-3 pb-2">
-            <span class="text-subtitle-1 font-weight-medium">RF Stack</span>
+          <div class="d-flex align-center ga-2 card-head">
+            <span class="card-title">RF Stack</span>
             <v-spacer />
             <span class="text-caption text-medium-emphasis">{{ updatedLabel }}</span>
           </div>
           <v-divider />
-          <div class="rf-stack pa-3">
+          <div class="rf-stack">
             <div v-for="entry in rfStack" :key="entry.name" class="rf-item">
               <div class="d-flex align-center justify-space-between ga-2">
-                <span class="text-body-2 font-weight-medium">{{ entry.name }}</span>
+                <span class="rf-name">{{ entry.name }}</span>
                 <v-chip :color="entry.color" size="x-small" variant="tonal">{{
                   entry.chip
                 }}</v-chip>
               </div>
-              <span class="text-caption text-medium-emphasis">{{ entry.note }}</span>
+              <span class="rf-note">{{ entry.note }}</span>
             </div>
           </div>
         </v-card>
 
         <!-- Radios without a modem feed -->
         <v-card v-if="radiosWithoutModem.length > 0" variant="outlined" class="pa-4">
-          <div class="text-subtitle-1 font-weight-medium mb-2">Other Radios</div>
+          <div class="card-title mb-2">Other radios</div>
           <div
             v-for="radio in radiosWithoutModem"
             :key="radio.id"
@@ -598,8 +603,8 @@ onUnmounted(() => {
 
       <!-- ── Live packet feed ── -->
       <v-card variant="outlined" class="feed-column pa-0">
-        <div class="d-flex align-center ga-2 pa-3 pb-2">
-          <span class="text-subtitle-1 font-weight-medium">Incoming Packets</span>
+        <div class="d-flex align-center ga-2 card-head">
+          <span class="card-title">Incoming packets</span>
           <v-chip size="x-small" variant="tonal" color="primary">live</v-chip>
           <v-spacer />
           <span class="text-caption text-medium-emphasis">click a row to inspect</span>
@@ -622,7 +627,7 @@ onUnmounted(() => {
             <span
               class="text-caption text-medium-emphasis feed-time"
               :title="formatUtc(p.receivedAt)"
-              >{{ timeAgo(p.receivedAt, now) }}</span
+              >{{ feedTime(p.receivedAt) }}</span
             >
             <span class="feed-summary text-body-2" :title="`${typeLabel(p)} · ${p.summary}`">
               <a
@@ -669,6 +674,22 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+/* Mock type scale: page h2 17px/650, card h3 14px/650, header pad 12px 16px. */
+.page-title {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.card-head {
+  padding: 12px 16px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
 /* Mock proportions: the radio card is the dominant column (7:5). */
 .radio-layout {
   display: grid;
@@ -688,6 +709,7 @@ onUnmounted(() => {
 }
 
 .identity-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -711,33 +733,53 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
+/* Mock kv: fixed 190px column, 12.5px, labels muted, values right-aligned.
+   Wide enough that "6m ago · unconfirmed" and "RTS/DTR ttyUSB0" never wrap. */
 .modem-kv {
-  flex: 0 1 170px;
-  min-width: 150px;
+  flex: 0 0 190px;
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 12px;
+  gap: 4px 14px;
   align-items: center;
+  align-self: flex-start;
   margin: 0;
 }
 
 .modem-kv dt {
-  font-size: 0.75rem;
+  font-size: 12.5px;
   color: rgba(var(--v-theme-on-surface), 0.6);
+  white-space: nowrap;
 }
 
 .modem-kv dd {
   margin: 0;
   text-align: right;
-  font-size: 0.8rem;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kv-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px !important;
+}
+
+/* Values that carry state ("6m ago · unconfirmed") wrap at word boundaries
+   instead of ellipsizing away the state. */
+.kv-wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .rf-stack {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+  padding: 14px 16px;
 }
 
 @media (max-width: 560px) {
@@ -746,13 +788,24 @@ onUnmounted(() => {
   }
 }
 
+/* Mock rfitem: 12.5px bold name, 11.5px muted note, 9px radius. */
 .rf-item {
   background: rgba(var(--v-theme-on-surface), 0.04);
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 9px;
+  padding: 9px 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.rf-name {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.rf-note {
+  font-size: 11.5px;
+  color: rgba(var(--v-theme-on-surface), 0.55);
 }
 
 .feed-column {
@@ -767,11 +820,12 @@ onUnmounted(() => {
   flex: 1;
 }
 
+/* Mock feed rows: 13px, mono 64px time column, 8px vertical rhythm. */
 .feed-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
+  gap: 10px;
+  padding: 8px 14px;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   cursor: pointer;
 }
@@ -781,8 +835,10 @@ onUnmounted(() => {
 }
 
 .feed-time {
-  width: 76px;
+  width: 64px;
   flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .feed-summary {
@@ -791,6 +847,7 @@ onUnmounted(() => {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  font-size: 13px !important;
 }
 
 .feed-source {

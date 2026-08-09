@@ -303,6 +303,7 @@ function onEditorModemSpectrum(batch: ModemSpectrumDto[]) {
 }
 
 watch(radioDialogOpen, (open) => {
+  if (open) radioSection.value = 'identity'
   if (open && editingRadioId.value) {
     packetHub.on('modemLevel', onEditorModemLevel)
     packetHub.on('modemSpectrum', onEditorModemSpectrum)
@@ -434,6 +435,54 @@ const ssidError = computed(() => {
   const n = parseInt(s, 10)
   if (isNaN(n) || n < 0 || n > 15) return 'SSID must be 0–15'
   return ''
+})
+
+// ─── Radio editor sections — rail + pane, not one long scroll ────────────────
+type RadioSectionKey = 'identity' | 'beaconing' | 'modem' | 'calibration' | 'ptt'
+const radioSection = ref<RadioSectionKey>('identity')
+
+const radioSectionItems = computed(() => [
+  {
+    key: 'identity' as const,
+    label: 'Identity',
+    icon: 'mdi-card-account-details-outline',
+    disabled: false,
+    alert: !radioFormValid.value || !!ssidError.value,
+  },
+  {
+    key: 'beaconing' as const,
+    label: 'Beaconing',
+    icon: 'mdi-broadcast',
+    disabled: false,
+    alert: false,
+  },
+  {
+    key: 'modem' as const,
+    label: 'Sound Modem',
+    icon: 'mdi-waveform',
+    disabled: false,
+    alert: false,
+  },
+  {
+    key: 'calibration' as const,
+    label: 'Calibration',
+    icon: 'mdi-tune',
+    disabled: !rModem.value.modemEnabled,
+    alert: false,
+  },
+  {
+    key: 'ptt' as const,
+    label: 'PTT & Timing',
+    icon: 'mdi-serial-port',
+    disabled: !(rModem.value.modemEnabled && rModem.value.txEnabled),
+    alert: false,
+  },
+])
+
+// If the active section becomes unavailable (modem or TX switched off), fall
+// back to the Sound Modem pane where those switches live.
+watch(radioSectionItems, (items) => {
+  if (items.find((s) => s.key === radioSection.value)?.disabled) radioSection.value = 'modem'
 })
 
 async function loadRadios() {
@@ -2238,401 +2287,450 @@ async function confirmDelete() {
           </span>
         </v-card-title>
         <v-divider />
-        <v-card-text>
-          <!-- Duplicate warning -->
-          <v-alert
-            v-if="duplicateRadio"
-            type="warning"
-            variant="tonal"
-            density="compact"
-            class="mb-3"
-          >
-            {{ computedFullCallsign }} is already configured as "{{ duplicateRadio.name }}". Are you
-            sure?
-          </v-alert>
+        <v-card-text class="pa-0">
+          <div class="radio-dialog-layout">
+            <!-- Section rail — grouped panes instead of one long scroll -->
+            <nav class="radio-dialog-rail">
+              <button
+                v-for="s in radioSectionItems"
+                :key="s.key"
+                type="button"
+                class="radio-rail-btn"
+                :class="{ 'radio-rail-btn--active': radioSection === s.key }"
+                :disabled="s.disabled"
+                @click="radioSection = s.key"
+              >
+                <v-icon size="16" class="mr-2">{{ s.icon }}</v-icon>
+                {{ s.label }}
+                <span v-if="s.alert" class="radio-rail-dot" />
+              </button>
+            </nav>
 
-          <!-- ── Identity ── -->
-          <div class="radio-form-section">
-            <div class="text-subtitle-2 font-weight-medium">Identity</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              How this radio appears in the app and on the air.
-            </div>
-            <div class="radio-form-row">
-              <v-text-field
-                v-model="rName"
-                label="Name *"
+            <div class="radio-dialog-pane">
+              <!-- Duplicate warning -->
+              <v-alert
+                v-if="duplicateRadio"
+                type="warning"
+                variant="tonal"
                 density="compact"
-                :rules="[(v: string) => v.trim().length > 0 || 'Required']"
-              />
-              <v-text-field
-                v-model="rCallsign"
-                label="Callsign *"
-                density="compact"
-                :rules="[(v: string) => /^[A-Z0-9]{3,6}$/i.test(v.trim()) || '3–6 letters/digits']"
-              />
-              <v-text-field
-                v-model="rSsid"
-                label="SSID"
-                density="compact"
-                :error-messages="ssidError || undefined"
-                placeholder="0–15"
-              />
-              <v-text-field
-                v-model.number="rChannel"
-                label="KISS channel"
-                density="compact"
-                type="number"
-                :rules="[(v: number) => (v >= 0 && v <= 15) || '0–15']"
-                hint="Most single-radio setups use 0"
-                persistent-hint
-              />
-            </div>
-          </div>
+                class="mb-3"
+              >
+                {{ computedFullCallsign }} is already configured as "{{ duplicateRadio.name }}". Are
+                you sure?
+              </v-alert>
 
-          <!-- ── Frequency ── -->
-          <div class="radio-form-section">
-            <div class="text-subtitle-2 font-weight-medium">Frequency</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              Used for labels and the frequencies table — not rig control.
-            </div>
-            <div class="radio-form-row">
-              <v-text-field
-                v-model.number="rFrequencyMhz"
-                label="Frequency (MHz)"
-                density="compact"
-                type="number"
-                step="0.005"
-                placeholder="e.g. 144.390"
-              />
-              <v-text-field v-model="rMode" label="Mode" density="compact" placeholder="e.g. FM" />
-              <v-text-field
-                v-model.number="rExpectedInterval"
-                label="Expected beacon interval (s)"
-                density="compact"
-                type="number"
-              />
-              <v-text-field v-model="rNotes" label="Notes" density="compact" />
-            </div>
-          </div>
-
-          <!-- ── Beaconing ── -->
-          <div class="radio-form-section">
-            <div class="text-subtitle-2 font-weight-medium">Beaconing</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              Position beacons transmitted as this radio.
-            </div>
-            <div class="radio-form-row">
-              <v-text-field
-                v-model="rBeaconPath"
-                label="Beacon path"
-                density="compact"
-                placeholder="e.g. WIDE1-1,WIDE2-1"
-                hint="Leave blank for direct (no digipeating)"
-                persistent-hint
-              />
-              <v-text-field v-model="rBeaconComment" label="Comment" density="compact" />
-            </div>
-            <div class="d-flex align-start ga-4 flex-wrap mt-1">
-              <div style="flex: 1 1 260px; min-width: 240px">
-                <AprsSymbolPicker v-model="rBeaconSymbol" />
-              </div>
-              <div style="flex: 1 1 260px; min-width: 240px">
-                <v-switch
-                  v-model="rAutoBeaconEnabled"
-                  label="Automatically beacon on a schedule"
-                  hide-details
-                  density="compact"
-                  color="primary"
-                  class="mb-1"
-                />
-                <v-text-field
-                  v-if="rAutoBeaconEnabled"
-                  v-model.number="rAutoBeaconInterval"
-                  label="Auto-beacon interval (seconds)"
-                  density="compact"
-                  type="number"
-                  :rules="[(v: number) => v >= 60 || 'Minimum 60 seconds']"
-                  hint="Requires home position and a TX-enabled modem"
-                  persistent-hint
-                />
-              </div>
-            </div>
-          </div>
-
-          <!-- ── Sound modem ── -->
-          <div class="radio-form-section">
-            <div class="text-subtitle-2 font-weight-medium">Sound Modem</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              Native AFSK decode/transmit over this radio's audio feed.
-            </div>
-            <v-switch
-              v-model="rModem.modemEnabled"
-              label="Decode RF for this radio with the native modem"
-              hide-details
-              density="compact"
-              color="primary"
-              class="mb-2"
-            />
-            <template v-if="rModem.modemEnabled">
-              <div class="radio-form-row">
-                <v-combobox
-                  v-model="rModem.modemCaptureDevice"
-                  :items="modemCaptureDeviceItems"
-                  label="Capture device"
-                  density="compact"
-                  :return-object="false"
-                />
-                <v-combobox
-                  v-if="rModem.txEnabled"
-                  v-model="rModem.modemPlaybackDevice"
-                  :items="modemPlaybackDeviceItems"
-                  label="Playback device"
-                  density="compact"
-                  :return-object="false"
-                />
-              </div>
-              <v-switch
-                v-model="rModem.txEnabled"
-                label="Transmit (beacons, messages, digipeats)"
-                hide-details
-                density="compact"
-                color="primary"
-                class="mb-2"
-              />
-
-              <!-- Live calibration — mirrors the Radio page so levels are set
-                   against what the modem actually hears and sends. -->
-              <div v-if="editingRadioId" class="calibration-box">
-                <div class="d-flex align-center ga-2 mb-2">
-                  <span class="text-caption font-weight-bold text-uppercase calibration-label">
-                    Live calibration
-                  </span>
-                  <v-chip
-                    :color="editorLevel?.carrierDetected ? 'success' : 'grey'"
-                    size="x-small"
-                    variant="tonal"
-                  >
-                    {{ editorLevel?.carrierDetected ? 'carrier' : 'quiet' }}
-                  </v-chip>
-                  <v-chip
-                    v-if="editorLevel?.transmitting"
-                    color="error"
-                    size="x-small"
-                    variant="tonal"
-                  >
-                    TX
-                  </v-chip>
-                </div>
-
-                <div class="d-flex align-center justify-space-between mb-1">
-                  <span class="text-caption text-medium-emphasis">Audio level (RX)</span>
-                  <span class="text-caption text-medium-emphasis">
-                    {{ (editorLevel?.audioLevel ?? 0).toFixed(2) }}
-                  </span>
-                </div>
-                <v-progress-linear
-                  :model-value="Math.min(100, (editorLevel?.audioLevel ?? 0) * 100)"
-                  :color="(editorLevel?.audioLevel ?? 0) > 0.9 ? 'error' : 'success'"
-                  height="6"
-                  rounded
-                  class="mb-3"
-                />
-
-                <WaterfallCanvas ref="editorWaterfall" :height="80" class="mb-3" />
-
-                <template v-if="rModem.txEnabled">
-                  <div class="d-flex align-center ga-2 mb-1 flex-nowrap">
-                    <span class="text-caption text-medium-emphasis flex-shrink-0">TX gain</span>
-                    <v-slider
-                      v-model.number="rModem.txAudioLevelPct"
-                      :min="1"
-                      :max="100"
-                      :step="1"
-                      color="primary"
+              <template v-if="radioSection === 'identity'">
+                <!-- ── Identity ── -->
+                <div class="radio-form-section">
+                  <div class="text-subtitle-2 font-weight-medium">Identity</div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    How this radio appears in the app and on the air.
+                  </div>
+                  <div class="radio-form-row">
+                    <v-text-field
+                      v-model="rName"
+                      label="Name *"
                       density="compact"
-                      hide-details
-                      thumb-label
+                      :rules="[(v: string) => v.trim().length > 0 || 'Required']"
                     />
-                    <span class="text-caption text-medium-emphasis flex-shrink-0">
-                      {{ Math.round(rModem.txAudioLevelPct) }}%
-                    </span>
+                    <v-text-field
+                      v-model="rCallsign"
+                      label="Callsign *"
+                      density="compact"
+                      :rules="[
+                        (v: string) => /^[A-Z0-9]{3,6}$/i.test(v.trim()) || '3–6 letters/digits',
+                      ]"
+                    />
+                    <v-text-field
+                      v-model="rSsid"
+                      label="SSID"
+                      density="compact"
+                      :error-messages="ssidError || undefined"
+                      placeholder="0–15"
+                    />
+                    <v-text-field
+                      v-model.number="rChannel"
+                      label="KISS channel"
+                      density="compact"
+                      type="number"
+                      :rules="[(v: number) => (v >= 0 && v <= 15) || '0–15']"
+                      hint="Most single-radio setups use 0"
+                      persistent-hint
+                    />
                   </div>
-                  <div class="d-flex align-center ga-2 flex-wrap">
-                    <span class="text-caption text-medium-emphasis">Test tones</span>
-                    <v-btn-group density="compact" variant="outlined" divided>
-                      <v-btn
-                        size="x-small"
-                        :loading="toneSending"
-                        @click="doTestTone(TestToneKinds.Mark)"
-                      >
-                        Mark
-                      </v-btn>
-                      <v-btn
-                        size="x-small"
-                        :disabled="toneSending"
-                        @click="doTestTone(TestToneKinds.Space)"
-                      >
-                        Space
-                      </v-btn>
-                      <v-btn
-                        size="x-small"
-                        :disabled="toneSending"
-                        @click="doTestTone(TestToneKinds.Alternating)"
-                      >
-                        Alt
-                      </v-btn>
-                    </v-btn-group>
-                    <span class="text-caption text-medium-emphasis">
-                      keys TX ~2s · gain applies live while you drag
-                    </span>
-                  </div>
-                </template>
-              </div>
+                </div>
 
-              <template v-else>
-                <div v-if="rModem.txEnabled" class="radio-form-row">
-                  <v-text-field
-                    v-model.number="rModem.txAudioLevelPct"
-                    label="TX level (%)"
-                    density="compact"
-                    type="number"
-                    hint="Save the radio, then reopen to calibrate against the live waterfall"
-                    persistent-hint
-                  />
+                <!-- ── Frequency ── -->
+                <div class="radio-form-section">
+                  <div class="text-subtitle-2 font-weight-medium">Frequency</div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Used for labels and the frequencies table — not rig control.
+                  </div>
+                  <div class="radio-form-row">
+                    <v-text-field
+                      v-model.number="rFrequencyMhz"
+                      label="Frequency (MHz)"
+                      density="compact"
+                      type="number"
+                      step="0.005"
+                      placeholder="e.g. 144.390"
+                    />
+                    <v-text-field
+                      v-model="rMode"
+                      label="Mode"
+                      density="compact"
+                      placeholder="e.g. FM"
+                    />
+                    <v-text-field
+                      v-model.number="rExpectedInterval"
+                      label="Expected beacon interval (s)"
+                      density="compact"
+                      type="number"
+                    />
+                    <v-text-field v-model="rNotes" label="Notes" density="compact" />
+                  </div>
                 </div>
               </template>
-            </template>
-          </div>
 
-          <!-- ── PTT ── -->
-          <div v-if="rModem.modemEnabled && rModem.txEnabled" class="radio-form-section">
-            <div class="text-subtitle-2 font-weight-medium">PTT</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              How transmit is keyed — the fields follow the chosen method.
-            </div>
-            <div class="radio-form-row">
-              <v-select
-                v-model="rModem.pttMethod"
-                :items="pttMethodItems"
-                label="PTT method"
-                density="compact"
-              />
-              <template v-if="rModem.pttMethod === PttMethods.SerialRtsDtr">
-                <v-combobox
-                  v-model="rModem.pttSerialPort"
-                  :items="modemDevices.serialPorts"
-                  label="Serial port"
-                  density="compact"
-                  :return-object="false"
-                />
-                <div class="d-flex align-center ga-2">
-                  <v-checkbox
-                    v-model="rModem.pttSerialUseRts"
-                    label="RTS"
-                    hide-details
-                    density="compact"
-                  />
-                  <v-checkbox
-                    v-model="rModem.pttSerialUseDtr"
-                    label="DTR"
-                    hide-details
-                    density="compact"
-                  />
+              <template v-if="radioSection === 'beaconing'">
+                <!-- ── Beaconing ── -->
+                <div class="radio-form-section">
+                  <div class="text-subtitle-2 font-weight-medium">Beaconing</div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Position beacons transmitted as this radio.
+                  </div>
+                  <div class="radio-form-row">
+                    <v-text-field
+                      v-model="rBeaconPath"
+                      label="Beacon path"
+                      density="compact"
+                      placeholder="e.g. WIDE1-1,WIDE2-1"
+                      hint="Leave blank for direct (no digipeating)"
+                      persistent-hint
+                    />
+                    <v-text-field v-model="rBeaconComment" label="Comment" density="compact" />
+                  </div>
+                  <div class="d-flex align-start ga-4 flex-wrap mt-1">
+                    <div style="flex: 1 1 260px; min-width: 240px">
+                      <AprsSymbolPicker v-model="rBeaconSymbol" />
+                    </div>
+                    <div style="flex: 1 1 260px; min-width: 240px">
+                      <v-switch
+                        v-model="rAutoBeaconEnabled"
+                        label="Automatically beacon on a schedule"
+                        hide-details
+                        density="compact"
+                        color="primary"
+                        class="mb-1"
+                      />
+                      <v-text-field
+                        v-if="rAutoBeaconEnabled"
+                        v-model.number="rAutoBeaconInterval"
+                        label="Auto-beacon interval (seconds)"
+                        density="compact"
+                        type="number"
+                        :rules="[(v: number) => v >= 60 || 'Minimum 60 seconds']"
+                        hint="Requires home position and a TX-enabled modem"
+                        persistent-hint
+                      />
+                    </div>
+                  </div>
                 </div>
               </template>
-              <template v-else-if="rModem.pttMethod === PttMethods.Cm108">
-                <v-combobox
-                  v-model="rModem.pttHidDevice"
-                  :items="modemHidDeviceItems"
-                  label="HID device"
-                  density="compact"
-                  :return-object="false"
-                />
-                <v-text-field
-                  v-model.number="rModem.pttHidPin"
-                  label="Pin"
-                  density="compact"
-                  type="number"
-                />
-              </template>
-              <template v-else-if="rModem.pttMethod === PttMethods.Gpio">
-                <v-text-field
-                  v-model.number="rModem.pttGpioChip"
-                  label="Chip"
-                  density="compact"
-                  type="number"
-                />
-                <v-text-field
-                  v-model.number="rModem.pttGpioLine"
-                  label="Line"
-                  density="compact"
-                  type="number"
-                />
-                <v-checkbox
-                  v-model="rModem.pttGpioActiveLow"
-                  label="Active low"
-                  hide-details
-                  density="compact"
-                />
-              </template>
-              <template v-else-if="rModem.pttMethod === PttMethods.Rigctld">
-                <v-text-field
-                  v-model="rModem.pttRigctldHost"
-                  label="rigctld host"
-                  density="compact"
-                />
-                <v-text-field
-                  v-model.number="rModem.pttRigctldPort"
-                  label="Port"
-                  density="compact"
-                  type="number"
-                />
-              </template>
-            </div>
 
-            <!-- Advanced TX timing — defaults suit most rigs -->
-            <v-btn
-              size="x-small"
-              variant="text"
-              color="primary"
-              class="px-1"
-              @click="showTxTiming = !showTxTiming"
-            >
-              {{ showTxTiming ? 'Hide advanced TX timing ▴' : 'Show advanced TX timing ▾' }}
-            </v-btn>
-            <div v-if="showTxTiming" class="radio-form-row mt-2">
-              <v-text-field
-                v-model.number="rModem.txDelayMs"
-                label="TX delay (ms)"
-                density="compact"
-                type="number"
-                hint="Keyed carrier before data"
-                persistent-hint
-              />
-              <v-text-field
-                v-model.number="rModem.txTailMs"
-                label="Tail (ms)"
-                density="compact"
-                type="number"
-                hint="Carrier after data"
-                persistent-hint
-              />
-              <v-text-field
-                v-model.number="rModem.txPersistence"
-                label="Persistence"
-                density="compact"
-                type="number"
-                hint="p-persistence CSMA (0–255)"
-                persistent-hint
-              />
-              <v-text-field
-                v-model.number="rModem.txSlotTimeMs"
-                label="Slot (ms)"
-                density="compact"
-                type="number"
-                hint="CSMA slot time"
-                persistent-hint
-              />
+              <template v-if="radioSection === 'modem'">
+                <!-- ── Sound modem ── -->
+                <div class="radio-form-section">
+                  <div class="text-subtitle-2 font-weight-medium">Sound Modem</div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Native AFSK decode/transmit over this radio's audio feed.
+                  </div>
+                  <v-switch
+                    v-model="rModem.modemEnabled"
+                    label="Decode RF for this radio with the native modem"
+                    hide-details
+                    density="compact"
+                    color="primary"
+                    class="mb-2"
+                  />
+                  <template v-if="rModem.modemEnabled">
+                    <div class="radio-form-row">
+                      <v-combobox
+                        v-model="rModem.modemCaptureDevice"
+                        :items="modemCaptureDeviceItems"
+                        label="Capture device"
+                        density="compact"
+                        :return-object="false"
+                      />
+                      <v-combobox
+                        v-if="rModem.txEnabled"
+                        v-model="rModem.modemPlaybackDevice"
+                        :items="modemPlaybackDeviceItems"
+                        label="Playback device"
+                        density="compact"
+                        :return-object="false"
+                      />
+                    </div>
+                    <v-switch
+                      v-model="rModem.txEnabled"
+                      label="Transmit (beacons, messages, digipeats)"
+                      hide-details
+                      density="compact"
+                      color="primary"
+                      class="mb-2"
+                    />
+                    <div class="text-caption text-medium-emphasis">
+                      Audio levels, waterfall, and test tones live in the Calibration section.
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <template v-if="radioSection === 'calibration'">
+                <div class="radio-form-section">
+                  <div class="text-subtitle-2 font-weight-medium">Calibration</div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Set levels against the live modem — what it hears and what it sends.
+                  </div>
+
+                  <!-- Live calibration — mirrors the Radio page so levels are set
+                   against what the modem actually hears and sends. -->
+                  <div v-if="editingRadioId" class="calibration-box">
+                    <div class="d-flex align-center ga-2 mb-2">
+                      <v-chip
+                        :color="editorLevel?.carrierDetected ? 'success' : 'grey'"
+                        size="x-small"
+                        variant="tonal"
+                      >
+                        {{ editorLevel?.carrierDetected ? 'carrier' : 'quiet' }}
+                      </v-chip>
+                      <v-chip
+                        v-if="editorLevel?.transmitting"
+                        color="error"
+                        size="x-small"
+                        variant="tonal"
+                      >
+                        TX
+                      </v-chip>
+                    </div>
+
+                    <div class="d-flex align-center justify-space-between mb-1">
+                      <span class="text-caption text-medium-emphasis">Audio level (RX)</span>
+                      <span class="text-caption text-medium-emphasis">
+                        {{ (editorLevel?.audioLevel ?? 0).toFixed(2) }}
+                      </span>
+                    </div>
+                    <v-progress-linear
+                      :model-value="Math.min(100, (editorLevel?.audioLevel ?? 0) * 100)"
+                      :color="(editorLevel?.audioLevel ?? 0) > 0.9 ? 'error' : 'success'"
+                      height="6"
+                      rounded
+                      class="mb-3"
+                    />
+
+                    <WaterfallCanvas ref="editorWaterfall" :height="80" class="mb-3" />
+
+                    <template v-if="rModem.txEnabled">
+                      <div class="d-flex align-center ga-2 mb-1 flex-nowrap">
+                        <span class="text-caption text-medium-emphasis flex-shrink-0">TX gain</span>
+                        <v-slider
+                          v-model.number="rModem.txAudioLevelPct"
+                          :min="1"
+                          :max="100"
+                          :step="1"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          thumb-label
+                        />
+                        <span class="text-caption text-medium-emphasis flex-shrink-0">
+                          {{ Math.round(rModem.txAudioLevelPct) }}%
+                        </span>
+                      </div>
+                      <div class="d-flex align-center ga-2 flex-wrap">
+                        <span class="text-caption text-medium-emphasis">Test tones</span>
+                        <v-btn-group density="compact" variant="outlined" divided>
+                          <v-btn
+                            size="x-small"
+                            :loading="toneSending"
+                            @click="doTestTone(TestToneKinds.Mark)"
+                          >
+                            Mark
+                          </v-btn>
+                          <v-btn
+                            size="x-small"
+                            :disabled="toneSending"
+                            @click="doTestTone(TestToneKinds.Space)"
+                          >
+                            Space
+                          </v-btn>
+                          <v-btn
+                            size="x-small"
+                            :disabled="toneSending"
+                            @click="doTestTone(TestToneKinds.Alternating)"
+                          >
+                            Alt
+                          </v-btn>
+                        </v-btn-group>
+                        <span class="text-caption text-medium-emphasis">
+                          keys TX ~2s · gain applies live while you drag
+                        </span>
+                      </div>
+                    </template>
+                  </div>
+
+                  <template v-else>
+                    <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+                      Save the radio first — the live meter and waterfall need the modem running on
+                      the saved config.
+                    </v-alert>
+                    <div v-if="rModem.txEnabled" class="radio-form-row">
+                      <v-text-field
+                        v-model.number="rModem.txAudioLevelPct"
+                        label="TX level (%)"
+                        density="compact"
+                        type="number"
+                        hint="Starting TX gain — calibrate live after saving"
+                        persistent-hint
+                      />
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <template v-if="radioSection === 'ptt'">
+                <!-- ── PTT ── -->
+                <div v-if="rModem.modemEnabled && rModem.txEnabled" class="radio-form-section">
+                  <div class="text-subtitle-2 font-weight-medium">PTT</div>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    How transmit is keyed — the fields follow the chosen method.
+                  </div>
+                  <div class="radio-form-row">
+                    <v-select
+                      v-model="rModem.pttMethod"
+                      :items="pttMethodItems"
+                      label="PTT method"
+                      density="compact"
+                    />
+                    <template v-if="rModem.pttMethod === PttMethods.SerialRtsDtr">
+                      <v-combobox
+                        v-model="rModem.pttSerialPort"
+                        :items="modemDevices.serialPorts"
+                        label="Serial port"
+                        density="compact"
+                        :return-object="false"
+                      />
+                      <div class="d-flex align-center ga-2">
+                        <v-checkbox
+                          v-model="rModem.pttSerialUseRts"
+                          label="RTS"
+                          hide-details
+                          density="compact"
+                        />
+                        <v-checkbox
+                          v-model="rModem.pttSerialUseDtr"
+                          label="DTR"
+                          hide-details
+                          density="compact"
+                        />
+                      </div>
+                    </template>
+                    <template v-else-if="rModem.pttMethod === PttMethods.Cm108">
+                      <v-combobox
+                        v-model="rModem.pttHidDevice"
+                        :items="modemHidDeviceItems"
+                        label="HID device"
+                        density="compact"
+                        :return-object="false"
+                      />
+                      <v-text-field
+                        v-model.number="rModem.pttHidPin"
+                        label="Pin"
+                        density="compact"
+                        type="number"
+                      />
+                    </template>
+                    <template v-else-if="rModem.pttMethod === PttMethods.Gpio">
+                      <v-text-field
+                        v-model.number="rModem.pttGpioChip"
+                        label="Chip"
+                        density="compact"
+                        type="number"
+                      />
+                      <v-text-field
+                        v-model.number="rModem.pttGpioLine"
+                        label="Line"
+                        density="compact"
+                        type="number"
+                      />
+                      <v-checkbox
+                        v-model="rModem.pttGpioActiveLow"
+                        label="Active low"
+                        hide-details
+                        density="compact"
+                      />
+                    </template>
+                    <template v-else-if="rModem.pttMethod === PttMethods.Rigctld">
+                      <v-text-field
+                        v-model="rModem.pttRigctldHost"
+                        label="rigctld host"
+                        density="compact"
+                      />
+                      <v-text-field
+                        v-model.number="rModem.pttRigctldPort"
+                        label="Port"
+                        density="compact"
+                        type="number"
+                      />
+                    </template>
+                  </div>
+
+                  <!-- Advanced TX timing — defaults suit most rigs -->
+                  <v-btn
+                    size="x-small"
+                    variant="text"
+                    color="primary"
+                    class="px-1"
+                    @click="showTxTiming = !showTxTiming"
+                  >
+                    {{ showTxTiming ? 'Hide advanced TX timing ▴' : 'Show advanced TX timing ▾' }}
+                  </v-btn>
+                  <div v-if="showTxTiming" class="radio-form-row mt-2">
+                    <v-text-field
+                      v-model.number="rModem.txDelayMs"
+                      label="TX delay (ms)"
+                      density="compact"
+                      type="number"
+                      hint="Keyed carrier before data"
+                      persistent-hint
+                    />
+                    <v-text-field
+                      v-model.number="rModem.txTailMs"
+                      label="Tail (ms)"
+                      density="compact"
+                      type="number"
+                      hint="Carrier after data"
+                      persistent-hint
+                    />
+                    <v-text-field
+                      v-model.number="rModem.txPersistence"
+                      label="Persistence"
+                      density="compact"
+                      type="number"
+                      hint="p-persistence CSMA (0–255)"
+                      persistent-hint
+                    />
+                    <v-text-field
+                      v-model.number="rModem.txSlotTimeMs"
+                      label="Slot (ms)"
+                      density="compact"
+                      type="number"
+                      hint="CSMA slot time"
+                      persistent-hint
+                    />
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
         </v-card-text>
@@ -2851,9 +2949,94 @@ async function confirmDelete() {
   background: rgba(var(--v-theme-on-surface), 0.03);
 }
 
-.calibration-label {
-  letter-spacing: 0.08em;
-  color: rgba(var(--v-theme-on-surface), 0.55);
+/* ── Radio editor: section rail + pane ── */
+.radio-dialog-layout {
+  display: flex;
+  height: min(600px, 78vh);
+}
+
+.radio-dialog-rail {
+  width: 172px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+}
+
+.radio-rail-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font-size: 0.83rem;
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.radio-rail-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.radio-rail-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.radio-rail-btn--active {
+  background: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+  font-weight: 600;
+}
+
+.radio-rail-dot {
+  position: absolute;
+  right: 10px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-warning));
+}
+
+.radio-dialog-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+@media (max-width: 640px) {
+  .radio-dialog-layout {
+    flex-direction: column;
+    height: 78vh;
+  }
+
+  .radio-dialog-rail {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 6px 8px;
+    border-right: none;
+    border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  }
+
+  .radio-rail-btn {
+    flex-shrink: 0;
+  }
+
+  .radio-rail-dot {
+    position: static;
+    margin-left: 6px;
+  }
 }
 
 .radio-form-section {
