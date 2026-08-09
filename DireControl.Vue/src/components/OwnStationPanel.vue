@@ -31,7 +31,9 @@ async function doBeaconNow(radioId: string) {
     await beaconNow(radioId)
   } catch {
     beaconError.value[radioId] = 'Failed'
-    setTimeout(() => { beaconError.value[radioId] = '' }, 3000)
+    setTimeout(() => {
+      beaconError.value[radioId] = ''
+    }, 3000)
   } finally {
     beaconing.value[radioId] = false
   }
@@ -98,16 +100,17 @@ function recentConfirmations(radioId: string) {
       @click="openHistory(radio.id)"
     >
       <div class="d-flex align-center ga-2">
-        <v-icon :color="dotColor(radio)" size="10">
-          mdi-circle
-        </v-icon>
+        <v-icon :color="dotColor(radio)" size="10"> mdi-circle </v-icon>
         <span class="text-caption font-weight-bold">{{ radio.fullCallsign }}</span>
         <span class="text-caption text-medium-emphasis">{{ radio.name }}</span>
       </div>
       <div class="text-caption mt-1">
         Last beacon: {{ formatSecondsAgo(secondsAgo(radio.id)) }}
         <span
-          v-if="radiosStore.getLastBeaconForRadio(radio.id) && !radiosStore.getLastBeaconForRadio(radio.id)!.heard"
+          v-if="
+            radiosStore.getLastBeaconForRadio(radio.id) &&
+            !radiosStore.getLastBeaconForRadio(radio.id)!.heard
+          "
           class="text-yellow font-weight-medium"
         >
           — awaiting confirmation
@@ -156,7 +159,7 @@ function recentConfirmations(radioId: string) {
     v-if="historyRadioId"
     v-model="historyOpen"
     :radio-id="historyRadioId"
-    :radio-name="radiosStore.radios.find(r => r.id === historyRadioId)?.name ?? historyRadioId"
+    :radio-name="radiosStore.radios.find((r) => r.id === historyRadioId)?.name ?? historyRadioId"
   />
 </template>
 

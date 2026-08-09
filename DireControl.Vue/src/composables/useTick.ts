@@ -17,7 +17,9 @@ export function useTick(intervalMs = 5000) {
 
   onMounted(() => {
     if (state.subscribers === 0) {
-      state.timer = setInterval(() => { state.now.value = serverNow() }, intervalMs)
+      state.timer = setInterval(() => {
+        state.now.value = serverNow()
+      }, intervalMs)
     }
     state.subscribers++
   })

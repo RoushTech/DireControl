@@ -92,12 +92,12 @@ const filteredAndSorted = computed(() => {
   let list = props.stations
 
   const q = searchText.value.trim().toUpperCase()
-  if (q) list = list.filter(s => s.callsign.toUpperCase().includes(q))
+  if (q) list = list.filter((s) => s.callsign.toUpperCase().includes(q))
 
   if (showWeatherOnly.value) {
-    list = list.filter(s => s.isWeatherStation)
+    list = list.filter((s) => s.isWeatherStation)
   } else if (typeFilter.value !== null) {
-    list = list.filter(s => s.stationType === typeFilter.value)
+    list = list.filter((s) => s.stationType === typeFilter.value)
   }
 
   return [...list].sort((a, b) => {
@@ -117,11 +117,11 @@ const filteredStale = computed(() => {
   if (!props.showStale || !props.staleStations?.length) return []
   let list = props.staleStations
   const q = searchText.value.trim().toUpperCase()
-  if (q) list = list.filter(s => s.callsign.toUpperCase().includes(q))
+  if (q) list = list.filter((s) => s.callsign.toUpperCase().includes(q))
   if (showWeatherOnly.value) {
-    list = list.filter(s => s.isWeatherStation)
+    list = list.filter((s) => s.isWeatherStation)
   } else if (typeFilter.value !== null) {
-    list = list.filter(s => s.stationType === typeFilter.value)
+    list = list.filter((s) => s.stationType === typeFilter.value)
   }
   return [...list].sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())
 })
@@ -160,7 +160,7 @@ const virtualItems = computed<VirtualItem[]>(() => {
         size="x-small"
         :color="showStale ? 'brown-lighten-1' : 'grey'"
         class="ml-1"
-        style="cursor:pointer"
+        style="cursor: pointer"
         @click="emit('update:showStale', !showStale)"
       >
         {{ staleCount }} stale
@@ -230,7 +230,10 @@ const virtualItems = computed<VirtualItem[]>(() => {
       class="station-list"
     >
       <template #default="{ item }">
-        <div v-if="item.kind === 'divider'" class="stale-divider text-caption text-medium-emphasis px-3 py-1">
+        <div
+          v-if="item.kind === 'divider'"
+          class="stale-divider text-caption text-medium-emphasis px-3 py-1"
+        >
           <v-icon size="12" class="mr-1">mdi-clock-alert-outline</v-icon>Stale
         </div>
         <div
@@ -242,11 +245,23 @@ const virtualItems = computed<VirtualItem[]>(() => {
           }"
           @click="emit('selectStation', item.station.callsign)"
         >
-          <div :style="symbolStyle(item.station)" class="station-icon flex-shrink-0" :class="{ 'stale-icon': item.stale }" />
+          <div
+            :style="symbolStyle(item.station)"
+            class="station-icon flex-shrink-0"
+            :class="{ 'stale-icon': item.stale }"
+          />
           <div class="station-info">
             <div class="d-flex align-center ga-1">
-              <span class="text-body-2 font-weight-medium" :class="{ 'text-medium-emphasis': item.stale }">{{ item.station.callsign }}</span>
-              <v-chip :color="item.stale ? 'grey' : stationTypeColor[item.station.stationType]" size="x-small" label>
+              <span
+                class="text-body-2 font-weight-medium"
+                :class="{ 'text-medium-emphasis': item.stale }"
+                >{{ item.station.callsign }}</span
+              >
+              <v-chip
+                :color="item.stale ? 'grey' : stationTypeColor[item.station.stationType]"
+                size="x-small"
+                label
+              >
                 {{ stationTypeLabel[item.station.stationType] }}
               </v-chip>
               <v-chip
@@ -258,7 +273,10 @@ const virtualItems = computed<VirtualItem[]>(() => {
                 {{ heardViaLabel[item.station.heardVia] }}
               </v-chip>
             </div>
-            <div class="d-flex align-center ga-2 text-caption" :class="item.stale ? 'text-disabled' : 'text-medium-emphasis'">
+            <div
+              class="d-flex align-center ga-2 text-caption"
+              :class="item.stale ? 'text-disabled' : 'text-medium-emphasis'"
+            >
               <span>{{ timeAgo(item.station.lastSeen, now) }}</span>
               <span v-if="!item.stale && packetCounts[item.station.callsign]">
                 <v-icon size="10">mdi-radio-tower</v-icon> {{ packetCounts[item.station.callsign] }}
@@ -268,9 +286,7 @@ const virtualItems = computed<VirtualItem[]>(() => {
         </div>
       </template>
     </v-virtual-scroll>
-    <div v-else class="text-center text-medium-emphasis py-6 text-caption">
-      No stations
-    </div>
+    <div v-else class="text-center text-medium-emphasis py-6 text-caption">No stations</div>
   </div>
 </template>
 

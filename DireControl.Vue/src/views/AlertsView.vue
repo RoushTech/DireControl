@@ -5,10 +5,12 @@ import { useAlertsStore } from '@/stores/alertsStore'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { ALERT_TYPE_COLORS } from '@/types/alert'
 import { formatUtc, timeAgo } from '@/utils/time'
+import { useTick } from '@/composables/useTick'
 
 const router = useRouter()
 const alertsStore = useAlertsStore()
 const stationSelection = useStationSelectionStore()
+const { now } = useTick(5000)
 
 const typeFilter = ref<string>('')
 const showAcknowledged = ref(true)
@@ -43,8 +45,14 @@ function alertDetailText(alert: (typeof alertsStore.alerts)[0]): string {
   }
 }
 
+const ackFailed = ref(false)
+
 async function acknowledge(id: number) {
-  await alertsStore.acknowledge(id)
+  try {
+    await alertsStore.acknowledge(id)
+  } catch {
+    ackFailed.value = true
+  }
 }
 
 function goToStation(callsign: string) {
@@ -95,10 +103,7 @@ function goToStation(callsign: string) {
 
     <!-- Alert list -->
     <div class="alerts-list">
-      <div
-        v-if="filteredAlerts.length === 0"
-        class="text-center text-medium-emphasis py-8"
-      >
+      <div v-if="filteredAlerts.length === 0" class="text-center text-medium-emphasis py-8">
         No alerts
       </div>
 
@@ -120,10 +125,7 @@ function goToStation(callsign: string) {
           </v-chip>
 
           <!-- Callsign -->
-          <span
-            class="callsign-link font-weight-medium"
-            @click="goToStation(alert.callsign)"
-          >
+          <span class="callsign-link font-weight-medium" @click="goToStation(alert.callsign)">
             {{ alert.callsign }}
           </span>
 
@@ -132,18 +134,13 @@ function goToStation(callsign: string) {
             class="text-caption text-medium-emphasis flex-shrink-0"
             :title="formatUtc(alert.triggeredAt)"
           >
-            {{ timeAgo(alert.triggeredAt) }}
+            {{ timeAgo(alert.triggeredAt, now) }}
           </span>
 
           <v-spacer />
 
           <!-- Ack status/button -->
-          <v-icon
-            v-if="alert.isAcknowledged"
-            size="16"
-            color="success"
-            title="Acknowledged"
-          >
+          <v-icon v-if="alert.isAcknowledged" size="16" color="success" title="Acknowledged">
             mdi-check-circle
           </v-icon>
           <v-btn
@@ -163,6 +160,13 @@ function goToStation(callsign: string) {
         </div>
       </div>
     </div>
+
+    <v-snackbar v-model="ackFailed" color="error" :timeout="5000" location="bottom right">
+      Couldn't acknowledge the alert — the backend may be unreachable.
+      <template #actions>
+        <v-btn variant="text" @click="ackFailed = false">Dismiss</v-btn>
+      </template>
+    </v-snackbar>
   </div>
 </template>
 

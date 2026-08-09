@@ -17,14 +17,13 @@ import type {
   SendMessageRequest,
 } from '@/types/message'
 import { RetryState } from '@/types/message'
+import { usePacketHubStore } from '@/stores/packetHub'
 
 export const useMessagesStore = defineStore('messages', () => {
   const inboxMessages = ref<InboxMessageDto[]>([])
   const loading = ref(false)
 
-  const unreadCount = computed(
-    () => inboxMessages.value.filter((m) => !m.isRead).length,
-  )
+  const unreadCount = computed(() => inboxMessages.value.filter((m) => !m.isRead).length)
 
   async function fetchInbox() {
     loading.value = true
@@ -117,6 +116,15 @@ export const useMessagesStore = defineStore('messages', () => {
     const idx = inboxMessages.value.findIndex((m) => m.id === updated.id)
     if (idx !== -1) inboxMessages.value[idx] = updated
   }
+
+  // Store-level hub subscriptions: retry-state changes and the unread badge
+  // stay live on every screen, not just while the Messages view is open.
+  const hub = usePacketHubStore()
+  hub.on('messageReceived', (message: InboxMessageDto) => onMessageReceived(message))
+  hub.on('messageAcked', (ack: MessageAckDto) => onMessageAcked(ack))
+  hub.on('messageRetried', (data: MessageRetriedDto) => onMessageRetried(data))
+  hub.on('messageAcknowledged', (data: MessageAcknowledgedDto) => onMessageAcknowledged(data))
+  hub.on('messageFailed', (data: MessageFailedDto) => onMessageFailed(data))
 
   return {
     inboxMessages,

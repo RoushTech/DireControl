@@ -37,7 +37,9 @@ export async function toggleRadioActive(id: string): Promise<RadioDto> {
 }
 
 export async function getLastBeacon(id: string): Promise<LastBeaconDto> {
-  const { data } = await http.get<LastBeaconDto>(`/api/v0/radios/${encodeURIComponent(id)}/lastbeacon`)
+  const { data } = await http.get<LastBeaconDto>(
+    `/api/v0/radios/${encodeURIComponent(id)}/lastbeacon`,
+  )
   return data
 }
 

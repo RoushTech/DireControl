@@ -14,6 +14,17 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// </summary>
     public string OutboundPath { get; set; } = "WIDE1-1,WIDE2-1";
 
+    // ─── Station identity (overrides appsettings when set) ───────────────────
+
+    /// <summary>Station callsign-SSID override. Null = use configuration.</summary>
+    public string? OurCallsign { get; set; }
+
+    /// <summary>Home latitude override, used for beaconing and range. Null = use configuration.</summary>
+    public double? HomeLat { get; set; }
+
+    /// <summary>Home longitude override. Null = use configuration.</summary>
+    public double? HomeLon { get; set; }
+
     // ─── APRS-IS settings ────────────────────────────────────────────────────
 
     /// <summary>Whether the DireControl APRS-IS client is enabled.</summary>

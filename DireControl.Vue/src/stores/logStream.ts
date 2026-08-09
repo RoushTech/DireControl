@@ -57,12 +57,12 @@ export const useLogStreamStore = defineStore('logStream', () => {
     const lf = levelFilter.value
     if (lf) {
       const min = LOG_LEVEL_RANK[lf] ?? 0
-      list = list.filter(e => (LOG_LEVEL_RANK[e.level] ?? 0) >= min)
+      list = list.filter((e) => (LOG_LEVEL_RANK[e.level] ?? 0) >= min)
     }
     const tx = textFilter.value.trim().toLowerCase()
     if (tx) {
       list = list.filter(
-        e => e.message.toLowerCase().includes(tx) || e.category.toLowerCase().includes(tx),
+        (e) => e.message.toLowerCase().includes(tx) || e.category.toLowerCase().includes(tx),
       )
     }
     return list

@@ -40,14 +40,24 @@ const router = createRouter({
       component: () => import('@/views/SettingsView.vue'),
     },
     {
+      // Frequencies merged into Statistics — redirect old bookmarks.
       path: '/frequencies',
-      name: 'frequencies',
-      component: () => import('@/views/FrequenciesView.vue'),
+      redirect: '/statistics',
     },
     {
       path: '/statistics',
       name: 'statistics',
       component: () => import('@/views/StatisticsView.vue'),
+    },
+    {
+      path: '/network',
+      name: 'network',
+      component: () => import('@/views/NetworkView.vue'),
+    },
+    {
+      path: '/stations/:callsign',
+      name: 'station',
+      component: () => import('@/views/StationView.vue'),
     },
     {
       path: '/logs',

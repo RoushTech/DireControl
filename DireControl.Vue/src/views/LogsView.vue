@@ -1,17 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { HubConnectionBuilder, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { useLogStreamStore } from '@/stores/logStream'
-import {
-  LOG_LEVEL_COLORS,
-  shortCategory,
-  type LogEntryDto,
-} from '@/types/log'
+import { LOG_LEVEL_COLORS, shortCategory, type LogEntryDto } from '@/types/log'
 import { getLogLevels, setLogLevel } from '@/api/loggingApi'
 
 const route = useRoute()
@@ -21,6 +13,12 @@ let connection: HubConnection | null = null
 const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
 
 const selectedEntry = ref<LogEntryDto | null>(null)
+const clearConfirmOpen = ref(false)
+
+function confirmClear() {
+  store.clear()
+  clearConfirmOpen.value = false
+}
 
 // Minimum-level filter (shows the chosen level and everything more severe).
 const levelOptions = [
@@ -61,7 +59,7 @@ const INHERIT = ''
 
 const levelSelectItems = computed(() => [
   { title: 'Inherit (default)', value: INHERIT },
-  ...availableLevels.value.map(l => ({ title: l, value: l })),
+  ...availableLevels.value.map((l) => ({ title: l, value: l })),
 ])
 
 // Show the common categories plus any extra categories that already have an override.
@@ -77,7 +75,7 @@ async function loadLevels() {
     const data = await getLogLevels()
     availableLevels.value = data.availableLevels
     commonCategories.value = data.commonCategories
-    overrides.value = Object.fromEntries(data.overrides.map(o => [o.category, o.level]))
+    overrides.value = Object.fromEntries(data.overrides.map((o) => [o.category, o.level]))
   } finally {
     levelsLoading.value = false
   }
@@ -120,9 +118,15 @@ async function connectSignalR() {
     store.addLog(entry)
   })
 
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
+  connection.onreconnecting(() => {
+    connectionStatus.value = 'connecting'
+  })
+  connection.onreconnected(() => {
+    connectionStatus.value = 'connected'
+  })
+  connection.onclose(() => {
+    connectionStatus.value = 'disconnected'
+  })
 
   try {
     await connection.start()
@@ -177,7 +181,13 @@ function openPopOut() {
 
       <div class="d-flex align-center ga-2">
         <v-chip
-          :color="connectionStatus === 'connected' ? 'success' : connectionStatus === 'connecting' ? 'warning' : 'error'"
+          :color="
+            connectionStatus === 'connected'
+              ? 'success'
+              : connectionStatus === 'connecting'
+                ? 'warning'
+                : 'error'
+          "
           size="x-small"
           variant="flat"
           label
@@ -196,13 +206,7 @@ function openPopOut() {
         >
           Pause
         </v-btn>
-        <v-btn
-          v-else
-          color="green"
-          size="small"
-          variant="tonal"
-          @click="store.unpause()"
-        >
+        <v-btn v-else color="green" size="small" variant="tonal" @click="store.unpause()">
           <v-icon start>mdi-play</v-icon>
           Unpause
           <v-badge
@@ -227,10 +231,25 @@ function openPopOut() {
           size="small"
           variant="tonal"
           prepend-icon="mdi-notification-clear-all"
-          @click="store.clear()"
+          @click="clearConfirmOpen = true"
         >
           Clear
         </v-btn>
+
+        <v-dialog v-model="clearConfirmOpen" max-width="400">
+          <v-card>
+            <v-card-title>Clear log buffer?</v-card-title>
+            <v-card-text>
+              This discards the buffered log entries in this view. It can't be undone, but new
+              entries keep streaming in.
+            </v-card-text>
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="text" @click="clearConfirmOpen = false">Cancel</v-btn>
+              <v-btn color="error" variant="tonal" @click="confirmClear">Clear</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
 
         <v-btn
           v-if="!route.meta.isPopOut"
@@ -247,9 +266,15 @@ function openPopOut() {
 
     <!-- Header row -->
     <div class="log-header">
-      <span style="width: 96px" class="text-caption font-weight-medium text-medium-emphasis">Time</span>
-      <span style="width: 80px" class="text-caption font-weight-medium text-medium-emphasis">Level</span>
-      <span style="width: 160px" class="text-caption font-weight-medium text-medium-emphasis">Source</span>
+      <span style="width: 96px" class="text-caption font-weight-medium text-medium-emphasis"
+        >Time</span
+      >
+      <span style="width: 80px" class="text-caption font-weight-medium text-medium-emphasis"
+        >Level</span
+      >
+      <span style="width: 160px" class="text-caption font-weight-medium text-medium-emphasis"
+        >Source</span
+      >
       <span class="text-caption font-weight-medium text-medium-emphasis">Message</span>
     </div>
 
@@ -259,12 +284,7 @@ function openPopOut() {
     <div v-if="store.filteredLogs.length === 0" class="text-center text-medium-emphasis py-8">
       No logs to show yet…
     </div>
-    <v-virtual-scroll
-      v-else
-      class="log-list"
-      :items="store.filteredLogs"
-      :item-height="32"
-    >
+    <v-virtual-scroll v-else class="log-list" :items="store.filteredLogs" :item-height="32">
       <template #default="{ item: e }">
         <div
           :key="e.sequence"
@@ -272,22 +292,34 @@ function openPopOut() {
           :class="{ 'log-row--error': e.level === 'Error' || e.level === 'Critical' }"
           @click="openDetail(e)"
         >
-          <span class="log-cell log-time text-caption text-medium-emphasis">{{ formatTime(e.timestamp) }}</span>
+          <span class="log-cell log-time text-caption text-medium-emphasis">{{
+            formatTime(e.timestamp)
+          }}</span>
           <span class="log-cell log-level">
-            <v-chip :color="levelColor(e.level)" size="x-small" label variant="flat">{{ e.level }}</v-chip>
+            <v-chip :color="levelColor(e.level)" size="x-small" label variant="flat">{{
+              e.level
+            }}</v-chip>
           </span>
-          <span class="log-cell log-source text-caption text-medium-emphasis text-truncate" :title="e.category">
+          <span
+            class="log-cell log-source text-caption text-medium-emphasis text-truncate"
+            :title="e.category"
+          >
             {{ shortCategory(e.category) }}
           </span>
           <span class="log-cell log-message text-body-2 text-truncate" :title="e.message">
-            <v-icon v-if="e.exception" size="14" color="error" class="mr-1">mdi-alert-circle</v-icon>{{ e.message }}
+            <v-icon v-if="e.exception" size="14" color="error" class="mr-1">mdi-alert-circle</v-icon
+            >{{ e.message }}
           </span>
         </div>
       </template>
     </v-virtual-scroll>
 
     <!-- Detail dialog -->
-    <v-dialog :model-value="selectedEntry !== null" max-width="760" @update:model-value="selectedEntry = null">
+    <v-dialog
+      :model-value="selectedEntry !== null"
+      max-width="760"
+      @update:model-value="selectedEntry = null"
+    >
       <v-card v-if="selectedEntry">
         <v-card-title class="d-flex align-center ga-2">
           <v-chip :color="levelColor(selectedEntry.level)" size="small" label variant="flat">
@@ -295,7 +327,9 @@ function openPopOut() {
           </v-chip>
           <span class="text-subtitle-2">{{ shortCategory(selectedEntry.category) }}</span>
           <v-spacer />
-          <span class="text-caption text-medium-emphasis">{{ formatTime(selectedEntry.timestamp) }}</span>
+          <span class="text-caption text-medium-emphasis">{{
+            formatTime(selectedEntry.timestamp)
+          }}</span>
         </v-card-title>
         <v-card-text>
           <div class="text-caption text-medium-emphasis mb-1">{{ selectedEntry.category }}</div>
@@ -319,7 +353,13 @@ function openPopOut() {
         <v-card-title class="d-flex align-center ga-2">
           <v-icon>mdi-tune-variant</v-icon>
           Log Levels
-          <v-progress-circular v-if="levelsLoading || levelsSaving" indeterminate size="18" width="2" class="ml-1" />
+          <v-progress-circular
+            v-if="levelsLoading || levelsSaving"
+            indeterminate
+            size="18"
+            width="2"
+            class="ml-1"
+          />
         </v-card-title>
         <v-card-subtitle>
           Applied live to console and this stream, and saved across restarts.

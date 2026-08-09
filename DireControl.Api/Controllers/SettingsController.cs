@@ -18,6 +18,7 @@ public class SettingsController(
     AprsIsReconnectTrigger reconnectTrigger,
     ModemRestartTrigger modemRestartTrigger,
     KissReconnectTrigger kissReconnectTrigger,
+    StationIdentityService stationIdentity,
     DireControlContext db) : ControllerBase
 {
     private static readonly Regex PathRegex =
@@ -76,6 +77,50 @@ public class SettingsController(
             IsToRfPath = userSetting.IsToRfPath,
             IsToRfRecentHeardMinutes = userSetting.IsToRfRecentHeardMinutes,
         });
+    }
+
+    [HttpPut("station")]
+    public async Task<ActionResult> UpdateStationIdentity(
+        [FromBody] UpdateStationIdentityRequest request,
+        CancellationToken ct)
+    {
+        var callsign = request.Callsign?.Trim().ToUpperInvariant() ?? string.Empty;
+        if (!StationIdentityLogic.IsValidCallsign(callsign))
+            return BadRequest("Invalid callsign. Use BASE or BASE-SSID, e.g. W3UWU or W3UWU-10.");
+
+        if (request.HomeLat.HasValue != request.HomeLon.HasValue)
+            return BadRequest("Latitude and longitude must be provided together.");
+
+        if (request.HomeLat is < -90 or > 90)
+            return BadRequest("Latitude must be between -90 and 90.");
+
+        if (request.HomeLon is < -180 or > 180)
+            return BadRequest("Longitude must be between -180 and 180.");
+
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        var callsignChanged =
+            !string.Equals(options.Value.OurCallsign, callsign, StringComparison.OrdinalIgnoreCase);
+
+        setting.OurCallsign = callsign;
+        setting.HomeLat = request.HomeLat;
+        setting.HomeLon = request.HomeLon;
+
+        await db.SaveChangesAsync(ct);
+
+        stationIdentity.Apply(setting);
+
+        // A callsign change invalidates the APRS-IS login — the passcode is
+        // derived from the callsign — so force a reconnect with the new identity.
+        if (callsignChanged)
+            reconnectTrigger.Trigger();
+
+        return NoContent();
     }
 
     [HttpPut("rf-services")]

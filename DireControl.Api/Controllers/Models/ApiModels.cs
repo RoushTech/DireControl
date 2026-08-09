@@ -175,6 +175,13 @@ public sealed class ModemStatusDto
     public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
 }
 
+public sealed class UpdateStationIdentityRequest
+{
+    public string? Callsign { get; init; }
+    public double? HomeLat { get; init; }
+    public double? HomeLon { get; init; }
+}
+
 public sealed class UpdateRfServicesRequest
 {
     public bool DigipeaterEnabled { get; init; }

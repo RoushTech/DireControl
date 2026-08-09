@@ -12,16 +12,33 @@ import {
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { getStatistics, getDigipeaterAnalysis, getStationFrequencies } from '@/api/statisticsApi'
-import { StationType, type StatisticsDto, type DigipeaterAnalysisEntry, type StationFrequencyDto } from '@/types/station'
+import {
+  StationType,
+  type StatisticsDto,
+  type DigipeaterAnalysisEntry,
+  type StationFrequencyDto,
+} from '@/types/station'
 import { timeAgo } from '@/utils/time'
+import { serverNow } from '@/utils/serverTime'
+import { useTick } from '@/composables/useTick'
+import { useTheme } from 'vuetify'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ChartTooltip, Legend)
+
+const theme = useTheme()
+const { now } = useTick(5000)
 
 const stats = ref<StatisticsDto | null>(null)
 const digiAnalysis = ref<DigipeaterAnalysisEntry[]>([])
 const frequencies = ref<StationFrequencyDto[]>([])
 const loading = ref(false)
 const error = ref(false)
+const loadedAt = ref<number | null>(null)
+
+const asOfLabel = computed(() => {
+  if (loadedAt.value === null) return ''
+  return `as of ${timeAgo(new Date(loadedAt.value).toISOString(), now.value)}`
+})
 
 const mapEl = ref<HTMLElement | null>(null)
 let leafletMap: L.Map | null = null
@@ -41,6 +58,7 @@ async function load() {
     stats.value = statsResult
     digiAnalysis.value = digiResult
     frequencies.value = freqResult
+    loadedAt.value = serverNow()
   } catch {
     error.value = true
   } finally {
@@ -50,7 +68,16 @@ async function load() {
 
 // ---- Bar chart ----
 
-const barOptions = {
+// Chart colors follow the active Vuetify theme so the bars, grid lines, and
+// tick labels stay legible in dark mode instead of Chart.js's light defaults.
+const chartInk = computed(() =>
+  theme.global.current.value.dark ? 'rgba(230, 237, 243, 0.75)' : 'rgba(27, 39, 51, 0.75)',
+)
+const chartGrid = computed(() =>
+  theme.global.current.value.dark ? 'rgba(230, 237, 243, 0.10)' : 'rgba(27, 39, 51, 0.10)',
+)
+
+const barOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   animation: false as const,
@@ -61,17 +88,26 @@ const barOptions = {
   scales: {
     x: {
       display: true,
-      ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 },
+      ticks: {
+        font: { size: 10 },
+        maxRotation: 0,
+        autoSkip: true,
+        maxTicksLimit: 12,
+        color: chartInk.value,
+      },
+      grid: { color: chartGrid.value },
     },
     y: {
       beginAtZero: true,
-      ticks: { font: { size: 10 } },
+      ticks: { font: { size: 10 }, color: chartInk.value },
+      grid: { color: chartGrid.value },
     },
   },
-}
+}))
 
 const barData = computed(() => {
   const counts = stats.value?.packetsPerHour ?? Array.from<number>({ length: 24 }).fill(0)
+  const primary = String(theme.global.current.value.colors.primary)
   const now = new Date()
   const labels = Array.from({ length: 24 }, (_, i) => {
     const h = (now.getHours() - 23 + i + 24) % 24
@@ -83,8 +119,8 @@ const barData = computed(() => {
       {
         label: 'Packets',
         data: counts,
-        backgroundColor: 'rgba(66, 165, 245, 0.6)',
-        borderColor: '#42A5F5',
+        backgroundColor: `${primary}99`,
+        borderColor: primary,
         borderWidth: 1,
       },
     ],
@@ -159,7 +195,7 @@ function updateGridLayers() {
   if (!leafletMap) return
 
   // Remove old rectangles
-  gridLayers.forEach(r => r.remove())
+  gridLayers.forEach((r) => r.remove())
   gridLayers = []
 
   const squares = stats.value?.gridSquares ?? []
@@ -196,8 +232,10 @@ onUnmounted(() => {
 
 <template>
   <v-container fluid class="statistics-view pa-4">
-    <div class="d-flex align-center justify-space-between mb-4">
+    <div class="d-flex align-center ga-3 mb-4">
       <div class="text-h5 font-weight-bold">Statistics</div>
+      <span v-if="asOfLabel" class="text-caption text-medium-emphasis">{{ asOfLabel }}</span>
+      <v-spacer />
       <v-btn
         size="small"
         variant="tonal"
@@ -296,7 +334,9 @@ onUnmounted(() => {
                 <tr v-for="(d, i) in digiAnalysis" :key="d.callsign">
                   <td class="text-caption text-medium-emphasis">{{ i + 1 }}</td>
                   <td class="text-body-2 font-weight-medium">{{ d.callsign }}</td>
-                  <td class="text-body-2 text-right">{{ d.totalPacketsForwarded.toLocaleString() }}</td>
+                  <td class="text-body-2 text-right">
+                    {{ d.totalPacketsForwarded.toLocaleString() }}
+                  </td>
                   <td class="text-body-2 text-right">{{ d.last24h.toLocaleString() }}</td>
                   <td class="text-body-2 text-right">{{ d.averageHopsFromUs.toFixed(1) }}</td>
                 </tr>
@@ -365,7 +405,9 @@ onUnmounted(() => {
               <td class="text-body-2 font-weight-medium">{{ f.frequencyMhz }} MHz</td>
               <td class="text-body-2">{{ f.callsign }}</td>
               <td class="text-body-2">
-                <v-chip v-if="f.mode" size="x-small" color="deep-purple" variant="tonal">{{ f.mode }}</v-chip>
+                <v-chip v-if="f.mode" size="x-small" color="deep-purple" variant="tonal">{{
+                  f.mode
+                }}</v-chip>
                 <span v-else class="text-medium-emphasis">—</span>
               </td>
               <td>
@@ -388,11 +430,7 @@ onUnmounted(() => {
             Recently first-heard stations
           </v-card-title>
           <v-card-text class="pa-0">
-            <div
-              v-for="s in stats?.recentlyFirstHeard ?? []"
-              :key="s.callsign"
-              class="recent-row"
-            >
+            <div v-for="s in stats?.recentlyFirstHeard ?? []" :key="s.callsign" class="recent-row">
               <span class="text-body-2 font-weight-medium">{{ s.callsign }}</span>
               <div class="d-flex align-center ga-2 mt-1">
                 <v-chip :color="typeColor[s.stationType]" size="x-small" label>

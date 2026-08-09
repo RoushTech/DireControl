@@ -4,11 +4,15 @@ import { useRouter, useRoute } from 'vue-router'
 import { useTheme } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
+import { useToastStore } from '@/stores/toastStore'
+import { usePacketHubStore } from '@/stores/packetHub'
 import { useUiStore } from '@/stores/uiStore'
 import { getStatus, reconnectAprsIs } from '@/api/statusApi'
-import { ModemStates, type ModemState } from '@/api/modemApi'
+import { ModemStates, modemStateLabels, type ModemState } from '@/api/modemApi'
 import { getAbout } from '@/api/aboutApi'
 import { recordServerSync } from '@/utils/serverTime'
+import { timeAgo } from '@/utils/time'
+import { useTick } from '@/composables/useTick'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
 const CLOCK_SYNC_INTERVAL_MS = 5 * 60 * 1000
@@ -20,7 +24,10 @@ const route = useRoute()
 const theme = useTheme()
 const messagesStore = useMessagesStore()
 const alertsStore = useAlertsStore()
+const toastStore = useToastStore()
+const packetHub = usePacketHubStore()
 const uiStore = useUiStore()
+const { now } = useTick(5000)
 
 const isDark = ref(theme.global.current.value.dark)
 const apiOffline = ref(false)
@@ -47,6 +54,19 @@ const shortcuts = [
   { key: '?', description: 'Show this shortcuts overlay' },
 ]
 
+// ─── Nav groups ──────────────────────────────────────────────────────────────
+const activityRoutes = ['/beacons', '/radio', '/logs']
+const commsRoutes = ['/messages', '/alerts']
+const insightsRoutes = ['/statistics', '/network']
+
+const activityActive = computed(() => activityRoutes.includes(route.path))
+const commsActive = computed(
+  () => commsRoutes.includes(route.path) || route.path.startsWith('/stations/'),
+)
+const insightsActive = computed(() => insightsRoutes.includes(route.path))
+
+const commsBadgeCount = computed(() => messagesStore.unreadCount + alertsStore.unacknowledgedCount)
+
 // Persist theme changes
 watch(isDark, (dark) => {
   theme.global.name.value = dark ? 'dark' : 'light'
@@ -57,7 +77,7 @@ function toggleTheme() {
   isDark.value = !isDark.value
 }
 
-// Status polling
+// ─── Status polling + live pill ──────────────────────────────────────────────
 let statusInterval: ReturnType<typeof setInterval> | null = null
 
 const aprsIsStateColor = computed(() => {
@@ -88,6 +108,35 @@ const aprsIsStateLabel = computed(() => {
     default:
       return 'Disabled'
   }
+})
+
+/**
+ * One pill for "is this dashboard live" — collapses the API, the realtime hub,
+ * and the RF backend into a single glanceable state with detail in the popover.
+ */
+const livePill = computed<{ label: string; color: string; icon: string }>(() => {
+  if (apiOffline.value) return { label: 'Offline', color: 'error', icon: 'mdi-wifi-off' }
+  if (packetHub.state === 'disconnected')
+    return { label: 'No live feed', color: 'error', icon: 'mdi-lan-disconnect' }
+  if (packetHub.state === 'connecting')
+    return { label: 'Connecting', color: 'warning', icon: 'mdi-lan-pending' }
+  return { label: 'Live', color: 'success', icon: 'mdi-access-point' }
+})
+
+const modemStateColor = computed(() => {
+  switch (modemState.value) {
+    case ModemStates.Running:
+      return 'success'
+    case ModemStates.Error:
+      return 'error'
+    default:
+      return 'grey'
+  }
+})
+
+const lastPacketLabel = computed(() => {
+  if (packetHub.lastPacketAt === null) return 'none this session'
+  return timeAgo(new Date(packetHub.lastPacketAt).toISOString(), now.value)
 })
 
 async function pollStatus() {
@@ -164,7 +213,8 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  alertsStore.startSignalR()
+  // The single realtime connection — every store and view shares it.
+  void packetHub.start()
 
   try {
     await messagesStore.fetchInbox()
@@ -218,6 +268,14 @@ async function syncServerClock() {
     >
       <v-list density="compact" nav>
         <v-list-item to="/" prepend-icon="mdi-map" title="Map" @click="mobileDrawerOpen = false" />
+
+        <v-list-subheader>Activity</v-list-subheader>
+        <v-list-item
+          to="/beacons"
+          prepend-icon="mdi-radio-tower"
+          title="Beacon Stream"
+          @click="mobileDrawerOpen = false"
+        />
         <v-list-item
           to="/radio"
           prepend-icon="mdi-radio-handheld"
@@ -225,11 +283,13 @@ async function syncServerClock() {
           @click="mobileDrawerOpen = false"
         />
         <v-list-item
-          to="/beacons"
-          prepend-icon="mdi-radio-tower"
-          title="Beacon Stream"
+          to="/logs"
+          prepend-icon="mdi-text-box-outline"
+          title="Logs"
           @click="mobileDrawerOpen = false"
         />
+
+        <v-list-subheader>Comms</v-list-subheader>
         <v-list-item
           to="/messages"
           prepend-icon="mdi-message-text"
@@ -260,12 +320,8 @@ async function syncServerClock() {
             />
           </template>
         </v-list-item>
-        <v-list-item
-          to="/frequencies"
-          prepend-icon="mdi-sine-wave"
-          title="Frequencies"
-          @click="mobileDrawerOpen = false"
-        />
+
+        <v-list-subheader>Insights</v-list-subheader>
         <v-list-item
           to="/statistics"
           prepend-icon="mdi-chart-bar"
@@ -273,11 +329,13 @@ async function syncServerClock() {
           @click="mobileDrawerOpen = false"
         />
         <v-list-item
-          to="/logs"
-          prepend-icon="mdi-text-box-outline"
-          title="Logs"
+          to="/network"
+          prepend-icon="mdi-access-point-network"
+          title="Network"
           @click="mobileDrawerOpen = false"
         />
+
+        <v-divider class="my-1" />
         <v-list-item
           to="/settings"
           prepend-icon="mdi-cog"
@@ -301,35 +359,90 @@ async function syncServerClock() {
         <span v-if="version" class="text-caption text-medium-emphasis ml-2">{{ version }}</span>
       </v-app-bar-title>
       <template #append>
-        <!-- Desktop nav — hidden on mobile -->
+        <!-- Desktop nav — grouped: Map · Activity · Comms · Insights · Settings -->
         <div class="desktop-nav">
           <v-btn to="/" variant="text" size="small">Map</v-btn>
-          <v-btn to="/radio" variant="text" size="small">Radio</v-btn>
-          <v-btn to="/beacons" variant="text" size="small">Beacon Stream</v-btn>
 
-          <v-btn to="/messages" variant="text" size="small" class="position-relative">
-            Messages
-            <v-badge
-              v-if="messagesStore.unreadCount > 0"
-              :content="messagesStore.unreadCount"
-              color="error"
-              floating
-            />
-          </v-btn>
+          <v-menu open-on-hover :close-delay="100">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                variant="text"
+                size="small"
+                :color="activityActive ? 'primary' : undefined"
+                append-icon="mdi-chevron-down"
+              >
+                Activity
+              </v-btn>
+            </template>
+            <v-list density="compact" nav>
+              <v-list-item to="/beacons" prepend-icon="mdi-radio-tower" title="Beacon Stream" />
+              <v-list-item to="/radio" prepend-icon="mdi-radio-handheld" title="Radio" />
+              <v-list-item to="/logs" prepend-icon="mdi-text-box-outline" title="Logs" />
+            </v-list>
+          </v-menu>
 
-          <v-btn to="/alerts" variant="text" size="small" class="position-relative">
-            Alerts
-            <v-badge
-              v-if="alertsStore.unacknowledgedCount > 0"
-              :content="alertsStore.unacknowledgedCount"
-              color="warning"
-              floating
-            />
-          </v-btn>
+          <v-menu open-on-hover :close-delay="100">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                variant="text"
+                size="small"
+                :color="commsActive ? 'primary' : undefined"
+                append-icon="mdi-chevron-down"
+                class="position-relative"
+              >
+                Comms
+                <v-badge
+                  v-if="commsBadgeCount > 0"
+                  :content="commsBadgeCount"
+                  color="error"
+                  floating
+                />
+              </v-btn>
+            </template>
+            <v-list density="compact" nav>
+              <v-list-item to="/messages" prepend-icon="mdi-message-text" title="Messages">
+                <template #append>
+                  <v-badge
+                    v-if="messagesStore.unreadCount > 0"
+                    :content="messagesStore.unreadCount"
+                    color="error"
+                    inline
+                  />
+                </template>
+              </v-list-item>
+              <v-list-item to="/alerts" prepend-icon="mdi-bell" title="Alerts">
+                <template #append>
+                  <v-badge
+                    v-if="alertsStore.unacknowledgedCount > 0"
+                    :content="alertsStore.unacknowledgedCount"
+                    color="warning"
+                    inline
+                  />
+                </template>
+              </v-list-item>
+            </v-list>
+          </v-menu>
 
-          <v-btn to="/frequencies" variant="text" size="small">Frequencies</v-btn>
-          <v-btn to="/statistics" variant="text" size="small">Statistics</v-btn>
-          <v-btn to="/logs" variant="text" size="small">Logs</v-btn>
+          <v-menu open-on-hover :close-delay="100">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                variant="text"
+                size="small"
+                :color="insightsActive ? 'primary' : undefined"
+                append-icon="mdi-chevron-down"
+              >
+                Insights
+              </v-btn>
+            </template>
+            <v-list density="compact" nav>
+              <v-list-item to="/statistics" prepend-icon="mdi-chart-bar" title="Statistics" />
+              <v-list-item to="/network" prepend-icon="mdi-access-point-network" title="Network" />
+            </v-list>
+          </v-menu>
+
           <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
         </div>
 
@@ -350,49 +463,76 @@ async function syncServerClock() {
           @click="showShortcutsDialog = true"
         />
 
-        <!-- APRS-IS status dot -->
-        <v-menu v-if="aprsIsState !== 'Disabled'" open-on-hover :close-delay="100">
+        <!-- Global live-status pill: hub + APRS-IS + modem in one place -->
+        <v-menu open-on-hover :close-delay="100">
           <template #activator="{ props }">
-            <v-btn v-bind="props" variant="text" size="small" aria-label="APRS-IS status">
-              <v-icon :color="aprsIsStateColor" size="12">mdi-circle</v-icon>
-              <span class="ml-1 text-caption desktop-nav">IS</span>
-            </v-btn>
+            <v-chip
+              v-bind="props"
+              :color="livePill.color"
+              size="small"
+              variant="tonal"
+              class="ml-1 mr-2"
+              aria-label="Connection status"
+            >
+              <v-icon start size="14">{{ livePill.icon }}</v-icon>
+              {{ livePill.label }}
+            </v-chip>
           </template>
-          <v-card min-width="280" density="compact">
-            <v-card-title class="text-subtitle-2 pb-1">APRS-IS</v-card-title>
+          <v-card min-width="300" density="compact">
+            <v-card-title class="text-subtitle-2 pb-1">Realtime status</v-card-title>
             <v-card-text class="pt-0">
-              <div class="d-flex align-center mb-1">
-                <v-icon :color="aprsIsStateColor" size="12" class="mr-2">mdi-circle</v-icon>
-                <span class="text-body-2">{{ aprsIsStateLabel }}</span>
+              <div class="d-flex align-center justify-space-between mb-1">
+                <span class="text-body-2">Packet feed</span>
+                <span class="text-caption" :class="`text-${livePill.color}`">
+                  {{ packetHub.state }}
+                </span>
               </div>
-              <div v-if="aprsIsServerName" class="text-caption text-medium-emphasis">
-                Server: {{ aprsIsServerName }}
+              <div class="d-flex align-center justify-space-between mb-1">
+                <span class="text-body-2">Last packet</span>
+                <span class="text-caption text-medium-emphasis">{{ lastPacketLabel }}</span>
               </div>
-              <div v-if="aprsIsFilter" class="text-caption text-medium-emphasis mt-1">
-                Filter: {{ aprsIsFilter }}
-              </div>
-              <div class="text-caption text-medium-emphasis mt-1">
-                Session packets: {{ aprsIsSessionPacketCount.toLocaleString() }}
+              <div class="d-flex align-center justify-space-between">
+                <span class="text-body-2">Sound modem</span>
+                <span class="text-caption" :class="`text-${modemStateColor}`">
+                  {{ modemStateLabels[modemState] ?? 'Unknown' }}
+                </span>
               </div>
 
-              <!-- Disconnection diagnostics -->
-              <template v-if="aprsIsState !== 'Connected'">
+              <template v-if="aprsIsState !== 'Disabled'">
                 <v-divider class="my-2" />
-                <div class="text-caption text-medium-emphasis">
-                  First disconnected: {{ formatTimestamp(aprsIsFirstDisconnectedAt) }}
+                <div class="d-flex align-center mb-1">
+                  <v-icon :color="aprsIsStateColor" size="12" class="mr-2">mdi-circle</v-icon>
+                  <span class="text-body-2">APRS-IS · {{ aprsIsStateLabel }}</span>
+                </div>
+                <div v-if="aprsIsServerName" class="text-caption text-medium-emphasis">
+                  Server: {{ aprsIsServerName }}
+                </div>
+                <div v-if="aprsIsFilter" class="text-caption text-medium-emphasis mt-1">
+                  Filter: {{ aprsIsFilter }}
                 </div>
                 <div class="text-caption text-medium-emphasis mt-1">
-                  Last attempt: {{ formatTimestamp(aprsIsLastConnectAttemptAt) }}
+                  Session packets: {{ aprsIsSessionPacketCount.toLocaleString() }}
                 </div>
-                <div class="text-caption text-medium-emphasis mt-1">
-                  Failed attempts: {{ aprsIsFailedAttempts.toLocaleString() }}
-                </div>
-                <div v-if="aprsIsLastError" class="text-caption text-error mt-1">
-                  Error: {{ aprsIsLastError }}
-                </div>
+
+                <!-- Disconnection diagnostics -->
+                <template v-if="aprsIsState !== 'Connected'">
+                  <v-divider class="my-2" />
+                  <div class="text-caption text-medium-emphasis">
+                    First disconnected: {{ formatTimestamp(aprsIsFirstDisconnectedAt) }}
+                  </div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Last attempt: {{ formatTimestamp(aprsIsLastConnectAttemptAt) }}
+                  </div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Failed attempts: {{ aprsIsFailedAttempts.toLocaleString() }}
+                  </div>
+                  <div v-if="aprsIsLastError" class="text-caption text-error mt-1">
+                    Error: {{ aprsIsLastError }}
+                  </div>
+                </template>
               </template>
             </v-card-text>
-            <v-card-actions class="pt-0">
+            <v-card-actions v-if="aprsIsState !== 'Disabled'" class="pt-0">
               <v-spacer />
               <v-btn
                 size="small"
@@ -402,7 +542,7 @@ async function syncServerClock() {
                 :loading="aprsIsReconnecting"
                 @click="reconnectAprsIsNow"
               >
-                Reconnect
+                Reconnect APRS-IS
               </v-btn>
             </v-card-actions>
           </v-card>
@@ -443,11 +583,11 @@ async function syncServerClock() {
       </router-view>
     </v-main>
 
-    <!-- Toast notifications for alerts -->
+    <!-- Single app-wide toast stack -->
     <div class="toast-stack">
       <v-slide-y-reverse-transition group>
         <v-alert
-          v-for="toast in alertsStore.toasts"
+          v-for="toast in toastStore.toasts"
           :key="toast.id"
           v-show="toast.show"
           :color="toast.color"
@@ -455,7 +595,7 @@ async function syncServerClock() {
           density="compact"
           closable
           class="toast-item"
-          @click:close="alertsStore.dismissToast(toast.id)"
+          @click:close="toastStore.dismiss(toast.id)"
         >
           {{ toast.message }}
         </v-alert>

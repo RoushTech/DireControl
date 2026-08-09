@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { usePacketHubStore } from '@/stores/packetHub'
 import { getStations, getStationTrack, getStationPackets, getSettings } from '@/api/stationsApi'
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
-import { getCoverageGridSquares, getPacketPositions, type CoverageGridSquareDto } from '@/api/analysisApi'
+import {
+  getCoverageGridSquares,
+  getPacketPositions,
+  type CoverageGridSquareDto,
+} from '@/api/analysisApi'
 import { getWeatherManifest, getWeatherStatus, type WeatherManifest } from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
 import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
@@ -26,8 +26,7 @@ import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
 import OwnStationPanel from '@/components/OwnStationPanel.vue'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRadiosStore } from '@/stores/radiosStore'
-import type { OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto } from '@/types/radio'
-import { useBeaconStreamStore } from '@/stores/beaconStream'
+import type { DigiConfirmationBroadcastDto } from '@/types/radio'
 
 const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
   // ── Light ──────────────────────────────────────────────────────────────────
@@ -66,8 +65,7 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
   esriTopo: {
     name: 'Esri World Topo',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-    attribution:
-      'Esri, HERE, Garmin, Intermap, &copy; OpenStreetMap contributors',
+    attribution: 'Esri, HERE, Garmin, Intermap, &copy; OpenStreetMap contributors',
     theme: 'light',
     group: 'light',
   },
@@ -102,8 +100,7 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
   satellite: {
     name: 'Esri World Imagery',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution:
-      '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
+    attribution: '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
     theme: 'dark',
     group: 'satellite',
   },
@@ -119,9 +116,9 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
 }
 
 const HOP_SEGMENT_COLORS = ['#4A90D9', '#7B68EE', '#DA70D6'] // blue, purple, orchid
-const HOP_COLOR_FALLBACK = '#FF8C00'  // dark orange for hop 3+
-const UNKNOWN_SEGMENT_COLOR = '#999999'  // grey for dashed unknown segments
-const FINAL_HOP_COLOR = '#2ECC71'       // green for the last hop to our station
+const HOP_COLOR_FALLBACK = '#FF8C00' // dark orange for hop 3+
+const UNKNOWN_SEGMENT_COLOR = '#999999' // grey for dashed unknown segments
+const FINAL_HOP_COLOR = '#2ECC71' // green for the last hop to our station
 
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
@@ -133,7 +130,6 @@ const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795]
 const DEFAULT_ZOOM = 5
 
 const selectionStore = useStationSelectionStore()
-const beaconStore = useBeaconStreamStore()
 const radiosStore = useRadiosStore()
 const theme = useTheme()
 const { mobile } = useDisplay()
@@ -155,6 +151,39 @@ const {
   lightningOpacity,
 } = useMapPrefs()
 
+// ─── Layer panel ──────────────────────────────────────────────────────────────
+const LAYER_PANEL_COLLAPSED_KEY = 'mapPrefs.layerPanelCollapsed'
+const layerPanelCollapsed = ref(localStorage.getItem(LAYER_PANEL_COLLAPSED_KEY) === 'true')
+watch(layerPanelCollapsed, (v) => localStorage.setItem(LAYER_PANEL_COLLAPSED_KEY, String(v)))
+
+const activeLayerCount = computed(
+  () =>
+    [
+      showTracks.value,
+      showGhostMarkers.value,
+      showStaleStations.value,
+      showOverlays.value,
+      showHeatmap.value,
+      showCoverage.value,
+      showRadar.value,
+      showWind.value,
+      showLightning.value,
+    ].filter(Boolean).length,
+)
+
+/** Back to defaults: tracks + estimated positions on, everything else off. */
+function resetLayers() {
+  if (!showTracks.value) toggleTracks()
+  if (!showGhostMarkers.value) toggleGhostMarkers()
+  if (showStaleStations.value) toggleStaleStations()
+  if (showOverlays.value) toggleOverlays()
+  if (showHeatmap.value) void toggleHeatmap()
+  if (showCoverage.value) void toggleCoverage()
+  if (showRadar.value) void toggleRadar()
+  if (showWind.value) void toggleWind()
+  if (showLightning.value) void toggleLightning()
+}
+
 const mapContainer = ref<HTMLDivElement>()
 const sidebarRef = ref<InstanceType<typeof StationListSidebar> | null>(null)
 const map = shallowRef<L.Map>()
@@ -166,7 +195,9 @@ function loadApiKeys(): Record<string, string> {
   try {
     const raw = localStorage.getItem(API_KEYS_STORAGE_KEY)
     if (raw) return JSON.parse(raw) as Record<string, string>
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return {}
 }
 const apiKeys = ref<Record<string, string>>(loadApiKeys())
@@ -185,9 +216,15 @@ const selectedProvider = ref(providerIsAvailable(_storedProvider) ? _storedProvi
 const providerFallbackSnackbar = ref(false)
 const providerFallbackMessage = ref('')
 
+// Station load failure — shown persistently so a dead backend doesn't just look
+// like an empty map. Cleared on the next successful load.
+const stationsLoadFailed = ref(false)
+
 // Panel/sidebar state
 const showSidebar = ref(localStorage.getItem(SIDEBAR_KEY) !== 'false')
-const panelWidth = ref(Math.max(PANEL_MIN_WIDTH, parseInt(localStorage.getItem(PANEL_WIDTH_KEY) ?? '380', 10)))
+const panelWidth = ref(
+  Math.max(PANEL_MIN_WIDTH, parseInt(localStorage.getItem(PANEL_WIDTH_KEY) ?? '380', 10)),
+)
 const isResizing = ref(false)
 let resizeStartX = 0
 let resizeStartWidth = 0
@@ -209,7 +246,12 @@ const trackLayers = new Map<string, L.LayerGroup>()
 // Packet path visualisation state
 // Each entry holds the map layer group, an optional fade timer, and whether
 // the path is "persistent" (user-selected) or "auto" (fades after 8 s).
-type PathEntry = { group: L.LayerGroup; fadeTimer: ReturnType<typeof setTimeout> | null; persistent: boolean; resolvedPath: ResolvedPathEntry[] }
+type PathEntry = {
+  group: L.LayerGroup
+  fadeTimer: ReturnType<typeof setTimeout> | null
+  persistent: boolean
+  resolvedPath: ResolvedPathEntry[]
+}
 const activePaths = new Map<string, PathEntry>()
 
 // Estimated position (ghost marker) state
@@ -298,7 +340,7 @@ const radarTimestamp = ref('')
 const radarFrameCount = ref(0)
 const radarCurrentIdx = ref(0)
 const radarLoading = ref(false)
-const radarFrameInterval = ref(500)  // ms between frames
+const radarFrameInterval = ref(500) // ms between frames
 const radarControlsVisible = ref(false)
 const windControlsVisible = ref(false)
 const lightningControlsVisible = ref(false)
@@ -309,7 +351,7 @@ let windLayer: L.TileLayer | null = null
 let lightningLayer: L.TileLayer | null = null
 let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
 
-let connection: HubConnection | null = null
+const packetHub = usePacketHubStore()
 
 function invalidateSizeAfterTransition() {
   setTimeout(() => map.value?.invalidateSize(), 320)
@@ -397,6 +439,12 @@ function showCachedStaleMarkers() {
   }
 }
 
+function onToggleShowStale(value: boolean) {
+  showStaleStations.value = value
+  if (value) showCachedStaleMarkers()
+  else hideStaleMarkers()
+}
+
 function addStaleMarker(station: StationDto) {
   if (!map.value || station.lastLat == null || station.lastLon == null) return
   staleStationCache.set(station.callsign, station)
@@ -406,8 +454,9 @@ function addStaleMarker(station: StationDto) {
     staleMarkers.delete(station.callsign)
   }
   const icon = buildStaleIcon(station)
-  const marker = L.marker([station.lastLat, station.lastLon], { icon, opacity: 0.5 })
-    .bindPopup(`<strong>${station.callsign}</strong><br><em>Stale</em><br>Last seen: ${formatTime(station.lastSeen)}`)
+  const marker = L.marker([station.lastLat, station.lastLon], { icon, opacity: 0.5 }).bindPopup(
+    `<strong>${station.callsign}</strong><br><em>Stale</em><br>Last seen: ${formatTime(station.lastSeen)}`,
+  )
   marker.on('click', (e: L.LeafletMouseEvent) => {
     L.DomEvent.stopPropagation(e)
     onMarkerClick(station.callsign)
@@ -460,7 +509,9 @@ async function loadAndDrawOverlays() {
         fillOpacity: 0.08,
         dashArray: '6 4',
       })
-        .bindTooltip(`Geofence: ${f.name}<br>${formatDistance(f.radiusMeters / 1000)}`, { sticky: true })
+        .bindTooltip(`Geofence: ${f.name}<br>${formatDistance(f.radiusMeters / 1000)}`, {
+          sticky: true,
+        })
         .addTo(group)
     }
     for (const r of rules) {
@@ -472,7 +523,10 @@ async function loadAndDrawOverlays() {
         fillOpacity: 0.08,
         dashArray: '6 4',
       })
-        .bindTooltip(`Proximity: ${r.name}${r.targetCallsign ? ` (${r.targetCallsign})` : ''}<br>${formatDistance(r.radiusMetres / 1000)}`, { sticky: true })
+        .bindTooltip(
+          `Proximity: ${r.name}${r.targetCallsign ? ` (${r.targetCallsign})` : ''}<br>${formatDistance(r.radiusMetres / 1000)}`,
+          { sticky: true },
+        )
         .addTo(group)
     }
   } catch (err) {
@@ -567,7 +621,12 @@ function clearRings() {
   }
 }
 
-function getRingStyle(providerKey: string): { color: string; weight: number; labelColor: string; labelBg: string } {
+function getRingStyle(providerKey: string): {
+  color: string
+  weight: number
+  labelColor: string
+  labelBg: string
+} {
   const dark = TILE_PROVIDERS[providerKey]?.theme === 'dark'
   return dark
     ? { color: '#FFFFFF', weight: 2.5, labelColor: '#ffffff', labelBg: 'rgba(20,20,30,0.75)' }
@@ -629,7 +688,7 @@ async function toggleHeatmap() {
   try {
     if (!heatmapPositions) {
       const positions = await getPacketPositions()
-      heatmapPositions = positions.map(p => [p.latitude, p.longitude] as [number, number])
+      heatmapPositions = positions.map((p) => [p.latitude, p.longitude] as [number, number])
     }
     heatmapLayer = L.heatLayer(heatmapPositions, {
       radius: 18,
@@ -738,7 +797,7 @@ function ensureWeatherPane() {
   if (!map.value) return
   if (!map.value.getPane('weatherPane')) {
     const pane = map.value.createPane('weatherPane')
-    pane.style.zIndex = '450'  // above overlayPane (400), below markerPane (600)
+    pane.style.zIndex = '450' // above overlayPane (400), below markerPane (600)
     pane.style.pointerEvents = 'none'
   }
 }
@@ -757,14 +816,22 @@ async function fetchRadarManifest(): Promise<WeatherManifest | null> {
 function buildRadarLayer(framePath: string, manifest: WeatherManifest): L.TileLayer {
   const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
   const zoomOffset = manifest.tileSize === 512 ? -1 : 0
-  return L.tileLayer(
-    `/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`,
-    { opacity: 0, tileSize: manifest.tileSize, zoomOffset, zIndex: 10, pane: 'weatherPane', maxNativeZoom: manifest.maxNativeZoom, maxZoom: 19 },
-  )
+  return L.tileLayer(`/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`, {
+    opacity: 0,
+    tileSize: manifest.tileSize,
+    zoomOffset,
+    zIndex: 10,
+    pane: 'weatherPane',
+    maxNativeZoom: manifest.maxNativeZoom,
+    maxZoom: 19,
+  })
 }
 
 function formatRadarTime(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' local'
+  return (
+    new Date(unixSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+    ' local'
+  )
 }
 
 function showRadarFrame(idx: number) {
@@ -803,7 +870,7 @@ async function playRadar() {
     }
     // Wait for all visible tiles on that frame to finish loading (up to 3 s)
     if (!radarFrameReady[next]) {
-      await new Promise<void>(resolve => {
+      await new Promise<void>((resolve) => {
         const done = () => {
           radarFrameReady[next] = true
           clearTimeout(loadTimeout)
@@ -812,7 +879,10 @@ async function playRadar() {
           setTimeout(resolve, 250)
         }
         layer.once('load', done)
-        const loadTimeout = setTimeout(() => { layer.off('load', done); resolve() }, 3000)
+        const loadTimeout = setTimeout(() => {
+          layer.off('load', done)
+          resolve()
+        }, 3000)
       })
     }
     if (!radarPlaying.value) return
@@ -844,21 +914,27 @@ function keepRadarControlsVisible() {
   if (!showRadar.value) return
   radarControlsVisible.value = true
   if (radarControlsHideTimer) clearTimeout(radarControlsHideTimer)
-  radarControlsHideTimer = setTimeout(() => { radarControlsVisible.value = false }, 5000)
+  radarControlsHideTimer = setTimeout(() => {
+    radarControlsVisible.value = false
+  }, 5000)
 }
 
 function keepWindControlsVisible() {
   if (!showWind.value) return
   windControlsVisible.value = true
   if (windControlsHideTimer) clearTimeout(windControlsHideTimer)
-  windControlsHideTimer = setTimeout(() => { windControlsVisible.value = false }, 5000)
+  windControlsHideTimer = setTimeout(() => {
+    windControlsVisible.value = false
+  }, 5000)
 }
 
 function keepLightningControlsVisible() {
   if (!showLightning.value) return
   lightningControlsVisible.value = true
   if (lightningControlsHideTimer) clearTimeout(lightningControlsHideTimer)
-  lightningControlsHideTimer = setTimeout(() => { lightningControlsVisible.value = false }, 5000)
+  lightningControlsHideTimer = setTimeout(() => {
+    lightningControlsVisible.value = false
+  }, 5000)
 }
 
 function clearRadarLayers() {
@@ -880,36 +956,39 @@ async function enableRadar() {
   ensureWeatherPane()
   try {
     radarManifest = await fetchRadarManifest()
-    if (!radarManifest) { showRadar.value = false; return }
-    const allFrames = [
-      ...radarManifest.radar.past,
-      ...(radarManifest.radar.nowcast ?? []),
-    ]
-    radarFrameMeta = allFrames.map(f => ({ time: f.time }))
+    if (!radarManifest) {
+      showRadar.value = false
+      return
+    }
+    const allFrames = [...radarManifest.radar.past, ...(radarManifest.radar.nowcast ?? [])]
+    radarFrameMeta = allFrames.map((f) => ({ time: f.time }))
     radarFrameReady = Array.from({ length: allFrames.length }, () => false)
-    radarFrameLayers = allFrames.map(f => buildRadarLayer(f.path, radarManifest!))
+    radarFrameLayers = allFrames.map((f) => buildRadarLayer(f.path, radarManifest!))
     radarFrameCount.value = radarFrameLayers.length
     // Start on the last historical frame so we see the most recent real data first
     showRadarFrame(radarManifest.radar.past.length - 1)
     keepRadarControlsVisible()
-    radarRefreshInterval = setInterval(async () => {
-      if (!showRadar.value) return
-      const wasPlaying = radarPlaying.value
-      pauseRadar()
-      clearRadarLayers()
-      radarManifest = await fetchRadarManifest()
-      if (!radarManifest) return
-      const refreshedFrames = [
-        ...radarManifest.radar.past,
-        ...(radarManifest.radar.nowcast ?? []),
-      ]
-      radarFrameMeta = refreshedFrames.map(f => ({ time: f.time }))
-      radarFrameReady = Array.from({ length: refreshedFrames.length }, () => false)
-      radarFrameLayers = refreshedFrames.map(f => buildRadarLayer(f.path, radarManifest!))
-      radarFrameCount.value = radarFrameLayers.length
-      showRadarFrame(radarManifest.radar.past.length - 1)
-      if (wasPlaying) playRadar()
-    }, 5 * 60 * 1000)
+    radarRefreshInterval = setInterval(
+      async () => {
+        if (!showRadar.value) return
+        const wasPlaying = radarPlaying.value
+        pauseRadar()
+        clearRadarLayers()
+        radarManifest = await fetchRadarManifest()
+        if (!radarManifest) return
+        const refreshedFrames = [
+          ...radarManifest.radar.past,
+          ...(radarManifest.radar.nowcast ?? []),
+        ]
+        radarFrameMeta = refreshedFrames.map((f) => ({ time: f.time }))
+        radarFrameReady = Array.from({ length: refreshedFrames.length }, () => false)
+        radarFrameLayers = refreshedFrames.map((f) => buildRadarLayer(f.path, radarManifest!))
+        radarFrameCount.value = radarFrameLayers.length
+        showRadarFrame(radarManifest.radar.past.length - 1)
+        if (wasPlaying) playRadar()
+      },
+      5 * 60 * 1000,
+    )
   } finally {
     radarLoading.value = false
   }
@@ -924,7 +1003,10 @@ function disableRadar() {
   }
   radarManifest = null
   radarControlsVisible.value = false
-  if (radarControlsHideTimer) { clearTimeout(radarControlsHideTimer); radarControlsHideTimer = null }
+  if (radarControlsHideTimer) {
+    clearTimeout(radarControlsHideTimer)
+    radarControlsHideTimer = null
+  }
 }
 
 async function toggleRadar() {
@@ -942,10 +1024,13 @@ function enableWind() {
   if (!map.value) return
   disableWind()
   ensureWeatherPane()
-  windLayer = L.tileLayer(
-    '/api/weather/wind/tile/{z}/{x}/{y}',
-    { opacity: windOpacity.value, zIndex: 11, pane: 'weatherPane', maxNativeZoom: 18, maxZoom: 19 },
-  ).addTo(map.value)
+  windLayer = L.tileLayer('/api/weather/wind/tile/{z}/{x}/{y}', {
+    opacity: windOpacity.value,
+    zIndex: 11,
+    pane: 'weatherPane',
+    maxNativeZoom: 18,
+    maxZoom: 19,
+  }).addTo(map.value)
   keepWindControlsVisible()
 }
 
@@ -955,7 +1040,10 @@ function disableWind() {
     windLayer = null
   }
   windControlsVisible.value = false
-  if (windControlsHideTimer) { clearTimeout(windControlsHideTimer); windControlsHideTimer = null }
+  if (windControlsHideTimer) {
+    clearTimeout(windControlsHideTimer)
+    windControlsHideTimer = null
+  }
 }
 
 async function toggleWind() {
@@ -971,10 +1059,13 @@ async function toggleWind() {
 // ── Lightning (Tomorrow.io) ──
 
 function buildLightningLayer(): L.TileLayer {
-  return L.tileLayer(
-    '/api/weather/lightning/tile/{z}/{x}/{y}',
-    { opacity: lightningOpacity.value, zIndex: 12, pane: 'weatherPane', maxNativeZoom: 6, maxZoom: 19 },
-  )
+  return L.tileLayer('/api/weather/lightning/tile/{z}/{x}/{y}', {
+    opacity: lightningOpacity.value,
+    zIndex: 12,
+    pane: 'weatherPane',
+    maxNativeZoom: 6,
+    maxZoom: 19,
+  })
 }
 
 function enableLightning() {
@@ -984,11 +1075,14 @@ function enableLightning() {
   lightningLayer = buildLightningLayer().addTo(map.value)
   keepLightningControlsVisible()
   // Refresh every 5 minutes so Leaflet fetches fresh tiles from the backend cache
-  lightningRefreshInterval = setInterval(() => {
-    if (!showLightning.value || !map.value) return
-    lightningLayer?.remove()
-    lightningLayer = buildLightningLayer().addTo(map.value!)
-  }, 5 * 60 * 1000)
+  lightningRefreshInterval = setInterval(
+    () => {
+      if (!showLightning.value || !map.value) return
+      lightningLayer?.remove()
+      lightningLayer = buildLightningLayer().addTo(map.value!)
+    },
+    5 * 60 * 1000,
+  )
 }
 
 function disableLightning() {
@@ -1001,7 +1095,10 @@ function disableLightning() {
     lightningRefreshInterval = null
   }
   lightningControlsVisible.value = false
-  if (lightningControlsHideTimer) { clearTimeout(lightningControlsHideTimer); lightningControlsHideTimer = null }
+  if (lightningControlsHideTimer) {
+    clearTimeout(lightningControlsHideTimer)
+    lightningControlsHideTimer = null
+  }
 }
 
 async function toggleLightning() {
@@ -1023,7 +1120,6 @@ function toggleSidebar() {
 }
 
 function onSidebarSelectStation(callsign: string) {
-  console.log('[Select] onSidebarSelectStation for', callsign, '— stack:', new Error().stack)
   selectionStore.selectStation(callsign)
   const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
   if (s?.lastLat != null && s?.lastLon != null) {
@@ -1034,7 +1130,6 @@ function onSidebarSelectStation(callsign: string) {
 }
 
 function onDetailClose() {
-  console.log('[Select] onDetailClose called — stack:', new Error().stack)
   const cs = selectionStore.selectedCallsign
   selectionStore.deselect()
   if (cs) removePath(cs)
@@ -1081,17 +1176,20 @@ async function fetchAndDrawTrack(callsign: string) {
     for (let i = 0; i < totalPoints - 1; i++) {
       const from = points[i]!
       const to = points[i + 1]!
-      const opacity = 0.2 + (0.8 * (i / (totalPoints - 1)))
+      const opacity = 0.2 + 0.8 * (i / (totalPoints - 1))
       const weight = 2 + Math.round(2 * (i / (totalPoints - 1)))
       const segment = L.polyline(
-        [[from.latitude, from.longitude], [to.latitude, to.longitude]],
+        [
+          [from.latitude, from.longitude],
+          [to.latitude, to.longitude],
+        ],
         { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
       )
       group.addLayer(segment)
     }
     for (let i = 0; i < totalPoints; i++) {
       const pt = points[i]!
-      const opacity = 0.3 + (0.7 * (i / Math.max(totalPoints - 1, 1)))
+      const opacity = 0.3 + 0.7 * (i / Math.max(totalPoints - 1, 1))
       const circle = L.circleMarker([pt.latitude, pt.longitude], {
         radius: 4,
         color: '#1976D2',
@@ -1189,7 +1287,10 @@ function updateGhostLayers() {
 
     // Dashed connector: real position → estimated position
     L.polyline(
-      [[station.lastLat, station.lastLon], [est.lat, est.lon]],
+      [
+        [station.lastLat, station.lastLon],
+        [est.lat, est.lon],
+      ],
       { color: '#9E9E9E', weight: 2, dashArray: '6 5', opacity: 0.7 },
     ).addTo(group)
 
@@ -1239,13 +1340,10 @@ function toggleGhostMarkers() {
 // --- Packet Path Visualisation ---
 
 function removePath(callsign: string) {
-  console.log('[Path] removePath called for', callsign, '— stack:', new Error().stack)
   const entry = activePaths.get(callsign)
   if (!entry) {
-    console.warn('[Path] No activePaths entry to remove for', callsign, '— map has', activePaths.size, 'entries:', [...activePaths.keys()])
     return
   }
-  console.log('[Path] Removing path group for', callsign, '— persistent:', entry.persistent)
   if (entry.fadeTimer) clearTimeout(entry.fadeTimer)
   entry.group.remove()
   activePaths.delete(callsign)
@@ -1275,7 +1373,7 @@ function schedulePathFade(callsign: string) {
   entry.fadeTimer = setTimeout(() => {
     const e = activePaths.get(callsign)
     if (!e) return
-    e.group.eachLayer(layer => {
+    e.group.eachLayer((layer) => {
       if (layer instanceof L.Polyline) {
         const el = (layer as unknown as { _path?: SVGPathElement })._path
         if (el) {
@@ -1302,27 +1400,29 @@ function isGenericAlias(callsign: string): boolean {
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLon = (lon2 - lon1) * Math.PI / 180
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const dLon = (lon2 - lon1) * Math.PI / 180
-  const la1 = lat1 * Math.PI / 180
-  const la2 = lat2 * Math.PI / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const la1 = (lat1 * Math.PI) / 180
+  const la2 = (lat2 * Math.PI) / 180
   const y = Math.sin(dLon) * Math.cos(la2)
   const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon)
-  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360
 }
 
 function addPathArrow(
   group: L.LayerGroup,
-  fromLat: number, fromLon: number,
-  toLat: number, toLon: number,
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number,
   color: string,
 ) {
   const midLat = (fromLat + toLat) / 2
@@ -1334,7 +1434,9 @@ function addPathArrow(
     iconSize: [12, 12],
     iconAnchor: [6, 6],
   })
-  group.addLayer(L.marker([midLat, midLon], { icon: arrowIcon, interactive: false, zIndexOffset: -50 }))
+  group.addLayer(
+    L.marker([midLat, midLon], { icon: arrowIcon, interactive: false, zIndexOffset: -50 }),
+  )
 }
 
 type PathSegment = {
@@ -1359,7 +1461,7 @@ function buildPathSegments(path: ResolvedPathEntry[]): PathSegment[] {
 
     if (lastKnownIdx >= 0) {
       const from = path[lastKnownIdx]!
-      const unknownsBetween = path.slice(lastKnownIdx + 1, i).filter(e => !(e.known ?? false))
+      const unknownsBetween = path.slice(lastKnownIdx + 1, i).filter((e) => !(e.known ?? false))
       segments.push({
         fromLat: from.latitude!,
         fromLon: from.longitude!,
@@ -1380,9 +1482,9 @@ function buildPathSegments(path: ResolvedPathEntry[]): PathSegment[] {
 
 function unknownHopLabel(unknowns: ResolvedPathEntry[]): string {
   if (unknowns.length === 0) return ''
-  const allGeneric = unknowns.every(e => isGenericAlias(e.callsign))
+  const allGeneric = unknowns.every((e) => isGenericAlias(e.callsign))
   if (allGeneric) {
-    const aliases = [...new Set(unknowns.map(e => e.callsign))].join(', ')
+    const aliases = [...new Set(unknowns.map((e) => e.callsign))].join(', ')
     return `Via ${aliases} (path not traced)`
   }
   return unknowns.length === 1 ? '1 unknown hop' : `${unknowns.length} unknown hops`
@@ -1399,7 +1501,7 @@ function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) 
   const segments = buildPathSegments(resolvedPath)
   if (segments.length === 0) return false
 
-  const totalHops = resolvedPath.length - 1  // excludes source entry (hopIndex 0)
+  const totalHops = resolvedPath.length - 1 // excludes source entry (hopIndex 0)
 
   for (const seg of segments) {
     const isUnknown = seg.unknownsBetween.length > 0
@@ -1408,7 +1510,10 @@ function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) 
     const distStr = formatDistance(distKm)
 
     const line = L.polyline(
-      [[seg.fromLat, seg.fromLon], [seg.toLat, seg.toLon]],
+      [
+        [seg.fromLat, seg.fromLon],
+        [seg.toLat, seg.toLon],
+      ],
       {
         color,
         weight: 3,
@@ -1445,7 +1550,11 @@ function drawPathLayers(group: L.LayerGroup, resolvedPath: ResolvedPathEntry[]) 
         interactive: false,
         zIndexOffset: -100,
       })
-      midMarker.bindTooltip(label, { permanent: true, className: 'path-unknown-label', direction: 'top' })
+      midMarker.bindTooltip(label, {
+        permanent: true,
+        className: 'path-unknown-label',
+        direction: 'top',
+      })
       group.addLayer(midMarker)
     }
 
@@ -1482,7 +1591,6 @@ function drawAutoPath(callsign: string, resolvedPath: ResolvedPathEntry[]) {
  * The path stays until the station is deselected.
  */
 async function showPacketPath(callsign: string) {
-  console.log('[Path] showPacketPath called for', callsign, '— stack:', new Error().stack)
   if (!map.value) return
   // Clear any existing path (auto or persistent) for this callsign
   removePath(callsign)
@@ -1490,7 +1598,6 @@ async function showPacketPath(callsign: string) {
     const { items } = await getStationPackets(callsign, 1, 1)
     // Guard: station may have been deselected while the fetch was in flight
     if (selectionStore.selectedCallsign !== callsign) {
-      console.log('[Path] showPacketPath guard fired — callsign', callsign, 'no longer selected, aborting draw')
       return
     }
     if (items.length === 0) return
@@ -1501,9 +1608,12 @@ async function showPacketPath(callsign: string) {
     if (!drawPathLayers(group, packet.resolvedPath)) return
 
     group.addTo(map.value)
-    console.log('[Path] Drew path for', callsign, '— map container:', map.value.getContainer().id, '— activePaths size before set:', activePaths.size)
-    activePaths.set(callsign, { group, fadeTimer: null, persistent: true, resolvedPath: packet.resolvedPath })
-    console.log('[Path] activePaths size after set:', activePaths.size)
+    activePaths.set(callsign, {
+      group,
+      fadeTimer: null,
+      persistent: true,
+      resolvedPath: packet.resolvedPath,
+    })
   } catch (err) {
     console.error(`Failed to show packet path for ${callsign}:`, err)
   }
@@ -1511,12 +1621,10 @@ async function showPacketPath(callsign: string) {
 
 function onMarkerClick(callsign: string) {
   if (selectionStore.selectedCallsign === callsign) {
-    console.log('[Select] onMarkerClick deselect for', callsign, '— stack:', new Error().stack)
     selectionStore.deselect()
     removePath(callsign)
     invalidateSizeAfterTransition()
   } else {
-    console.log('[Select] onMarkerClick select for', callsign, '— stack:', new Error().stack)
     selectionStore.selectStation(callsign)
     // Do NOT call removePath(prev) or showPacketPath here — the selectedCallsign
     // watcher is the single caller for both, preventing duplicate draws.
@@ -1528,11 +1636,16 @@ function onMarkerClick(callsign: string) {
 
 function packetTypeFlashClass(parsedType: string): string {
   switch (parsedType) {
-    case 'Position':  return 'beacon-flash-position'
-    case 'Message':   return 'beacon-flash-message'
-    case 'Weather':   return 'beacon-flash-weather'
-    case 'Telemetry': return 'beacon-flash-telemetry'
-    default:          return 'beacon-flash-unknown'
+    case 'Position':
+      return 'beacon-flash-position'
+    case 'Message':
+      return 'beacon-flash-message'
+    case 'Weather':
+      return 'beacon-flash-weather'
+    case 'Telemetry':
+      return 'beacon-flash-telemetry'
+    default:
+      return 'beacon-flash-unknown'
   }
 }
 
@@ -1565,7 +1678,10 @@ function drawConfirmationLine(dto: DigiConfirmationBroadcastDto) {
   if (!map.value) return
 
   const line = L.polyline(
-    [[homePos.lat, homePos.lon], [dto.lat, dto.lon]],
+    [
+      [homePos.lat, homePos.lon],
+      [dto.lat, dto.lon],
+    ],
     { color: '#FFD700', weight: 2, opacity: 1 },
   ).addTo(map.value)
 
@@ -1693,7 +1809,7 @@ async function loadStations() {
         }
       }
     }
-    const activeCallsigns = new Set(stations.map(s => s.callsign))
+    const activeCallsigns = new Set(stations.map((s) => s.callsign))
     for (const [callsign, marker] of markers) {
       if (!activeCallsigns.has(callsign)) {
         marker.remove()
@@ -1710,22 +1826,18 @@ async function loadStations() {
     updateStationsList()
     await loadTracksForMobileStations()
     updateGhostLayers()
+    stationsLoadFailed.value = false
   } catch (err) {
     console.error('Failed to load stations:', err)
+    stationsLoadFailed.value = true
   }
 }
 
-async function connectSignalR() {
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
-
-  connection.on('packetReceived', (packet: PacketBroadcastDto) => {
-    // Forward to beacon stream store
-    beaconStore.addPacket(packet)
-
+// Map-specific reactions to hub events. Store mutations (beacon stream buffer,
+// radios beacon state) are registered app-level in their own stores — these
+// handlers only drive the map itself, and are unregistered on unmount.
+function onHubPacketReceived(packet: PacketBroadcastDto) {
+  {
     // Increment session packet count
     sessionPacketCounts.value[packet.callsign] =
       (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
@@ -1780,9 +1892,11 @@ async function connectSignalR() {
         }
       }
     }
-  })
+  }
+}
 
-  connection.on('stationsStale', (callsigns: string[]) => {
+function onHubStationsStale(callsigns: string[]) {
+  {
     for (const callsign of callsigns) {
       const marker = markers.get(callsign)
       if (marker) {
@@ -1802,33 +1916,42 @@ async function connectSignalR() {
     if (showStaleStations.value) {
       loadStaleStations()
     }
-  })
-
-  connection.on('ownBeaconReceived', (dto: OwnBeaconBroadcastDto) => {
-    radiosStore.onOwnBeaconReceived(dto)
-    triggerHomeMarkerFlash()
-  })
-
-  connection.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => {
-    radiosStore.onDigiConfirmation(dto)
-    drawConfirmationLine(dto)
-  })
-
-  try {
-    await connection.start()
-    console.log('SignalR connected')
-  } catch (err) {
-    console.error('SignalR connection failed:', err)
   }
 }
 
+function onHubOwnBeaconReceived() {
+  triggerHomeMarkerFlash()
+}
+
+function onHubDigiConfirmation(dto: DigiConfirmationBroadcastDto) {
+  drawConfirmationLine(dto)
+}
+
+function registerHubHandlers() {
+  packetHub.on('packetReceived', onHubPacketReceived)
+  packetHub.on('stationsStale', onHubStationsStale)
+  packetHub.on('ownBeaconReceived', onHubOwnBeaconReceived)
+  packetHub.on('digiConfirmation', onHubDigiConfirmation)
+}
+
+function unregisterHubHandlers() {
+  packetHub.off('packetReceived', onHubPacketReceived)
+  packetHub.off('stationsStale', onHubStationsStale)
+  packetHub.off('ownBeaconReceived', onHubOwnBeaconReceived)
+  packetHub.off('digiConfirmation', onHubDigiConfirmation)
+}
+
 // Watch: ring distances — persist to localStorage and redraw if rings are showing
-watch(ringDistances, (newDists) => {
-  localStorage.setItem(RINGS_STORAGE_KEY, JSON.stringify(newDists))
-  if (showRings.value) {
-    drawRings()
-  }
-}, { deep: true })
+watch(
+  ringDistances,
+  (newDists) => {
+    localStorage.setItem(RINGS_STORAGE_KEY, JSON.stringify(newDists))
+    if (showRings.value) {
+      drawRings()
+    }
+  },
+  { deep: true },
+)
 
 // Watch: show rings toggle from the panel
 watch(showRings, (enabled) => {
@@ -1847,11 +1970,14 @@ watch(distanceUnit, () => {
 })
 
 // Watch: auto-switch tile to match light/dark theme when on cartoLight or cartoDark
-watch(() => theme.global.current.value.dark, (dark) => {
-  if (selectedProvider.value === 'cartoLight' || selectedProvider.value === 'cartoDark') {
-    setTileProvider(dark ? 'cartoDark' : 'cartoLight')
-  }
-})
+watch(
+  () => theme.global.current.value.dark,
+  (dark) => {
+    if (selectedProvider.value === 'cartoLight' || selectedProvider.value === 'cartoDark') {
+      setTileProvider(dark ? 'cartoDark' : 'cartoLight')
+    }
+  },
+)
 
 // Watch: weather overlay opacity — apply immediately to live layers
 watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
@@ -1859,21 +1985,23 @@ watch(windOpacity, (v) => windLayer?.setOpacity(v))
 watch(lightningOpacity, (v) => lightningLayer?.setOpacity(v))
 
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
-watch(() => selectionStore.selectedCallsign, (callsign, prev) => {
-  console.log('[Select] selectedCallsign watch fired — callsign:', callsign, '| prev:', prev)
-  if (callsign && callsign !== prev) {
-    if (prev) removePath(prev)
-    showPacketPath(callsign)
-    const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
-    if (s?.lastLat != null && s?.lastLon != null) {
-      map.value?.flyTo([s.lastLat, s.lastLon], Math.max(map.value?.getZoom() ?? 10, 12))
+watch(
+  () => selectionStore.selectedCallsign,
+  (callsign, prev) => {
+    if (callsign && callsign !== prev) {
+      if (prev) removePath(prev)
+      showPacketPath(callsign)
+      const s = stationCache.get(callsign) ?? staleStationCache.get(callsign)
+      if (s?.lastLat != null && s?.lastLon != null) {
+        map.value?.flyTo([s.lastLat, s.lastLon], Math.max(map.value?.getZoom() ?? 10, 12))
+      }
+      invalidateSizeAfterTransition()
+    } else if (!callsign) {
+      if (prev) removePath(prev)
+      invalidateSizeAfterTransition()
     }
-    invalidateSizeAfterTransition()
-  } else if (!callsign) {
-    if (prev) removePath(prev)
-    invalidateSizeAfterTransition()
-  }
-})
+  },
+)
 
 // Shortcut handlers dispatched by App.vue
 function onShortcutEsc() {
@@ -1925,16 +2053,13 @@ onMounted(async () => {
   })
   setTileProvider(selectedProvider.value)
   map.value.on('click', () => {
-    console.log('[Select] map background click — selectedCallsign:', selectionStore.selectedCallsign, '— stack:', new Error().stack)
     if (selectionStore.selectedCallsign) onDetailClose()
   })
-  console.log('[Map] click listeners after attach:', (map.value as unknown as { _events?: { click?: unknown[] } })._events?.click?.length ?? 'unknown')
   await loadStations()
   await loadStaleStations()
-  await connectSignalR()
+  registerHubHandlers()
 
-  // Initialise radios — load list and last beacons, start the store's own SignalR connection.
-  radiosStore.startSignalR()
+  // Initialise radios — beacon state stays live via the shared packet hub.
   await radiosStore.fetchRadios()
   await radiosStore.fetchAllLastBeacons()
 
@@ -1964,10 +2089,15 @@ onMounted(async () => {
     try {
       if (!heatmapPositions) {
         const positions = await getPacketPositions()
-        heatmapPositions = positions.map(p => [p.latitude, p.longitude] as [number, number])
+        heatmapPositions = positions.map((p) => [p.latitude, p.longitude] as [number, number])
       }
       if (map.value) {
-        heatmapLayer = L.heatLayer(heatmapPositions, { radius: 18, blur: 15, maxZoom: 17, minOpacity: 0.3 }).addTo(map.value)
+        heatmapLayer = L.heatLayer(heatmapPositions, {
+          radius: 18,
+          blur: 15,
+          maxZoom: 17,
+          minOpacity: 0.3,
+        }).addTo(map.value)
       }
     } catch {
       showHeatmap.value = false
@@ -2007,11 +2137,8 @@ onMounted(async () => {
   window.addEventListener('shortcut:focus-search', onShortcutFocusSearch)
 })
 
-onUnmounted(async () => {
-  if (connection) {
-    await connection.stop()
-    connection = null
-  }
+onUnmounted(() => {
+  unregisterHubHandlers()
   if (ghostUpdateInterval) {
     clearInterval(ghostUpdateInterval)
     ghostUpdateInterval = null
@@ -2079,7 +2206,7 @@ defineExpose({ TILE_PROVIDERS })
         :stale-stations="staleStationsList"
         :show-stale="showStaleStations"
         @select-station="onSidebarSelectStation"
-        @update:show-stale="showStaleStations = $event; $event ? showCachedStaleMarkers() : hideStaleMarkers()"
+        @update:show-stale="onToggleShowStale"
       />
     </div>
 
@@ -2120,205 +2247,279 @@ defineExpose({ TILE_PROVIDERS })
         @click="toggleSidebar"
       />
 
-      <!-- Track toggle -->
-      <v-btn
-        v-if="!mobile"
-        class="track-toggle-btn"
-        :color="showTracks ? 'primary' : 'grey-darken-1'"
-        size="small"
-        variant="elevated"
-        @click="toggleTracks"
-      >
-        <v-icon start>mdi-map-marker-path</v-icon>
-        {{ showTracks ? 'Hide Tracks' : 'Show Tracks' }}
-      </v-btn>
+      <!-- Layer panel — one grouped control replacing the old floating buttons -->
+      <div v-if="!mobile" class="layer-panel">
+        <button class="layer-panel-head" @click="layerPanelCollapsed = !layerPanelCollapsed">
+          <v-icon size="18">mdi-layers</v-icon>
+          <span class="font-weight-bold text-body-2">Layers</span>
+          <span class="layer-count">{{ activeLayerCount }}</span>
+          <v-icon size="14" class="ml-auto">
+            {{ layerPanelCollapsed ? 'mdi-chevron-down' : 'mdi-chevron-up' }}
+          </v-icon>
+        </button>
 
-      <!-- Ghost marker toggle -->
-      <v-btn
-        v-if="!mobile"
-        class="ghost-toggle-btn"
-        :color="showGhostMarkers ? 'indigo' : 'grey-darken-1'"
-        size="small"
-        variant="elevated"
-        @click="toggleGhostMarkers"
-      >
-        <v-icon start>mdi-map-marker-question</v-icon>
-        {{ showGhostMarkers ? 'Hide Est.' : 'Show Est.' }}
-      </v-btn>
+        <div v-show="!layerPanelCollapsed" class="layer-panel-body">
+          <div class="layer-group">
+            <div class="layer-group-label">Stations</div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showTracks ? 'primary' : 'grey'"
+                >mdi-map-marker-path</v-icon
+              >
+              <span class="layer-row-label">Movement tracks</span>
+              <v-switch
+                :model-value="showTracks"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Movement tracks"
+                @update:model-value="toggleTracks"
+              />
+            </div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showGhostMarkers ? 'primary' : 'grey'"
+                >mdi-map-marker-question</v-icon
+              >
+              <span class="layer-row-label">Estimated positions</span>
+              <v-switch
+                :model-value="showGhostMarkers"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Estimated positions"
+                @update:model-value="toggleGhostMarkers"
+              />
+            </div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showStaleStations ? 'primary' : 'grey'"
+                >mdi-clock-alert-outline</v-icon
+              >
+              <span class="layer-row-label">Stale stations</span>
+              <v-switch
+                :model-value="showStaleStations"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Stale stations"
+                @update:model-value="toggleStaleStations"
+              />
+            </div>
+          </div>
 
-      <!-- Stale stations toggle -->
-      <v-btn
-        v-if="!mobile"
-        class="stale-toggle-btn"
-        :color="showStaleStations ? 'brown-lighten-1' : 'grey-darken-1'"
-        size="small"
-        variant="elevated"
-        @click="toggleStaleStations"
-      >
-        <v-icon start>mdi-clock-alert-outline</v-icon>
-        {{ showStaleStations ? 'Hide Stale' : 'Show Stale' }}
-      </v-btn>
+          <div class="layer-group">
+            <div class="layer-group-label">Overlays</div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showOverlays ? 'primary' : 'grey'"
+                >mdi-shape-polygon-plus</v-icon
+              >
+              <span class="layer-row-label">Alert zones</span>
+              <v-switch
+                :model-value="showOverlays"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Alert zones"
+                @update:model-value="toggleOverlays"
+              />
+            </div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showHeatmap ? 'primary' : 'grey'">mdi-fire</v-icon>
+              <span class="layer-row-label">Packet heatmap</span>
+              <v-progress-circular v-if="heatmapLoading" indeterminate size="14" width="2" />
+              <v-switch
+                :model-value="showHeatmap"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Packet heatmap"
+                @update:model-value="toggleHeatmap"
+              />
+            </div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showCoverage ? 'primary' : 'grey'">mdi-grid</v-icon>
+              <span class="layer-row-label">Coverage grid</span>
+              <v-progress-circular v-if="coverageLoading" indeterminate size="14" width="2" />
+              <v-switch
+                :model-value="showCoverage"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Coverage grid"
+                @update:model-value="toggleCoverage"
+              />
+            </div>
+          </div>
 
-      <!-- Overlays toggle (geofences + proximity rules) -->
-      <v-btn
-        v-if="!mobile"
-        class="overlays-toggle-btn"
-        :color="showOverlays ? 'teal-darken-1' : 'grey-darken-1'"
-        size="small"
-        variant="elevated"
-        @click="toggleOverlays"
-      >
-        <v-icon start>mdi-layers</v-icon>
-        {{ showOverlays ? 'Hide Zones' : 'Show Zones' }}
-      </v-btn>
+          <div class="layer-group">
+            <div class="layer-group-label">Weather</div>
+            <div class="layer-row">
+              <v-icon size="16" :color="showRadar ? 'primary' : 'grey'">mdi-weather-rainy</v-icon>
+              <span class="layer-row-label">Radar</span>
+              <v-progress-circular v-if="radarLoading" indeterminate size="14" width="2" />
+              <v-switch
+                :model-value="showRadar"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Radar"
+                @update:model-value="toggleRadar"
+              />
+            </div>
+            <div v-if="showRadar && radarFrameCount > 0" class="layer-sub">
+              <div class="d-flex align-center ga-1">
+                <v-btn
+                  icon="mdi-skip-previous"
+                  size="x-small"
+                  variant="text"
+                  @click="stepRadarFrame(-1)"
+                />
+                <v-btn
+                  :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
+                  size="x-small"
+                  variant="text"
+                  @click="radarPlaying ? pauseRadar() : playRadar()"
+                />
+                <v-btn
+                  icon="mdi-skip-next"
+                  size="x-small"
+                  variant="text"
+                  @click="stepRadarFrame(1)"
+                />
+                <span class="radar-timestamp">{{ radarTimestamp }}</span>
+                <span class="radar-frame-dots"
+                  >{{ radarCurrentIdx + 1 }}/{{ radarFrameCount }}</span
+                >
+                <v-select
+                  v-model="radarFrameInterval"
+                  :items="[
+                    { title: '¼×', value: 2000 },
+                    { title: '½×', value: 1000 },
+                    { title: '1×', value: 500 },
+                    { title: '2×', value: 250 },
+                    { title: '4×', value: 125 },
+                  ]"
+                  item-title="title"
+                  item-value="value"
+                  density="compact"
+                  hide-details
+                  class="radar-speed-select"
+                />
+              </div>
+              <div class="d-flex align-center ga-2">
+                <span class="layer-opacity-label">Opacity</span>
+                <v-slider
+                  v-model="radarOpacity"
+                  class="layer-opacity-slider"
+                  min="0.1"
+                  max="1"
+                  step="0.05"
+                  density="compact"
+                  hide-details
+                />
+                <span class="layer-opacity-pct">{{ Math.round(radarOpacity * 100) }}%</span>
+              </div>
+            </div>
 
-      <!-- Heatmap toggle -->
-      <v-btn
-        v-if="!mobile"
-        class="heatmap-toggle-btn"
-        :color="showHeatmap ? 'deep-orange-darken-1' : 'grey-darken-1'"
-        :loading="heatmapLoading"
-        size="small"
-        variant="elevated"
-        @click="toggleHeatmap"
-      >
-        <v-icon start>mdi-fire</v-icon>
-        {{ showHeatmap ? 'Hide Heat' : 'Heatmap' }}
-      </v-btn>
+            <v-tooltip
+              :disabled="weatherStatus?.wind.available ?? false"
+              :text="
+                weatherStatus?.wind.reason ??
+                'OpenWeatherMap API key required — configure in Settings.'
+              "
+              location="right"
+            >
+              <template #activator="{ props: tp }">
+                <div v-bind="tp" class="layer-row">
+                  <v-icon size="16" :color="showWind ? 'primary' : 'grey'"
+                    >mdi-weather-windy</v-icon
+                  >
+                  <span class="layer-row-label">Wind</span>
+                  <v-switch
+                    :model-value="showWind"
+                    :disabled="!(weatherStatus?.wind.available ?? false)"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                    class="layer-switch"
+                    aria-label="Wind"
+                    @update:model-value="toggleWind"
+                  />
+                </div>
+              </template>
+            </v-tooltip>
+            <div v-if="showWind" class="layer-sub">
+              <div class="d-flex align-center ga-2">
+                <span class="layer-opacity-label">Opacity</span>
+                <v-slider
+                  v-model="windOpacity"
+                  class="layer-opacity-slider"
+                  min="0.1"
+                  max="1"
+                  step="0.05"
+                  density="compact"
+                  hide-details
+                />
+                <span class="layer-opacity-pct">{{ Math.round(windOpacity * 100) }}%</span>
+              </div>
+            </div>
 
-      <!-- Coverage map toggle -->
-      <v-btn
-        v-if="!mobile"
-        class="coverage-toggle-btn"
-        :color="showCoverage ? 'green-darken-2' : 'grey-darken-1'"
-        :loading="coverageLoading"
-        size="small"
-        variant="elevated"
-        @click="toggleCoverage"
-      >
-        <v-icon start>mdi-grid</v-icon>
-        {{ showCoverage ? 'Hide Grid' : 'Coverage' }}
-      </v-btn>
+            <v-tooltip
+              :disabled="weatherStatus?.lightning.available ?? false"
+              :text="
+                weatherStatus?.lightning.reason ??
+                'Tomorrow.io API key required — configure in Settings.'
+              "
+              location="right"
+            >
+              <template #activator="{ props: tp }">
+                <div v-bind="tp" class="layer-row">
+                  <v-icon size="16" :color="showLightning ? 'primary' : 'grey'"
+                    >mdi-weather-lightning</v-icon
+                  >
+                  <span class="layer-row-label">Lightning</span>
+                  <v-switch
+                    :model-value="showLightning"
+                    :disabled="!(weatherStatus?.lightning.available ?? false)"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                    class="layer-switch"
+                    aria-label="Lightning"
+                    @update:model-value="toggleLightning"
+                  />
+                </div>
+              </template>
+            </v-tooltip>
+            <div v-if="showLightning" class="layer-sub">
+              <div class="d-flex align-center ga-2">
+                <span class="layer-opacity-label">Opacity</span>
+                <v-slider
+                  v-model="lightningOpacity"
+                  class="layer-opacity-slider"
+                  min="0.1"
+                  max="1"
+                  step="0.05"
+                  density="compact"
+                  hide-details
+                />
+                <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
+              </div>
+            </div>
+          </div>
 
-      <!-- Radar toggle -->
-      <v-btn
-        v-if="!mobile"
-        class="radar-toggle-btn"
-        :color="showRadar ? 'blue-darken-2' : 'grey-darken-1'"
-        :loading="radarLoading"
-        size="small"
-        variant="elevated"
-        @click="toggleRadar"
-      >
-        <v-icon start>mdi-weather-rainy</v-icon>
-        {{ showRadar ? 'Hide Radar' : 'Radar' }}
-      </v-btn>
-
-      <!-- Wind toggle -->
-      <v-tooltip
-        v-if="!mobile"
-        :disabled="weatherStatus?.wind.available ?? false"
-        :text="weatherStatus?.wind.reason ?? 'OpenWeatherMap API key required — configure in Settings.'"
-        location="bottom"
-      >
-        <template #activator="{ props: tp }">
-          <v-btn
-            v-bind="tp"
-            class="wind-toggle-btn"
-            :color="showWind ? 'cyan-darken-1' : 'grey-darken-1'"
-            :disabled="!(weatherStatus?.wind.available ?? false)"
-            size="small"
-            variant="elevated"
-            @click="toggleWind"
-          >
-            <v-icon start>mdi-weather-windy</v-icon>
-            {{ showWind ? 'Hide Wind' : 'Wind' }}
-          </v-btn>
-        </template>
-      </v-tooltip>
-
-      <!-- Lightning toggle -->
-      <v-tooltip
-        v-if="!mobile"
-        :disabled="weatherStatus?.lightning.available ?? false"
-        :text="weatherStatus?.lightning.reason ?? 'Tomorrow.io API key required — configure in Settings.'"
-        location="bottom"
-      >
-        <template #activator="{ props: tp }">
-          <v-btn
-            v-bind="tp"
-            class="lightning-toggle-btn"
-            :color="showLightning ? 'yellow-darken-2' : 'grey-darken-1'"
-            :disabled="!(weatherStatus?.lightning.available ?? false)"
-            size="small"
-            variant="elevated"
-            @click="toggleLightning"
-          >
-            <v-icon start>mdi-weather-lightning</v-icon>
-            {{ showLightning ? 'Hide Lightning' : 'Lightning' }}
-          </v-btn>
-        </template>
-      </v-tooltip>
-
-      <!-- Radar animation bar (shown when radar is active and controls are visible, desktop only) -->
-      <div
-        v-if="showRadar && !mobile && radarFrameCount > 0 && radarControlsVisible"
-        class="radar-animation-bar"
-        @mouseenter="keepRadarControlsVisible"
-      >
-        <v-btn icon="mdi-skip-previous" size="x-small" variant="text" @click="stepRadarFrame(-1)" />
-        <v-btn
-          :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
-          size="x-small"
-          variant="text"
-          @click="radarPlaying ? pauseRadar() : playRadar()"
-        />
-        <v-btn icon="mdi-skip-next" size="x-small" variant="text" @click="stepRadarFrame(1)" />
-        <span class="radar-timestamp">{{ radarTimestamp }}</span>
-        <span class="radar-frame-dots">{{ radarCurrentIdx + 1 }}&nbsp;/&nbsp;{{ radarFrameCount }}</span>
-        <span class="radar-bar-divider" />
-        <v-select
-          v-model="radarFrameInterval"
-          :items="[
-            { title: '¼×', value: 2000 },
-            { title: '½×', value: 1000 },
-            { title: '1×', value: 500 },
-            { title: '2×', value: 250 },
-            { title: '4×', value: 125 },
-          ]"
-          item-title="title"
-          item-value="value"
-          density="compact"
-          hide-details
-          class="radar-speed-select"
-          @update:model-value="keepRadarControlsVisible"
-        />
-        <span class="radar-bar-divider" />
-        <span class="radar-opacity-label">Opacity</span>
-        <v-slider v-model="radarOpacity" class="radar-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details @update:model-value="keepRadarControlsVisible" />
-        <span class="radar-opacity-pct">{{ Math.round(radarOpacity * 100) }}%</span>
-      </div>
-
-      <!-- Wind opacity row (shown when wind layer is active and controls visible, desktop only) -->
-      <div
-        v-if="showWind && !mobile && windControlsVisible"
-        class="wind-opacity-row"
-        @mouseenter="keepWindControlsVisible"
-      >
-        <span class="layer-opacity-label">Wind opacity</span>
-        <v-slider v-model="windOpacity" class="layer-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details @update:model-value="keepWindControlsVisible" />
-        <span class="layer-opacity-pct">{{ Math.round(windOpacity * 100) }}%</span>
-      </div>
-
-      <!-- Lightning opacity row (shown when lightning layer is active and controls visible, desktop only) -->
-      <div
-        v-if="showLightning && !mobile && lightningControlsVisible"
-        class="lightning-opacity-row"
-        @mouseenter="keepLightningControlsVisible"
-      >
-        <span class="layer-opacity-label">Lightning opacity</span>
-        <v-slider v-model="lightningOpacity" class="layer-opacity-slider" min="0.1" max="1" step="0.05" density="compact" hide-details @update:model-value="keepLightningControlsVisible" />
-        <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
+          <div class="layer-panel-foot">
+            <v-btn size="x-small" variant="text" color="primary" @click="resetLayers">
+              Reset layers
+            </v-btn>
+            <span class="text-caption text-medium-emphasis">saved locally</span>
+          </div>
+        </div>
       </div>
 
       <!-- Pop-out button -->
@@ -2333,7 +2534,12 @@ defineExpose({ TILE_PROVIDERS })
       />
 
       <!-- Mobile: layer menu button (⋮) -->
-      <v-menu v-if="mobile" v-model="mobileLayerMenuOpen" location="bottom start" :close-on-content-click="false">
+      <v-menu
+        v-if="mobile"
+        v-model="mobileLayerMenuOpen"
+        location="bottom start"
+        :close-on-content-click="false"
+      >
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
@@ -2347,47 +2553,164 @@ defineExpose({ TILE_PROVIDERS })
         </template>
         <v-list density="compact" min-width="220">
           <v-list-item @click="toggleTracks">
-            <template #prepend><v-icon :color="showTracks ? 'primary' : 'grey'">mdi-map-marker-path</v-icon></template>
+            <template #prepend
+              ><v-icon :color="showTracks ? 'primary' : 'grey'"
+                >mdi-map-marker-path</v-icon
+              ></template
+            >
             <v-list-item-title>{{ showTracks ? 'Hide Tracks' : 'Show Tracks' }}</v-list-item-title>
           </v-list-item>
           <v-list-item @click="toggleGhostMarkers">
-            <template #prepend><v-icon :color="showGhostMarkers ? 'indigo' : 'grey'">mdi-map-marker-question</v-icon></template>
-            <v-list-item-title>{{ showGhostMarkers ? 'Hide Est. Positions' : 'Show Est. Positions' }}</v-list-item-title>
+            <template #prepend
+              ><v-icon :color="showGhostMarkers ? 'indigo' : 'grey'"
+                >mdi-map-marker-question</v-icon
+              ></template
+            >
+            <v-list-item-title>{{
+              showGhostMarkers ? 'Hide Est. Positions' : 'Show Est. Positions'
+            }}</v-list-item-title>
           </v-list-item>
           <v-list-item @click="toggleStaleStations">
-            <template #prepend><v-icon :color="showStaleStations ? 'brown-lighten-1' : 'grey'">mdi-clock-alert-outline</v-icon></template>
-            <v-list-item-title>{{ showStaleStations ? 'Hide Stale' : 'Show Stale' }}</v-list-item-title>
+            <template #prepend
+              ><v-icon :color="showStaleStations ? 'brown-lighten-1' : 'grey'"
+                >mdi-clock-alert-outline</v-icon
+              ></template
+            >
+            <v-list-item-title>{{
+              showStaleStations ? 'Hide Stale' : 'Show Stale'
+            }}</v-list-item-title>
           </v-list-item>
           <v-list-item @click="toggleOverlays">
-            <template #prepend><v-icon :color="showOverlays ? 'teal-darken-1' : 'grey'">mdi-layers</v-icon></template>
+            <template #prepend
+              ><v-icon :color="showOverlays ? 'teal-darken-1' : 'grey'"
+                >mdi-layers</v-icon
+              ></template
+            >
             <v-list-item-title>{{ showOverlays ? 'Hide Zones' : 'Show Zones' }}</v-list-item-title>
           </v-list-item>
           <v-list-item @click="toggleHeatmap">
-            <template #prepend><v-icon :color="showHeatmap ? 'deep-orange-darken-1' : 'grey'">mdi-fire</v-icon></template>
+            <template #prepend
+              ><v-icon :color="showHeatmap ? 'deep-orange-darken-1' : 'grey'"
+                >mdi-fire</v-icon
+              ></template
+            >
             <v-list-item-title>{{ showHeatmap ? 'Hide Heatmap' : 'Heatmap' }}</v-list-item-title>
           </v-list-item>
           <v-list-item @click="toggleCoverage">
-            <template #prepend><v-icon :color="showCoverage ? 'green-darken-2' : 'grey'">mdi-grid</v-icon></template>
-            <v-list-item-title>{{ showCoverage ? 'Hide Coverage' : 'Coverage Grid' }}</v-list-item-title>
+            <template #prepend
+              ><v-icon :color="showCoverage ? 'green-darken-2' : 'grey'">mdi-grid</v-icon></template
+            >
+            <v-list-item-title>{{
+              showCoverage ? 'Hide Coverage' : 'Coverage Grid'
+            }}</v-list-item-title>
           </v-list-item>
           <v-divider class="my-1" />
           <v-list-item @click="showRings = !showRings">
-            <template #prepend><v-icon :color="showRings ? 'blue-darken-1' : 'grey'">mdi-circle-double</v-icon></template>
-            <v-list-item-title>{{ showRings ? 'Hide Range Rings' : 'Show Range Rings' }}</v-list-item-title>
+            <template #prepend
+              ><v-icon :color="showRings ? 'blue-darken-1' : 'grey'"
+                >mdi-circle-double</v-icon
+              ></template
+            >
+            <v-list-item-title>{{
+              showRings ? 'Hide Range Rings' : 'Show Range Rings'
+            }}</v-list-item-title>
           </v-list-item>
           <v-divider class="my-1" />
           <v-list-item @click="toggleRadar">
-            <template #prepend><v-icon :color="showRadar ? 'blue-darken-2' : 'grey'">mdi-weather-rainy</v-icon></template>
+            <template #prepend
+              ><v-icon :color="showRadar ? 'blue-darken-2' : 'grey'"
+                >mdi-weather-rainy</v-icon
+              ></template
+            >
             <v-list-item-title>{{ showRadar ? 'Hide Radar' : 'Radar' }}</v-list-item-title>
           </v-list-item>
+          <!-- Radar scrubber + opacity — previously desktop-only -->
+          <div v-if="showRadar && radarFrameCount > 0" class="mobile-layer-sub">
+            <div class="d-flex align-center ga-1">
+              <v-btn
+                icon="mdi-skip-previous"
+                size="x-small"
+                variant="text"
+                @click.stop="stepRadarFrame(-1)"
+              />
+              <v-btn
+                :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
+                size="x-small"
+                variant="text"
+                @click.stop="radarPlaying ? pauseRadar() : playRadar()"
+              />
+              <v-btn
+                icon="mdi-skip-next"
+                size="x-small"
+                variant="text"
+                @click.stop="stepRadarFrame(1)"
+              />
+              <span class="radar-timestamp">{{ radarTimestamp }}</span>
+              <span class="radar-frame-dots">{{ radarCurrentIdx + 1 }}/{{ radarFrameCount }}</span>
+            </div>
+            <div class="d-flex align-center ga-2">
+              <span class="layer-opacity-label">Opacity</span>
+              <v-slider
+                v-model="radarOpacity"
+                class="layer-opacity-slider"
+                min="0.1"
+                max="1"
+                step="0.05"
+                density="compact"
+                hide-details
+              />
+              <span class="layer-opacity-pct">{{ Math.round(radarOpacity * 100) }}%</span>
+            </div>
+          </div>
           <v-list-item :disabled="!(weatherStatus?.wind.available ?? false)" @click="toggleWind">
-            <template #prepend><v-icon :color="showWind ? 'cyan-darken-1' : 'grey'">mdi-weather-windy</v-icon></template>
+            <template #prepend
+              ><v-icon :color="showWind ? 'cyan-darken-1' : 'grey'"
+                >mdi-weather-windy</v-icon
+              ></template
+            >
             <v-list-item-title>{{ showWind ? 'Hide Wind' : 'Wind' }}</v-list-item-title>
           </v-list-item>
-          <v-list-item :disabled="!(weatherStatus?.lightning.available ?? false)" @click="toggleLightning">
-            <template #prepend><v-icon :color="showLightning ? 'yellow-darken-2' : 'grey'">mdi-weather-lightning</v-icon></template>
-            <v-list-item-title>{{ showLightning ? 'Hide Lightning' : 'Lightning' }}</v-list-item-title>
+          <v-list-item
+            :disabled="!(weatherStatus?.lightning.available ?? false)"
+            @click="toggleLightning"
+          >
+            <template #prepend
+              ><v-icon :color="showLightning ? 'yellow-darken-2' : 'grey'"
+                >mdi-weather-lightning</v-icon
+              ></template
+            >
+            <v-list-item-title>{{
+              showLightning ? 'Hide Lightning' : 'Lightning'
+            }}</v-list-item-title>
           </v-list-item>
+          <div v-if="showWind || showLightning" class="mobile-layer-sub">
+            <div v-if="showWind" class="d-flex align-center ga-2">
+              <span class="layer-opacity-label">Wind</span>
+              <v-slider
+                v-model="windOpacity"
+                class="layer-opacity-slider"
+                min="0.1"
+                max="1"
+                step="0.05"
+                density="compact"
+                hide-details
+              />
+              <span class="layer-opacity-pct">{{ Math.round(windOpacity * 100) }}%</span>
+            </div>
+            <div v-if="showLightning" class="d-flex align-center ga-2">
+              <span class="layer-opacity-label">Lightning</span>
+              <v-slider
+                v-model="lightningOpacity"
+                class="layer-opacity-slider"
+                min="0.1"
+                max="1"
+                step="0.05"
+                density="compact"
+                hide-details
+              />
+              <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
+            </div>
+          </div>
         </v-list>
       </v-menu>
 
@@ -2423,6 +2746,7 @@ defineExpose({ TILE_PROVIDERS })
     >
       <div class="panel-resize-handle" @mousedown.prevent="onResizeHandleDown" />
       <StationDetailPanel
+        show-page-link
         :callsign="selectionStore.selectedCallsign"
         :refresh-key="detailRefreshKey"
         @close="onDetailClose"
@@ -2437,7 +2761,12 @@ defineExpose({ TILE_PROVIDERS })
       <v-card-title class="d-flex align-center">
         Stations
         <v-spacer />
-        <v-btn icon="mdi-close" size="small" variant="text" @click="mobileStationSheetOpen = false" />
+        <v-btn
+          icon="mdi-close"
+          size="small"
+          variant="text"
+          @click="mobileStationSheetOpen = false"
+        />
       </v-card-title>
       <v-divider />
       <div style="overflow-y: auto; max-height: calc(70vh - 60px)">
@@ -2447,8 +2776,13 @@ defineExpose({ TILE_PROVIDERS })
           :selected-callsign="selectionStore.selectedCallsign"
           :stale-stations="staleStationsList"
           :show-stale="showStaleStations"
-          @select-station="(cs) => { onSidebarSelectStation(cs); mobileStationSheetOpen = false }"
-          @update:show-stale="showStaleStations = $event; $event ? showCachedStaleMarkers() : hideStaleMarkers()"
+          @select-station="
+            (cs) => {
+              onSidebarSelectStation(cs)
+              mobileStationSheetOpen = false
+            }
+          "
+          @update:show-stale="onToggleShowStale"
         />
       </div>
     </v-card>
@@ -2459,11 +2793,12 @@ defineExpose({ TILE_PROVIDERS })
     v-if="mobile"
     :model-value="!!selectionStore.selectedCallsign"
     max-height="65vh"
-    @update:model-value="v => !v && onDetailClose()"
+    @update:model-value="(v) => !v && onDetailClose()"
   >
-    <v-card style="height: 65vh; display: flex; flex-direction: column;">
-      <div style="overflow-y: auto; flex: 1;">
+    <v-card style="height: 65vh; display: flex; flex-direction: column">
+      <div style="overflow-y: auto; flex: 1">
         <StationDetailPanel
+          show-page-link
           :callsign="selectionStore.selectedCallsign"
           :refresh-key="detailRefreshKey"
           @close="onDetailClose"
@@ -2474,13 +2809,17 @@ defineExpose({ TILE_PROVIDERS })
   </v-bottom-sheet>
 
   <!-- Tile provider fallback notification -->
-  <v-snackbar
-    v-model="providerFallbackSnackbar"
-    :timeout="5000"
-    color="warning"
-    location="bottom"
-  >
+  <v-snackbar v-model="providerFallbackSnackbar" :timeout="5000" color="warning" location="bottom">
     {{ providerFallbackMessage }}
+  </v-snackbar>
+
+  <!-- Station load failure — persistent until a load succeeds -->
+  <v-snackbar v-model="stationsLoadFailed" :timeout="-1" color="error" location="bottom">
+    Couldn't load stations — the map may be empty or out of date.
+    <template #actions>
+      <v-btn variant="text" @click="loadStations()">Retry</v-btn>
+      <v-btn icon="mdi-close" size="small" variant="text" @click="stationsLoadFailed = false" />
+    </template>
   </v-snackbar>
 </template>
 
@@ -2557,67 +2896,96 @@ defineExpose({ TILE_PROVIDERS })
   z-index: 1000;
 }
 
-.track-toggle-btn {
+/* The grouped layer panel — anchored under the sidebar toggle, never overlaps
+   other controls regardless of viewport width. */
+.layer-panel {
   position: absolute;
   top: 10px;
   left: 60px;
   z-index: 1000;
+  width: 262px;
+  background: rgb(var(--v-theme-surface));
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
 }
 
-.ghost-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 195px;
-  z-index: 1000;
+.layer-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
 }
 
-.stale-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 330px;
-  z-index: 1000;
+.layer-count {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  padding: 0 6px;
 }
 
-.overlays-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 465px;
-  z-index: 1000;
+.layer-panel-body {
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 
-.heatmap-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 600px;
-  z-index: 1000;
+.layer-group {
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
 }
 
-.coverage-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 725px;
-  z-index: 1000;
+.layer-group-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 700;
+  opacity: 0.55;
+  margin: 4px 0 2px;
 }
 
-.radar-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 850px;
-  z-index: 1000;
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
 }
 
-.wind-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 975px;
-  z-index: 1000;
+.layer-row-label {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
 }
 
-.lightning-toggle-btn {
-  position: absolute;
-  top: 10px;
-  left: 1100px;
-  z-index: 1000;
+.layer-switch {
+  flex: none;
+}
+
+.layer-sub {
+  margin: 0 0 6px 25px;
+  padding: 6px 8px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.layer-panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 6px 4px;
 }
 
 .popout-btn {
@@ -2627,10 +2995,11 @@ defineExpose({ TILE_PROVIDERS })
   z-index: 1000;
 }
 
+/* Anchored top-right beside the pop-out button — clear of the layer panel. */
 .range-rings-container {
   position: absolute;
-  top: 50px;
-  left: 10px;
+  top: 10px;
+  right: 56px;
   z-index: 1000;
 }
 
@@ -2650,20 +3019,6 @@ defineExpose({ TILE_PROVIDERS })
   z-index: 1000;
 }
 
-.radar-animation-bar {
-  position: absolute;
-  top: 50px;
-  left: 850px;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  background: rgba(var(--v-theme-surface), 0.92);
-  border-radius: 6px;
-  padding: 2px 8px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-}
-
 .radar-timestamp {
   font-size: 11px;
   white-space: nowrap;
@@ -2678,60 +3033,9 @@ defineExpose({ TILE_PROVIDERS })
   opacity: 0.7;
 }
 
-.radar-bar-divider {
-  display: inline-block;
-  width: 1px;
-  height: 16px;
-  background: rgba(128, 128, 128, 0.4);
-  margin: 0 6px;
-  flex-shrink: 0;
-}
-
-.radar-opacity-label {
-  font-size: 11px;
-  white-space: nowrap;
-  opacity: 0.8;
-  flex-shrink: 0;
-}
-
-.radar-opacity-slider {
-  width: 120px;
-  flex-shrink: 0;
-}
-
 .radar-speed-select {
   width: 72px;
   flex-shrink: 0;
-}
-
-.radar-opacity-pct {
-  font-size: 11px;
-  white-space: nowrap;
-  width: 30px;
-  text-align: right;
-  opacity: 0.8;
-}
-
-.wind-opacity-row,
-.lightning-opacity-row {
-  position: absolute;
-  left: 850px;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(var(--v-theme-surface), 0.92);
-  border-radius: 6px;
-  padding: 2px 10px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-}
-
-.wind-opacity-row {
-  top: 88px;
-}
-
-.lightning-opacity-row {
-  top: 126px;
 }
 
 .layer-opacity-label {
@@ -2752,6 +3056,13 @@ defineExpose({ TILE_PROVIDERS })
   width: 30px;
   text-align: right;
   opacity: 0.8;
+}
+
+.mobile-layer-sub {
+  padding: 4px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 </style>
 
@@ -2840,16 +3151,25 @@ defineExpose({ TILE_PROVIDERS })
   font-size: 8px;
   font-weight: 700;
   line-height: 1;
-  color: #00BCD4;
+  color: #00bcd4;
   text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
   pointer-events: none;
   z-index: 1;
 }
 
 @keyframes wx-pulse {
-  0%   { transform: scale(0.6); opacity: 1; }
-  70%  { transform: scale(1.6); opacity: 0; }
-  100% { transform: scale(1.6); opacity: 0; }
+  0% {
+    transform: scale(0.6);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
 }
 
 /* ── Beacon flash rings ─────────────────────────────────────────────────────── */
@@ -2869,16 +3189,34 @@ defineExpose({ TILE_PROVIDERS })
   animation: beacon-expand 0.8s ease-out forwards;
 }
 
-.beacon-flash-position  { border-color: rgba(33,  150, 243, 0.9); }
-.beacon-flash-message   { border-color: rgba(76,  175,  80, 0.9); }
-.beacon-flash-weather   { border-color: rgba(0,   150, 136, 0.9); }
-.beacon-flash-telemetry { border-color: rgba(156,  39, 176, 0.9); }
-.beacon-flash-unknown   { border-color: rgba(158, 158, 158, 0.9); }
-.beacon-flash-ownbeacon { border-color: rgba(255, 215,   0, 0.9); }
+.beacon-flash-position {
+  border-color: rgba(33, 150, 243, 0.9);
+}
+.beacon-flash-message {
+  border-color: rgba(76, 175, 80, 0.9);
+}
+.beacon-flash-weather {
+  border-color: rgba(0, 150, 136, 0.9);
+}
+.beacon-flash-telemetry {
+  border-color: rgba(156, 39, 176, 0.9);
+}
+.beacon-flash-unknown {
+  border-color: rgba(158, 158, 158, 0.9);
+}
+.beacon-flash-ownbeacon {
+  border-color: rgba(255, 215, 0, 0.9);
+}
 
 @keyframes beacon-expand {
-  0%   { transform: scale(0.5); opacity: 1; }
-  100% { transform: scale(2.4); opacity: 0; }
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
 }
 
 /* ── Stale station visual decay ─────────────────────────────────────────────── */
@@ -2907,7 +3245,7 @@ defineExpose({ TILE_PROVIDERS })
   font-size: 11px;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
 .path-unknown-label::before {

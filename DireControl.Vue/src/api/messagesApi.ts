@@ -19,8 +19,12 @@ export interface GetAllMessagesParams {
   text?: string
 }
 
-export async function getAllMessages(params: GetAllMessagesParams = {}): Promise<PaginatedResponse<AllMessagePacketDto>> {
-  const { data } = await http.get<PaginatedResponse<AllMessagePacketDto>>('/api/v0/messages/all', { params })
+export async function getAllMessages(
+  params: GetAllMessagesParams = {},
+): Promise<PaginatedResponse<AllMessagePacketDto>> {
+  const { data } = await http.get<PaginatedResponse<AllMessagePacketDto>>('/api/v0/messages/all', {
+    params,
+  })
   return data
 }
 

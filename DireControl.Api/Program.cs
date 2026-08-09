@@ -22,6 +22,7 @@ var runtimeLoggingSource = new RuntimeLoggingConfigSource();
 services
     .AddSingleton(runtimeLoggingSource)
     .AddSingleton<LogLevelService>()
+    .AddSingleton<StationIdentityService>()
     .Configure<DireControlOptions>(config.GetSection(DireControlOptions.Section))
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
     .AddOpenApi()
@@ -130,6 +131,7 @@ var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
 await app.Services.GetRequiredService<LogLevelService>().ApplyFromDatabaseAsync();
+await app.Services.GetRequiredService<StationIdentityService>().ApplyFromDatabaseAsync();
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {

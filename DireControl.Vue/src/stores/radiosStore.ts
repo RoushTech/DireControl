@@ -1,9 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
-import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr'
 import { getRadios, getLastBeacon } from '@/api/radiosApi'
+import { usePacketHubStore } from '@/stores/packetHub'
 import type { ModemLevelDto } from '@/api/modemApi'
-import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto, BeaconConfirmedHeardDto } from '@/types/radio'
+import type {
+  RadioDto,
+  LastBeaconDto,
+  OwnBeaconBroadcastDto,
+  DigiConfirmationBroadcastDto,
+  BeaconConfirmedHeardDto,
+} from '@/types/radio'
 
 /** Live RX/TX activity for a radio's modem, updated from the modemLevel stream. */
 export interface RadioActivity {
@@ -20,7 +26,6 @@ export const useRadiosStore = defineStore('radios', () => {
   // Live modem RX/TX activity keyed by radioId, fed by the modemLevel stream.
   const activity = reactive<Record<string, RadioActivity | undefined>>({})
   const loading = ref(false)
-  let connectionStarted = false
 
   const activeRadios = computed(() => radios.value.filter((r) => r.isActive))
 
@@ -37,7 +42,9 @@ export const useRadiosStore = defineStore('radios', () => {
     try {
       const dto = await getLastBeacon(radioId)
       lastBeacons[radioId] = dto
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   async function fetchAllLastBeacons() {
@@ -110,52 +117,20 @@ export const useRadiosStore = defineStore('radios', () => {
     }
   }
 
-  function startSignalR() {
-    if (connectionStarted) return
-    connectionStarted = true
-
-    const connection = new HubConnectionBuilder()
-      .withUrl('/hubs/packets')
-      .withAutomaticReconnect()
-      .build()
-
-    connection.on('ownBeaconReceived', (dto: OwnBeaconBroadcastDto) => {
-      onOwnBeaconReceived(dto)
-    })
-
-    connection.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => {
-      onDigiConfirmation(dto)
-    })
-
-    connection.on('beaconConfirmedHeard', (dto: BeaconConfirmedHeardDto) => {
-      onBeaconConfirmedHeard(dto)
-    })
-
-    connection.on('modemLevel', (batch: ModemLevelDto[]) => {
-      for (const level of batch) {
-        activity[level.radioId] = {
-          carrierDetected: level.carrierDetected,
-          transmitting: level.transmitting,
-        }
-      }
-    })
-
-    async function start() {
-      try {
-        await connection.start()
-      } catch {
-        setTimeout(start, 5000)
+  // Store-level hub subscriptions — beacon state and modem RX/TX activity stay
+  // live regardless of which view is open.
+  const hub = usePacketHubStore()
+  hub.on('ownBeaconReceived', (dto: OwnBeaconBroadcastDto) => onOwnBeaconReceived(dto))
+  hub.on('digiConfirmation', (dto: DigiConfirmationBroadcastDto) => onDigiConfirmation(dto))
+  hub.on('beaconConfirmedHeard', (dto: BeaconConfirmedHeardDto) => onBeaconConfirmedHeard(dto))
+  hub.on('modemLevel', (batch: ModemLevelDto[]) => {
+    for (const level of batch) {
+      activity[level.radioId] = {
+        carrierDetected: level.carrierDetected,
+        transmitting: level.transmitting,
       }
     }
-
-    connection.onclose(() => {
-      if (connection.state !== HubConnectionState.Reconnecting) {
-        setTimeout(start, 5000)
-      }
-    })
-
-    start()
-  }
+  })
 
   function getLastBeaconForRadio(radioId: string): LastBeaconDto | undefined {
     return lastBeacons[radioId]
@@ -176,7 +151,6 @@ export const useRadiosStore = defineStore('radios', () => {
     fetchAllLastBeacons,
     onOwnBeaconReceived,
     onDigiConfirmation,
-    startSignalR,
     getLastBeaconForRadio,
     getActivityForRadio,
   }

@@ -10,9 +10,7 @@ const expanded = defineModel<boolean>('expanded', { default: false })
 
 // Convert internal km value to the current display unit for editing
 function toDisplay(km: number): string {
-  return distanceUnit.value === 'mi'
-    ? (km * 0.621371).toFixed(1)
-    : km.toFixed(1)
+  return distanceUnit.value === 'mi' ? (km * 0.621371).toFixed(1) : km.toFixed(1)
 }
 
 // Editable string versions of distances in the current display unit

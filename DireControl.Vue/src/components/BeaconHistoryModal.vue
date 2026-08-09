@@ -27,7 +27,11 @@ watch(open, async (val) => {
 })
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return new Date(iso).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 function formatCoords(lat: number | null, lon: number | null): string {
@@ -97,7 +101,10 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
             <template v-for="beacon in beacons" :key="beacon.id">
               <tr class="cursor-pointer" @click="toggleExpand(beacon.id)">
                 <td>
-                  <v-icon size="14" :class="isExpanded(beacon.id) ? 'text-primary' : 'text-medium-emphasis'">
+                  <v-icon
+                    size="14"
+                    :class="isExpanded(beacon.id) ? 'text-primary' : 'text-medium-emphasis'"
+                  >
                     {{ isExpanded(beacon.id) ? 'mdi-chevron-down' : 'mdi-chevron-right' }}
                   </v-icon>
                 </td>
@@ -105,11 +112,7 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
                 <td class="text-caption">{{ formatCoords(beacon.latitude, beacon.longitude) }}</td>
                 <td class="text-caption">{{ beacon.pathUsed ?? '—' }}</td>
                 <td>
-                  <v-chip
-                    size="x-small"
-                    :color="hopColor(beacon)"
-                    variant="tonal"
-                  >
+                  <v-chip size="x-small" :color="hopColor(beacon)" variant="tonal">
                     {{ hopLabel(beacon) }}
                   </v-chip>
                 </td>
@@ -118,14 +121,21 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
                     No confirmations
                   </span>
                   <span v-else>
-                    {{ beacon.confirmations.map(c => `${c.digipeater} (${c.secondsAfterBeacon}s)`).join(', ') }}
+                    {{
+                      beacon.confirmations
+                        .map((c) => `${c.digipeater} (${c.secondsAfterBeacon}s)`)
+                        .join(', ')
+                    }}
                   </span>
                 </td>
               </tr>
               <tr v-if="isExpanded(beacon.id)">
                 <td colspan="6" class="pa-0">
                   <div class="pa-3 bg-surface-variant">
-                    <div v-if="beacon.confirmations.length === 0" class="text-caption text-medium-emphasis">
+                    <div
+                      v-if="beacon.confirmations.length === 0"
+                      class="text-caption text-medium-emphasis"
+                    >
                       No confirmations recorded for this beacon.
                     </div>
                     <div v-else>
@@ -141,7 +151,10 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr v-for="conf in beacon.confirmations" :key="conf.digipeater + conf.confirmedAt">
+                          <tr
+                            v-for="conf in beacon.confirmations"
+                            :key="conf.digipeater + conf.confirmedAt"
+                          >
                             <td class="text-caption font-weight-medium">{{ conf.digipeater }}</td>
                             <td class="text-caption">{{ formatTime(conf.confirmedAt) }}</td>
                             <td class="text-caption">+{{ conf.secondsAfterBeacon }}s</td>

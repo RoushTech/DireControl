@@ -5,11 +5,11 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 // live SignalR connection, packet buffer, and waterfall history) mounted while
 // the user navigates elsewhere.
 defineOptions({ name: 'RadioView' })
-import { HubConnectionBuilder, type HubConnection } from '@microsoft/signalr'
 import {
   getModemStatus,
   setModemTxLevel,
   sendTestTone,
+  restartModem,
   TestToneKinds,
   decodeSpectrumPayload,
   ModemStates,
@@ -19,6 +19,8 @@ import {
   type ModemStatusDto,
   type TestToneKind,
 } from '@/api/modemApi'
+import { usePacketHubStore } from '@/stores/packetHub'
+import { useToastStore } from '@/stores/toastStore'
 import { getStatus, type StatusDto } from '@/api/statusApi'
 import { getSettings, getPacketsSince } from '@/api/stationsApi'
 import { getRadios } from '@/api/radiosApi'
@@ -33,8 +35,14 @@ import {
   type PacketBroadcastDto,
 } from '@/types/packet'
 import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
+import { timeAgo, formatUtc } from '@/utils/time'
+import { serverNow } from '@/utils/serverTime'
+import { useTick } from '@/composables/useTick'
 
 const MAX_FEED = 100
+const { now } = useTick(5000)
+const hub = usePacketHubStore()
+const toastStore = useToastStore()
 
 const status = ref<StatusDto | null>(null)
 const modemStatuses = ref<ModemStatusDto[]>([])
@@ -91,8 +99,48 @@ function setWaterfallRef(radioId: string, el: unknown) {
   else waterfalls.delete(radioId)
 }
 
-let connection: HubConnection | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
+
+// ── Modem restart ─────────────────────────────────────────────────────────────
+const modemRestarting = ref(false)
+
+async function doRestartModem() {
+  modemRestarting.value = true
+  try {
+    await restartModem()
+    toastStore.toast('Modem restarting — audio devices are being re-opened…', 'info')
+    // Give the backend a moment, then refresh so the state chip catches up.
+    setTimeout(refresh, 1500)
+  } catch {
+    toastStore.toast('Modem restart failed — the backend may be unreachable.', 'error')
+  } finally {
+    modemRestarting.value = false
+  }
+}
+
+// ── Shared hub handlers (named so they can be unregistered on unmount) ───────
+function onHubModemLevel(batch: ModemLevelDto[]) {
+  for (const level of batch) levels.value[level.radioId] = level
+}
+
+function onHubModemSpectrum(batch: ModemSpectrumDto[]) {
+  for (const spectrum of batch)
+    waterfalls.get(spectrum.radioId)?.drawRow(decodeSpectrumPayload(spectrum.bins))
+}
+
+function onHubModemStatusChanged(statuses: ModemStatusDto[]) {
+  modemStatuses.value = statuses
+}
+
+function onHubPacketReceived(p: PacketBroadcastDto) {
+  packets.value.unshift(p)
+  if (packets.value.length > MAX_FEED) packets.value.splice(MAX_FEED)
+}
+
+function onHubPacketSourceUpgraded(upgrade: { id: number; source: PacketBroadcastDto['source'] }) {
+  const entry = packets.value.find((p) => p.id === upgrade.id)
+  if (entry) entry.source = upgrade.source
+}
 
 /** Radios without a modem instance — shown in the plain radio list. */
 const radiosWithoutModem = computed(() =>
@@ -155,17 +203,26 @@ function sourceLabel(p: PacketBroadcastDto): string {
   return p.source === PacketSource.AprsIs ? 'IS' : 'RF'
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString()
-}
+// Staleness tracking: the page keeps showing last-known data on failure, but
+// says so instead of silently presenting stale numbers as live.
+const lastRefreshAt = ref<number | null>(null)
+const refreshFailed = ref(false)
+const radiosLoadFailed = ref(false)
+
+const staleLabel = computed(() => {
+  if (lastRefreshAt.value === null) return 'never loaded'
+  return `data from ${timeAgo(new Date(lastRefreshAt.value).toISOString(), now.value)}`
+})
 
 async function refresh() {
   try {
     const [s, m] = await Promise.all([getStatus(), getModemStatus()])
     status.value = s
     modemStatuses.value = m
+    lastRefreshAt.value = serverNow()
+    refreshFailed.value = false
   } catch {
-    /* ignore — page shows last known state */
+    refreshFailed.value = true
   }
 }
 
@@ -179,8 +236,9 @@ onMounted(async () => {
   try {
     radios.value = await getRadios()
     seedTxGain()
+    radiosLoadFailed.value = false
   } catch {
-    /* ignore */
+    radiosLoadFailed.value = true
   }
   try {
     // Seed the feed so the page isn't blank until the next live packet arrives.
@@ -193,52 +251,33 @@ onMounted(async () => {
 
   statusTimer = setInterval(refresh, 5000)
 
-  connection = new HubConnectionBuilder().withUrl('/hubs/packets').withAutomaticReconnect().build()
-
-  connection.on('modemLevel', (batch: ModemLevelDto[]) => {
-    for (const level of batch) levels.value[level.radioId] = level
-  })
-
-  connection.on('modemSpectrum', (batch: ModemSpectrumDto[]) => {
-    for (const spectrum of batch)
-      waterfalls.get(spectrum.radioId)?.drawRow(decodeSpectrumPayload(spectrum.bins))
-  })
-
-  connection.on('modemStatusChanged', (statuses: ModemStatusDto[]) => {
-    modemStatuses.value = statuses
-  })
-
-  connection.on('packetReceived', (p: PacketBroadcastDto) => {
-    packets.value.unshift(p)
-    if (packets.value.length > MAX_FEED) packets.value.splice(MAX_FEED)
-  })
-
-  connection.on(
-    'packetSourceUpgraded',
-    (upgrade: { id: number; source: PacketBroadcastDto['source'] }) => {
-      const entry = packets.value.find((p) => p.id === upgrade.id)
-      if (entry) entry.source = upgrade.source
-    },
-  )
-
-  try {
-    await connection.start()
-  } catch {
-    /* automatic reconnect keeps trying */
-  }
+  hub.on('modemLevel', onHubModemLevel)
+  hub.on('modemSpectrum', onHubModemSpectrum)
+  hub.on('modemStatusChanged', onHubModemStatusChanged)
+  hub.on('packetReceived', onHubPacketReceived)
+  hub.on('packetSourceUpgraded', onHubPacketSourceUpgraded)
 })
 
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer)
   for (const t of Object.values(txGainTimers)) clearTimeout(t)
-  connection?.stop()
-  connection = null
+  hub.off('modemLevel', onHubModemLevel)
+  hub.off('modemSpectrum', onHubModemSpectrum)
+  hub.off('modemStatusChanged', onHubModemStatusChanged)
+  hub.off('packetReceived', onHubPacketReceived)
+  hub.off('packetSourceUpgraded', onHubPacketSourceUpgraded)
 })
 </script>
 
 <template>
   <div class="radio-view pa-4">
-    <div class="text-h5 font-weight-bold mb-4">Radio</div>
+    <div class="d-flex align-center ga-3 mb-4 flex-wrap">
+      <span class="text-h5 font-weight-bold">Radio</span>
+      <v-chip v-if="refreshFailed" color="warning" size="small" variant="tonal">
+        <v-icon start size="14">mdi-lan-disconnect</v-icon>
+        Backend unreachable · {{ staleLabel }}
+      </v-chip>
+    </div>
 
     <div class="radio-layout">
       <!-- ── RF stack column ── -->
@@ -357,11 +396,24 @@ onUnmounted(() => {
               class="mb-2"
             />
 
-            <div class="text-caption text-medium-emphasis">
-              {{ m.decodedFrames.toLocaleString() }} decoded ·
-              {{ m.invalidFrames.toLocaleString() }} bad CRC<template v-if="m.txEnabled">
-                · {{ m.transmittedFrames.toLocaleString() }} sent</template
+            <div class="d-flex align-center ga-2 flex-wrap">
+              <span class="text-caption text-medium-emphasis">
+                {{ m.decodedFrames.toLocaleString() }} decoded ·
+                {{ m.invalidFrames.toLocaleString() }} bad CRC<template v-if="m.txEnabled">
+                  · {{ m.transmittedFrames.toLocaleString() }} sent</template
+                >
+              </span>
+              <v-spacer />
+              <v-btn
+                size="x-small"
+                variant="text"
+                prepend-icon="mdi-restart"
+                :loading="modemRestarting"
+                title="Tear down and re-open the modem audio devices"
+                @click="doRestartModem"
               >
+                Restart
+              </v-btn>
             </div>
           </template>
           <v-alert
@@ -369,13 +421,31 @@ onUnmounted(() => {
             type="error"
             density="compact"
           >
-            {{ m.errorMessage }}
+            <div class="d-flex align-center ga-3 flex-wrap">
+              <span>{{ m.errorMessage }}</span>
+              <v-btn
+                size="small"
+                variant="tonal"
+                color="error"
+                prepend-icon="mdi-restart"
+                :loading="modemRestarting"
+                @click="doRestartModem"
+              >
+                Restart modem
+              </v-btn>
+            </div>
           </v-alert>
         </v-card>
 
         <v-card v-if="modemStatuses.length === 0" variant="outlined" class="mb-4 pa-4">
           <div class="text-subtitle-1 font-weight-medium mb-1">Sound Modem</div>
-          <div class="text-caption text-medium-emphasis">
+          <template v-if="refreshFailed || radiosLoadFailed">
+            <div class="text-caption text-medium-emphasis mb-2">
+              Couldn't reach the backend — modem status is unknown.
+            </div>
+            <v-btn size="small" color="primary" variant="tonal" @click="refresh">Retry</v-btn>
+          </template>
+          <div v-else class="text-caption text-medium-emphasis">
             No radios have a modem audio feed configured — enable one in a radio's settings.
           </div>
         </v-card>
@@ -462,14 +532,12 @@ onUnmounted(() => {
             Waiting for packets…
           </div>
           <div v-for="p in packets" :key="p.id" class="feed-row">
-            <span class="text-caption text-medium-emphasis feed-time">{{
-              formatTime(p.receivedAt)
-            }}</span>
-            <v-chip
-              size="x-small"
-              variant="tonal"
-              :color="sourceLabel(p) === 'RF' ? 'green' : 'blue'"
+            <span
+              class="text-caption text-medium-emphasis feed-time"
+              :title="formatUtc(p.receivedAt)"
+              >{{ timeAgo(p.receivedAt, now) }}</span
             >
+            <v-chip size="x-small" variant="tonal" :color="sourceLabel(p) === 'RF' ? 'rf' : 'is'">
               {{ sourceLabel(p) }}
             </v-chip>
             <span class="text-body-2 font-weight-medium">{{ p.callsign }}</span>

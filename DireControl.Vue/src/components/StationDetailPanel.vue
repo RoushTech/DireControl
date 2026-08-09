@@ -21,7 +21,13 @@ import {
   getStationStats,
   getStationSignal,
 } from '@/api/stationsApi'
-import { StationType, HeardVia, type StationDto, type CallsignLookupDto, type StationStatisticDto } from '@/types/station'
+import {
+  StationType,
+  HeardVia,
+  type StationDto,
+  type CallsignLookupDto,
+  type StationStatisticDto,
+} from '@/types/station'
 import {
   PacketType,
   PACKET_TYPE_LABELS,
@@ -36,11 +42,22 @@ import { useStationSelectionStore } from '@/stores/stationSelection'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
 import { useTick } from '@/composables/useTick'
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, Filler, Legend)
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ChartTooltip,
+  Filler,
+  Legend,
+)
 
 const props = defineProps<{
   callsign: string | null
   refreshKey: number
+  /** Show an "open full page" link — set by the map, off on /stations/:callsign itself. */
+  showPageLink?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -58,13 +75,30 @@ const tab = ref<'info' | 'packets' | 'weather' | 'stats' | 'signal'>('info')
 const packetsNewData = ref(false)
 
 type TabValue = 'info' | 'packets' | 'weather' | 'stats' | 'signal'
-interface TabDef { value: TabValue; label: string; icon: string; badge: boolean }
+interface TabDef {
+  value: TabValue
+  label: string
+  icon: string
+  badge: boolean
+}
 
 const visibleTabs = computed<TabDef[]>(() => [
   { value: 'info', label: 'Info', icon: 'mdi-information-outline', badge: false },
-  { value: 'packets', label: 'Packets', icon: 'mdi-format-list-bulleted', badge: packetsNewData.value },
+  {
+    value: 'packets',
+    label: 'Packets',
+    icon: 'mdi-format-list-bulleted',
+    badge: packetsNewData.value,
+  },
   ...(station.value?.isWeatherStation
-    ? [{ value: 'weather' as const, label: 'Weather', icon: 'mdi-weather-partly-cloudy', badge: false }]
+    ? [
+        {
+          value: 'weather' as const,
+          label: 'Weather',
+          icon: 'mdi-weather-partly-cloudy',
+          badge: false,
+        },
+      ]
     : []),
   { value: 'signal', label: 'Signal', icon: 'mdi-signal', badge: false },
   { value: 'stats', label: 'Stats', icon: 'mdi-chart-bar', badge: false },
@@ -72,7 +106,7 @@ const visibleTabs = computed<TabDef[]>(() => [
 
 function onTabKeydown(e: KeyboardEvent) {
   const tabs = visibleTabs.value
-  const idx = tabs.findIndex(t => t.value === tab.value)
+  const idx = tabs.findIndex((t) => t.value === tab.value)
   if (e.key === 'ArrowDown') {
     const next = tabs[(idx + 1) % tabs.length]
     if (next) tab.value = next.value
@@ -138,7 +172,9 @@ const totalPages = computed(() => Math.max(1, Math.ceil(packetTotal.value / pack
 const currentWeather = computed(() => weatherReadings.value[0] ?? null)
 
 const tempF = computed(() => currentWeather.value?.temperature ?? null)
-const tempC = computed(() => tempF.value != null ? Math.round((tempF.value - 32) * 5 / 9 * 10) / 10 : null)
+const tempC = computed(() =>
+  tempF.value != null ? Math.round((((tempF.value - 32) * 5) / 9) * 10) / 10 : null,
+)
 
 // ---- Combined weather chart ----
 
@@ -291,7 +327,7 @@ const weatherChartOptions = computed(() => {
 })
 
 const hasWeatherChartData = computed(() =>
-  weatherReadings.value.some(r => r.temperature != null || r.windSpeed != null),
+  weatherReadings.value.some((r) => r.temperature != null || r.windSpeed != null),
 )
 
 // ---- Packets-per-hour bar chart ----
@@ -363,11 +399,11 @@ const signalChartOptions = {
 }
 
 const signalChartData = computed(() => ({
-  labels: signalPoints.value.map(p => p.receivedAt),
+  labels: signalPoints.value.map((p) => p.receivedAt),
   datasets: [
     {
       label: 'Decode Quality',
-      data: signalPoints.value.map(p => p.decodeQuality),
+      data: signalPoints.value.map((p) => p.decodeQuality),
       borderColor: '#66BB6A',
       backgroundColor: 'rgba(102, 187, 106, 0.08)',
       borderWidth: 2,
@@ -378,7 +414,7 @@ const signalChartData = computed(() => ({
 }))
 
 const latestSignal = computed(() => signalPoints.value[signalPoints.value.length - 1] ?? null)
-const hasDecodeQualityData = computed(() => signalPoints.value.some(p => p.decodeQuality != null))
+const hasDecodeQualityData = computed(() => signalPoints.value.some((p) => p.decodeQuality != null))
 
 // ---- Station type label / color ----
 const stationTypeLabel = computed(() => {
@@ -580,13 +616,25 @@ function formatGap(minutes: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`
 }
 
-watch(() => props.callsign, async (val) => {
-  if (!val) {
-    station.value = null
-    packets.value = []
-    packetTotal.value = 0
+watch(
+  () => props.callsign,
+  async (val) => {
+    if (!val) {
+      station.value = null
+      packets.value = []
+      packetTotal.value = 0
+      packetPage.value = 1
+      weatherReadings.value = []
+      weatherRange.value = '24h'
+      lookupData.value = null
+      lookupFailed.value = false
+      stats.value = null
+      signalPoints.value = []
+      packetsNewData.value = false
+      tab.value = 'info'
+      return
+    }
     packetPage.value = 1
-    weatherReadings.value = []
     weatherRange.value = '24h'
     lookupData.value = null
     lookupFailed.value = false
@@ -594,21 +642,13 @@ watch(() => props.callsign, async (val) => {
     signalPoints.value = []
     packetsNewData.value = false
     tab.value = 'info'
-    return
-  }
-  packetPage.value = 1
-  weatherRange.value = '24h'
-  lookupData.value = null
-  lookupFailed.value = false
-  stats.value = null
-  signalPoints.value = []
-  packetsNewData.value = false
-  tab.value = 'info'
-  await Promise.all([fetchStation(), fetchPackets()])
-  if (station.value?.isWeatherStation) {
-    await fetchWeather()
-  }
-}, { immediate: true })
+    await Promise.all([fetchStation(), fetchPackets()])
+    if (station.value?.isWeatherStation) {
+      await fetchWeather()
+    }
+  },
+  { immediate: true },
+)
 
 watch(weatherRange, () => {
   if (props.callsign && station.value?.isWeatherStation) {
@@ -616,19 +656,22 @@ watch(weatherRange, () => {
   }
 })
 
-watch(() => props.refreshKey, async (newKey, oldKey) => {
-  if (!props.callsign || newKey === oldKey) return
-  await fetchStation()
-  if (packetPage.value === 1) {
-    await fetchPackets()
-  }
-  if (station.value?.isWeatherStation) {
-    await fetchWeather()
-  }
-  if (tab.value !== 'packets') {
-    packetsNewData.value = true
-  }
-})
+watch(
+  () => props.refreshKey,
+  async (newKey, oldKey) => {
+    if (!props.callsign || newKey === oldKey) return
+    await fetchStation()
+    if (packetPage.value === 1) {
+      await fetchPackets()
+    }
+    if (station.value?.isWeatherStation) {
+      await fetchWeather()
+    }
+    if (tab.value !== 'packets') {
+      packetsNewData.value = true
+    }
+  },
+)
 
 watch(packetPage, () => {
   if (props.callsign) fetchPackets()
@@ -641,7 +684,12 @@ watch(tab, (newTab) => {
   if (newTab === 'stats' && props.callsign && !stats.value && !statsLoading.value) {
     fetchStats()
   }
-  if (newTab === 'signal' && props.callsign && signalPoints.value.length === 0 && !signalLoading.value) {
+  if (
+    newTab === 'signal' &&
+    props.callsign &&
+    signalPoints.value.length === 0 &&
+    !signalLoading.value
+  ) {
     fetchSignal()
   }
 })
@@ -674,6 +722,14 @@ watch(tab, (newTab) => {
           title="Toggle watch list"
           @click="toggleWatchStatus"
         />
+        <v-btn
+          v-if="props.showPageLink && callsign"
+          icon="mdi-open-in-new"
+          variant="text"
+          size="small"
+          title="Open station page"
+          :to="`/stations/${encodeURIComponent(callsign)}`"
+        />
         <v-btn icon="mdi-close" variant="text" size="small" @click="emit('close')" />
       </div>
     </div>
@@ -700,356 +756,402 @@ watch(tab, (newTab) => {
       </nav>
 
       <div class="panel-body" role="tabpanel">
-      <v-progress-linear v-if="loading" indeterminate color="primary" />
+        <v-progress-linear v-if="loading" indeterminate color="primary" />
 
-      <!-- Info tab -->
-      <template v-if="tab === 'info' && station">
-        <div class="info-section">
-          <template v-if="station.status">
-            <div class="info-label">Status</div>
-            <div class="info-value">{{ station.status }}</div>
-          </template>
-
-          <div class="info-label">First Seen</div>
-          <div class="info-value" :title="formatUtc(station.firstSeen)">
-            {{ timeAgo(station.firstSeen, now) }}
-          </div>
-
-          <div class="info-label">Last Seen</div>
-          <div class="info-value" :title="formatUtc(station.lastSeen)">
-            {{ timeAgo(station.lastSeen, now) }}
-          </div>
-
-          <template v-if="heardViaLabel">
-            <div class="info-label">Heard Via</div>
-            <div class="info-value">
-              <v-chip :color="heardViaColor" size="x-small" label>{{ heardViaLabel }}</v-chip>
-            </div>
-          </template>
-
-          <template v-if="station.lastLat != null && station.lastLon != null">
-            <div class="info-label">Coordinates</div>
-            <div class="info-value">
-              {{ station.lastLat.toFixed(5) }}, {{ station.lastLon.toFixed(5) }}
-              <a
-                :href="osmLink(station.lastLat, station.lastLon)"
-                target="_blank"
-                rel="noopener"
-                class="osm-link ml-1"
-              >
-                <v-icon size="12">mdi-open-in-new</v-icon> OSM
-              </a>
-            </div>
-          </template>
-
-          <template v-if="station.lastSpeed != null">
-            <div class="info-label">Speed</div>
-            <div class="info-value">{{ station.lastSpeed.toFixed(1) }} kn</div>
-          </template>
-
-          <template v-if="station.lastHeading != null">
-            <div class="info-label">Heading</div>
-            <div class="info-value">
-              {{ station.lastHeading }}° {{ compassDir(station.lastHeading) }}
-            </div>
-          </template>
-
-          <template v-if="station.lastAltitude != null">
-            <div class="info-label">Altitude</div>
-            <div class="info-value">{{ Math.round(station.lastAltitude).toLocaleString() }} ft</div>
-          </template>
-
-          <template v-if="station.gridSquare">
-            <div class="info-label">Grid Square</div>
-            <div class="info-value">{{ station.gridSquare }}</div>
-          </template>
-
-          <template v-if="station.lastMode">
-            <div class="info-label">Mode</div>
-            <div class="info-value">{{ station.lastMode }}</div>
-          </template>
-
-          <template v-if="station.lastFrequencyMhz">
-            <div class="info-label">Frequency</div>
-            <div class="info-value">{{ station.lastFrequencyMhz }} MHz</div>
-          </template>
-        </div>
-
-        <!-- Operator lookup section -->
-        <div class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium">
-          OPERATOR LOOKUP
-        </div>
-
-        <template v-if="lookupData">
+        <!-- Info tab -->
+        <template v-if="tab === 'info' && station">
           <div class="info-section">
-            <template v-if="lookupData.name">
-              <div class="info-label">Name</div>
-              <div class="info-value">{{ lookupData.name }}</div>
+            <template v-if="station.status">
+              <div class="info-label">Status</div>
+              <div class="info-value">{{ station.status }}</div>
             </template>
-            <template v-if="lookupData.city || lookupData.state">
-              <div class="info-label">Location</div>
+
+            <div class="info-label">First Seen</div>
+            <div class="info-value" :title="formatUtc(station.firstSeen)">
+              {{ timeAgo(station.firstSeen, now) }}
+            </div>
+
+            <div class="info-label">Last Seen</div>
+            <div class="info-value" :title="formatUtc(station.lastSeen)">
+              {{ timeAgo(station.lastSeen, now) }}
+            </div>
+
+            <template v-if="heardViaLabel">
+              <div class="info-label">Heard Via</div>
               <div class="info-value">
-                {{ [lookupData.city, lookupData.state].filter(Boolean).join(', ') }}
+                <v-chip :color="heardViaColor" size="x-small" label>{{ heardViaLabel }}</v-chip>
               </div>
             </template>
-            <template v-if="lookupData.licenseClass">
-              <div class="info-label">License</div>
-              <div class="info-value">{{ lookupData.licenseClass }}</div>
+
+            <template v-if="station.lastLat != null && station.lastLon != null">
+              <div class="info-label">Coordinates</div>
+              <div class="info-value">
+                {{ station.lastLat.toFixed(5) }}, {{ station.lastLon.toFixed(5) }}
+                <a
+                  :href="osmLink(station.lastLat, station.lastLon)"
+                  target="_blank"
+                  rel="noopener"
+                  class="osm-link ml-1"
+                >
+                  <v-icon size="12">mdi-open-in-new</v-icon> OSM
+                </a>
+              </div>
             </template>
-            <template v-if="lookupData.gridSquare">
-              <div class="info-label">Grid</div>
-              <div class="info-value">{{ lookupData.gridSquare }}</div>
+
+            <template v-if="station.lastSpeed != null">
+              <div class="info-label">Speed</div>
+              <div class="info-value">{{ station.lastSpeed.toFixed(1) }} kn</div>
+            </template>
+
+            <template v-if="station.lastHeading != null">
+              <div class="info-label">Heading</div>
+              <div class="info-value">
+                {{ station.lastHeading }}° {{ compassDir(station.lastHeading) }}
+              </div>
+            </template>
+
+            <template v-if="station.lastAltitude != null">
+              <div class="info-label">Altitude</div>
+              <div class="info-value">
+                {{ Math.round(station.lastAltitude).toLocaleString() }} ft
+              </div>
+            </template>
+
+            <template v-if="station.gridSquare">
+              <div class="info-label">Grid Square</div>
+              <div class="info-value">{{ station.gridSquare }}</div>
+            </template>
+
+            <template v-if="station.lastMode">
+              <div class="info-label">Mode</div>
+              <div class="info-value">{{ station.lastMode }}</div>
+            </template>
+
+            <template v-if="station.lastFrequencyMhz">
+              <div class="info-label">Frequency</div>
+              <div class="info-value">{{ station.lastFrequencyMhz }} MHz</div>
             </template>
           </div>
-        </template>
 
-        <template v-else-if="lookupFailed">
-          <div class="px-3 pb-3 text-caption text-medium-emphasis">No record found</div>
-        </template>
-
-        <template v-else>
-          <div class="px-3 pb-3">
-            <v-btn
-              size="x-small"
-              variant="tonal"
-              color="primary"
-              :loading="lookupLoading"
-              prepend-icon="mdi-magnify"
-              @click="performLookup"
-            >
-              Lookup callsign
-            </v-btn>
-          </div>
-        </template>
-      </template>
-      <template v-else-if="tab === 'info' && !loading">
-        <div class="text-center text-medium-emphasis py-4">No data</div>
-      </template>
-
-      <!-- Packets tab -->
-      <template v-if="tab === 'packets'">
-        <v-progress-linear v-if="packetsLoading" indeterminate color="primary" />
-        <div v-if="packets.length === 0 && !packetsLoading" class="text-center text-medium-emphasis py-4">
-          No packets
-        </div>
-        <div v-for="p in packets" :key="p.id" class="packet-row" @click="onPacketRowClick(p)">
-          <div class="d-flex align-center ga-2">
-            <v-chip :color="packetTypeColor(p.parsedType)" size="x-small" label>
-              {{ packetTypeName(p.parsedType) }}
-            </v-chip>
-            <span
-              class="heard-via-dot"
-              :class="p.isDirectHeard ? 'heard-via-dot--direct' : 'heard-via-dot--digi'"
-              :title="p.isDirectHeard ? 'Direct' : 'Via Digi'"
-            />
-            <span class="text-caption text-medium-emphasis flex-shrink-0" :title="formatUtc(p.receivedAt)">
-              {{ timeAgo(p.receivedAt, now) }}
-            </span>
-          </div>
-          <div v-if="p.comment" class="text-body-2 text-truncate mt-1">{{ p.comment }}</div>
-          <div v-if="p.latitude != null" class="text-caption text-medium-emphasis">
-            {{ p.latitude.toFixed(4) }}, {{ p.longitude!.toFixed(4) }}
-            <v-icon v-if="p.latitude != null" size="10" color="primary">mdi-crosshairs-gps</v-icon>
-          </div>
+          <!-- Operator lookup section -->
           <div
-            v-if="p.signalData && (p.signalData.decodeQuality != null || p.signalData.frequencyOffsetHz != null)"
-            class="text-caption text-medium-emphasis mt-1"
+            class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
           >
-            <span v-if="p.signalData.decodeQuality != null">Q: {{ p.signalData.decodeQuality }}</span>
-            <span v-if="p.signalData.decodeQuality != null && p.signalData.frequencyOffsetHz != null">, </span>
-            <span v-if="p.signalData.frequencyOffsetHz != null">
-              Δf: {{ p.signalData.frequencyOffsetHz > 0 ? '+' : '' }}{{ p.signalData.frequencyOffsetHz.toFixed(0) }}Hz
-            </span>
-          </div>
-        </div>
-        <!-- Pagination -->
-        <div v-if="totalPages > 1" class="d-flex align-center justify-center ga-1 pa-2">
-          <v-btn
-            icon="mdi-chevron-left"
-            size="x-small"
-            variant="text"
-            :disabled="packetPage <= 1"
-            @click="packetPage--"
-          />
-          <span class="text-caption">{{ packetPage }} / {{ totalPages }}</span>
-          <v-btn
-            icon="mdi-chevron-right"
-            size="x-small"
-            variant="text"
-            :disabled="packetPage >= totalPages"
-            @click="packetPage++"
-          />
-        </div>
-      </template>
-
-      <!-- Stats tab -->
-      <template v-if="tab === 'stats'">
-        <v-progress-linear v-if="statsLoading" indeterminate color="primary" />
-        <template v-if="stats && !statsLoading">
-          <div class="info-section">
-            <div class="info-label">Packets today</div>
-            <div class="info-value">{{ stats.packetsToday.toLocaleString() }}</div>
-
-            <div class="info-label">All time</div>
-            <div class="info-value">{{ stats.packetsAllTime.toLocaleString() }}</div>
-
-            <div class="info-label">Avg / hour</div>
-            <div class="info-value">{{ stats.averagePacketsPerHour.toFixed(2) }}</div>
-
-            <div class="info-label">Longest gap</div>
-            <div class="info-value">{{ formatGap(stats.longestGapMinutes) }}</div>
+            OPERATOR LOOKUP
           </div>
 
-          <div class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium">
-            PACKETS PER HOUR (LAST 24H)
-          </div>
-          <div class="bar-wrap px-3 pb-3">
-            <Bar :data="hourBarData" :options="hourBarOptions" />
-          </div>
-        </template>
-        <div v-else-if="!statsLoading" class="text-center text-medium-emphasis py-4">
-          No statistics available
-        </div>
-      </template>
-
-      <!-- Signal tab -->
-      <template v-if="tab === 'signal'">
-        <v-progress-linear v-if="signalLoading" indeterminate color="green" />
-
-        <template v-if="!signalLoading && signalPoints.length === 0">
-          <div class="px-3 py-4 text-caption text-medium-emphasis">
-            Direwolf did not provide signal metadata for this station. Signal quality and
-            frequency offset data are not available via the KISS TCP interface.
-          </div>
-        </template>
-
-        <template v-if="!signalLoading && signalPoints.length > 0">
-          <template v-if="latestSignal">
-            <div class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium">
-              MOST RECENT
-            </div>
+          <template v-if="lookupData">
             <div class="info-section">
-              <template v-if="latestSignal.decodeQuality != null">
-                <div class="info-label">Decode quality</div>
-                <div class="info-value">{{ latestSignal.decodeQuality }}</div>
+              <template v-if="lookupData.name">
+                <div class="info-label">Name</div>
+                <div class="info-value">{{ lookupData.name }}</div>
               </template>
-              <template v-if="latestSignal.frequencyOffsetHz != null">
-                <div class="info-label">Freq offset</div>
+              <template v-if="lookupData.city || lookupData.state">
+                <div class="info-label">Location</div>
                 <div class="info-value">
-                  {{ latestSignal.frequencyOffsetHz > 0 ? '+' : '' }}{{ latestSignal.frequencyOffsetHz.toFixed(1) }} Hz
+                  {{ [lookupData.city, lookupData.state].filter(Boolean).join(', ') }}
                 </div>
               </template>
+              <template v-if="lookupData.licenseClass">
+                <div class="info-label">License</div>
+                <div class="info-value">{{ lookupData.licenseClass }}</div>
+              </template>
+              <template v-if="lookupData.gridSquare">
+                <div class="info-label">Grid</div>
+                <div class="info-value">{{ lookupData.gridSquare }}</div>
+              </template>
             </div>
           </template>
 
-          <template v-if="hasDecodeQualityData">
-            <div class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium">
-              DECODE QUALITY ({{ signalPoints.length }} packets)
-            </div>
-            <div class="signal-chart-wrap px-3 pb-3">
-              <Line :data="signalChartData" :options="signalChartOptions" />
+          <template v-else-if="lookupFailed">
+            <div class="px-3 pb-3 text-caption text-medium-emphasis">No record found</div>
+          </template>
+
+          <template v-else>
+            <div class="px-3 pb-3">
+              <v-btn
+                size="x-small"
+                variant="tonal"
+                color="primary"
+                :loading="lookupLoading"
+                prepend-icon="mdi-magnify"
+                @click="performLookup"
+              >
+                Lookup callsign
+              </v-btn>
             </div>
           </template>
         </template>
-      </template>
+        <template v-else-if="tab === 'info' && !loading">
+          <div class="text-center text-medium-emphasis py-4">No data</div>
+        </template>
 
-      <!-- Weather tab -->
-      <template v-if="tab === 'weather'">
-        <v-progress-linear v-if="weatherLoading" indeterminate color="teal" />
-
-        <div v-if="!weatherLoading && weatherReadings.length === 0" class="text-center text-medium-emphasis py-4">
-          No weather data
-        </div>
-
-        <template v-if="currentWeather">
-          <!-- Current conditions -->
-          <div class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium">
-            CURRENT CONDITIONS
+        <!-- Packets tab -->
+        <template v-if="tab === 'packets'">
+          <v-progress-linear v-if="packetsLoading" indeterminate color="primary" />
+          <div
+            v-if="packets.length === 0 && !packetsLoading"
+            class="text-center text-medium-emphasis py-4"
+          >
+            No packets
           </div>
-
-          <div class="info-section">
-            <template v-if="tempF != null">
-              <div class="info-label">Temperature</div>
-              <div class="info-value">
-                {{ tempF.toFixed(1) }}°F
-                <span v-if="tempC != null" class="text-medium-emphasis ml-1">({{ tempC }}°C)</span>
-              </div>
-            </template>
-
-            <template v-if="currentWeather.humidity != null">
-              <div class="info-label">Humidity</div>
-              <div class="info-value">{{ currentWeather.humidity }}%</div>
-            </template>
-
-            <template v-if="currentWeather.windSpeed != null || currentWeather.windDirection != null">
-              <div class="info-label">Wind</div>
-              <div class="info-value d-flex align-center ga-1">
-                <template v-if="currentWeather.windDirection != null">
-                  <v-icon
-                    size="16"
-                    :style="{ transform: `rotate(${currentWeather.windDirection}deg)`, display: 'inline-block' }"
-                  >
-                    mdi-arrow-up
-                  </v-icon>
-                  <span>{{ compassDir(currentWeather.windDirection) }}</span>
-                </template>
-                <span v-if="currentWeather.windSpeed != null">
-                  {{ currentWeather.windSpeed.toFixed(1) }} mph
-                </span>
-              </div>
-            </template>
-
-            <template v-if="currentWeather.windGust != null">
-              <div class="info-label">Gust</div>
-              <div class="info-value">{{ currentWeather.windGust.toFixed(1) }} mph</div>
-            </template>
-
-            <template v-if="currentWeather.pressure != null">
-              <div class="info-label">Pressure</div>
-              <div class="info-value">{{ currentWeather.pressure.toFixed(1) }} mb</div>
-            </template>
-
-            <template v-if="currentWeather.rainLastHour != null">
-              <div class="info-label">Rain 1h</div>
-              <div class="info-value">{{ currentWeather.rainLastHour.toFixed(2) }}"</div>
-            </template>
-
-            <template v-if="currentWeather.rainLast24h != null">
-              <div class="info-label">Rain 24h</div>
-              <div class="info-value">{{ currentWeather.rainLast24h.toFixed(2) }}"</div>
-            </template>
-
-            <template v-if="currentWeather.rainSinceMidnight != null">
-              <div class="info-label">Rain today</div>
-              <div class="info-value">{{ currentWeather.rainSinceMidnight.toFixed(2) }}"</div>
-            </template>
-          </div>
-
-          <!-- History chart -->
-          <div class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium">
-            HISTORY
-          </div>
-          <div class="d-flex justify-center px-3 pb-2">
-            <v-btn-toggle
-              v-model="weatherRange"
-              density="compact"
-              variant="outlined"
-              mandatory
-              color="primary"
+          <div v-for="p in packets" :key="p.id" class="packet-row" @click="onPacketRowClick(p)">
+            <div class="d-flex align-center ga-2">
+              <v-chip :color="packetTypeColor(p.parsedType)" size="x-small" label>
+                {{ packetTypeName(p.parsedType) }}
+              </v-chip>
+              <span
+                class="heard-via-dot"
+                :class="p.isDirectHeard ? 'heard-via-dot--direct' : 'heard-via-dot--digi'"
+                :title="p.isDirectHeard ? 'Direct' : 'Via Digi'"
+              />
+              <span
+                class="text-caption text-medium-emphasis flex-shrink-0"
+                :title="formatUtc(p.receivedAt)"
+              >
+                {{ timeAgo(p.receivedAt, now) }}
+              </span>
+            </div>
+            <div v-if="p.comment" class="text-body-2 text-truncate mt-1">{{ p.comment }}</div>
+            <div v-if="p.latitude != null" class="text-caption text-medium-emphasis">
+              {{ p.latitude.toFixed(4) }}, {{ p.longitude!.toFixed(4) }}
+              <v-icon v-if="p.latitude != null" size="10" color="primary"
+                >mdi-crosshairs-gps</v-icon
+              >
+            </div>
+            <div
+              v-if="
+                p.signalData &&
+                (p.signalData.decodeQuality != null || p.signalData.frequencyOffsetHz != null)
+              "
+              class="text-caption text-medium-emphasis mt-1"
             >
-              <v-btn value="24h" size="small">24 h</v-btn>
-              <v-btn value="7d" size="small">7 d</v-btn>
-            </v-btn-toggle>
+              <span v-if="p.signalData.decodeQuality != null"
+                >Q: {{ p.signalData.decodeQuality }}</span
+              >
+              <span
+                v-if="p.signalData.decodeQuality != null && p.signalData.frequencyOffsetHz != null"
+                >,
+              </span>
+              <span v-if="p.signalData.frequencyOffsetHz != null">
+                Δf: {{ p.signalData.frequencyOffsetHz > 0 ? '+' : ''
+                }}{{ p.signalData.frequencyOffsetHz.toFixed(0) }}Hz
+              </span>
+            </div>
           </div>
-          <div v-if="hasWeatherChartData" class="wx-chart-wrap px-3 pb-3">
-            <Line :data="weatherChartData" :options="weatherChartOptions" :plugins="[crosshairPlugin]" />
-          </div>
-          <div v-else-if="!weatherLoading" class="text-caption text-medium-emphasis px-3 pb-3">
-            No chart data for this range
+          <!-- Pagination -->
+          <div v-if="totalPages > 1" class="d-flex align-center justify-center ga-1 pa-2">
+            <v-btn
+              icon="mdi-chevron-left"
+              size="x-small"
+              variant="text"
+              :disabled="packetPage <= 1"
+              @click="packetPage--"
+            />
+            <span class="text-caption">{{ packetPage }} / {{ totalPages }}</span>
+            <v-btn
+              icon="mdi-chevron-right"
+              size="x-small"
+              variant="text"
+              :disabled="packetPage >= totalPages"
+              @click="packetPage++"
+            />
           </div>
         </template>
-      </template>
-    </div>
+
+        <!-- Stats tab -->
+        <template v-if="tab === 'stats'">
+          <v-progress-linear v-if="statsLoading" indeterminate color="primary" />
+          <template v-if="stats && !statsLoading">
+            <div class="info-section">
+              <div class="info-label">Packets today</div>
+              <div class="info-value">{{ stats.packetsToday.toLocaleString() }}</div>
+
+              <div class="info-label">All time</div>
+              <div class="info-value">{{ stats.packetsAllTime.toLocaleString() }}</div>
+
+              <div class="info-label">Avg / hour</div>
+              <div class="info-value">{{ stats.averagePacketsPerHour.toFixed(2) }}</div>
+
+              <div class="info-label">Longest gap</div>
+              <div class="info-value">{{ formatGap(stats.longestGapMinutes) }}</div>
+            </div>
+
+            <div
+              class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
+            >
+              PACKETS PER HOUR (LAST 24H)
+            </div>
+            <div class="bar-wrap px-3 pb-3">
+              <Bar :data="hourBarData" :options="hourBarOptions" />
+            </div>
+          </template>
+          <div v-else-if="!statsLoading" class="text-center text-medium-emphasis py-4">
+            No statistics available
+          </div>
+        </template>
+
+        <!-- Signal tab -->
+        <template v-if="tab === 'signal'">
+          <v-progress-linear v-if="signalLoading" indeterminate color="green" />
+
+          <template v-if="!signalLoading && signalPoints.length === 0">
+            <div class="px-3 py-4 text-caption text-medium-emphasis">
+              Direwolf did not provide signal metadata for this station. Signal quality and
+              frequency offset data are not available via the KISS TCP interface.
+            </div>
+          </template>
+
+          <template v-if="!signalLoading && signalPoints.length > 0">
+            <template v-if="latestSignal">
+              <div
+                class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium"
+              >
+                MOST RECENT
+              </div>
+              <div class="info-section">
+                <template v-if="latestSignal.decodeQuality != null">
+                  <div class="info-label">Decode quality</div>
+                  <div class="info-value">{{ latestSignal.decodeQuality }}</div>
+                </template>
+                <template v-if="latestSignal.frequencyOffsetHz != null">
+                  <div class="info-label">Freq offset</div>
+                  <div class="info-value">
+                    {{ latestSignal.frequencyOffsetHz > 0 ? '+' : ''
+                    }}{{ latestSignal.frequencyOffsetHz.toFixed(1) }} Hz
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <template v-if="hasDecodeQualityData">
+              <div
+                class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
+              >
+                DECODE QUALITY ({{ signalPoints.length }} packets)
+              </div>
+              <div class="signal-chart-wrap px-3 pb-3">
+                <Line :data="signalChartData" :options="signalChartOptions" />
+              </div>
+            </template>
+          </template>
+        </template>
+
+        <!-- Weather tab -->
+        <template v-if="tab === 'weather'">
+          <v-progress-linear v-if="weatherLoading" indeterminate color="teal" />
+
+          <div
+            v-if="!weatherLoading && weatherReadings.length === 0"
+            class="text-center text-medium-emphasis py-4"
+          >
+            No weather data
+          </div>
+
+          <template v-if="currentWeather">
+            <!-- Current conditions -->
+            <div
+              class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium"
+            >
+              CURRENT CONDITIONS
+            </div>
+
+            <div class="info-section">
+              <template v-if="tempF != null">
+                <div class="info-label">Temperature</div>
+                <div class="info-value">
+                  {{ tempF.toFixed(1) }}°F
+                  <span v-if="tempC != null" class="text-medium-emphasis ml-1"
+                    >({{ tempC }}°C)</span
+                  >
+                </div>
+              </template>
+
+              <template v-if="currentWeather.humidity != null">
+                <div class="info-label">Humidity</div>
+                <div class="info-value">{{ currentWeather.humidity }}%</div>
+              </template>
+
+              <template
+                v-if="currentWeather.windSpeed != null || currentWeather.windDirection != null"
+              >
+                <div class="info-label">Wind</div>
+                <div class="info-value d-flex align-center ga-1">
+                  <template v-if="currentWeather.windDirection != null">
+                    <v-icon
+                      size="16"
+                      :style="{
+                        transform: `rotate(${currentWeather.windDirection}deg)`,
+                        display: 'inline-block',
+                      }"
+                    >
+                      mdi-arrow-up
+                    </v-icon>
+                    <span>{{ compassDir(currentWeather.windDirection) }}</span>
+                  </template>
+                  <span v-if="currentWeather.windSpeed != null">
+                    {{ currentWeather.windSpeed.toFixed(1) }} mph
+                  </span>
+                </div>
+              </template>
+
+              <template v-if="currentWeather.windGust != null">
+                <div class="info-label">Gust</div>
+                <div class="info-value">{{ currentWeather.windGust.toFixed(1) }} mph</div>
+              </template>
+
+              <template v-if="currentWeather.pressure != null">
+                <div class="info-label">Pressure</div>
+                <div class="info-value">{{ currentWeather.pressure.toFixed(1) }} mb</div>
+              </template>
+
+              <template v-if="currentWeather.rainLastHour != null">
+                <div class="info-label">Rain 1h</div>
+                <div class="info-value">{{ currentWeather.rainLastHour.toFixed(2) }}"</div>
+              </template>
+
+              <template v-if="currentWeather.rainLast24h != null">
+                <div class="info-label">Rain 24h</div>
+                <div class="info-value">{{ currentWeather.rainLast24h.toFixed(2) }}"</div>
+              </template>
+
+              <template v-if="currentWeather.rainSinceMidnight != null">
+                <div class="info-label">Rain today</div>
+                <div class="info-value">{{ currentWeather.rainSinceMidnight.toFixed(2) }}"</div>
+              </template>
+            </div>
+
+            <!-- History chart -->
+            <div
+              class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
+            >
+              HISTORY
+            </div>
+            <div class="d-flex justify-center px-3 pb-2">
+              <v-btn-toggle
+                v-model="weatherRange"
+                density="compact"
+                variant="outlined"
+                mandatory
+                color="primary"
+              >
+                <v-btn value="24h" size="small">24 h</v-btn>
+                <v-btn value="7d" size="small">7 d</v-btn>
+              </v-btn-toggle>
+            </div>
+            <div v-if="hasWeatherChartData" class="wx-chart-wrap px-3 pb-3">
+              <Line
+                :data="weatherChartData"
+                :options="weatherChartOptions"
+                :plugins="[crosshairPlugin]"
+              />
+            </div>
+            <div v-else-if="!weatherLoading" class="text-caption text-medium-emphasis px-3 pb-3">
+              No chart data for this range
+            </div>
+          </template>
+        </template>
+      </div>
     </div>
 
     <PacketInspectionDialog
@@ -1110,7 +1212,9 @@ watch(tab, (newTab) => {
   cursor: pointer;
   padding: 8px 4px;
   color: rgba(var(--v-theme-on-surface), 0.55);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   outline: none;
   box-sizing: border-box;
 }

@@ -9,7 +9,12 @@ export function timeAgo(isoDate: string, now = serverNow()): string {
 }
 
 export function formatUtc(isoDate: string): string {
-  return new Date(isoDate).toLocaleString()
+  return `${new Date(isoDate).toISOString().slice(0, 19).replace('T', ' ')}Z`
+}
+
+/** Time-of-day only, UTC — for tight columns where the date is implied. */
+export function formatUtcTime(isoDate: string): string {
+  return `${new Date(isoDate).toISOString().slice(11, 19)}Z`
 }
 
 const COMPASS_DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
@@ -19,8 +24,22 @@ export function compassDir(degrees: number): string {
 }
 
 const COMPASS_DIRS_16 = [
-  'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
-  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW',
+  'N',
+  'NNE',
+  'NE',
+  'ENE',
+  'E',
+  'ESE',
+  'SE',
+  'SSE',
+  'S',
+  'SSW',
+  'SW',
+  'WSW',
+  'W',
+  'WNW',
+  'NW',
+  'NNW',
 ] as const
 
 export function compassDir16(degrees: number): string {

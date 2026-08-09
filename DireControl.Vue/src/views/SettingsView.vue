@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import L from 'leaflet'
 import {
@@ -24,6 +24,7 @@ import {
   getSettings,
   updateOutboundPath,
   updateAprsIsSettings,
+  updateStationIdentity,
   updateWeatherApiKeys,
   RadarProvider,
 } from '@/api/stationsApi'
@@ -39,7 +40,10 @@ import {
   getMaintenanceStatus,
   updateRetention,
   runCleanup,
+  getReprocessStatus,
+  startReprocess,
   type CleanupResult,
+  type ReprocessStatusDto,
 } from '@/api/maintenanceApi'
 import type { SettingsDto } from '@/types/station'
 import { useUnits } from '@/composables/useUnits'
@@ -266,6 +270,10 @@ const radios = ref<RadioDto[]>([])
 const radioDialogOpen = ref(false)
 const editingRadioId = ref<string | null>(null)
 const radioSaving = ref(false)
+const radioSaveError = ref('')
+const radioFormDirty = ref(false)
+const showTxTiming = ref(false)
+let suppressRadioDirty = false
 
 const rName = ref('')
 const rCallsign = ref('')
@@ -281,6 +289,42 @@ const rBeaconComment = ref('')
 const rFrequencyMhz = ref<number | null>(null)
 const rMode = ref('')
 const rModem = ref<RadioModemConfig>(defaultRadioModemConfig())
+
+// Any edit flips the dirty flag so the save bar can say "unsaved changes";
+// suppressed while openAdd/openEdit seed the form.
+watch(
+  [
+    rName,
+    rCallsign,
+    rSsid,
+    rChannel,
+    rExpectedInterval,
+    rAutoBeaconEnabled,
+    rAutoBeaconInterval,
+    rNotes,
+    rBeaconPath,
+    rBeaconSymbol,
+    rBeaconComment,
+    rFrequencyMhz,
+    rMode,
+    rModem,
+  ],
+  () => {
+    if (!suppressRadioDirty) radioFormDirty.value = true
+  },
+  { deep: true },
+)
+
+function seedRadioFormDone() {
+  radioSaveError.value = ''
+  radioFormDirty.value = false
+  showTxTiming.value = false
+  radioDialogOpen.value = true
+  void nextTick(() => {
+    suppressRadioDirty = false
+    radioFormDirty.value = false
+  })
+}
 
 const autoBeaconError = computed(() =>
   rAutoBeaconEnabled.value && rAutoBeaconInterval.value < 60
@@ -327,6 +371,7 @@ async function loadRadios() {
 }
 
 function openAddRadio() {
+  suppressRadioDirty = true
   editingRadioId.value = null
   rName.value = ''
   rCallsign.value = ''
@@ -342,10 +387,11 @@ function openAddRadio() {
   rFrequencyMhz.value = null
   rMode.value = ''
   rModem.value = defaultRadioModemConfig()
-  radioDialogOpen.value = true
+  seedRadioFormDone()
 }
 
 function openEditRadio(radio: RadioDto) {
+  suppressRadioDirty = true
   editingRadioId.value = radio.id
   rName.value = radio.name
   rCallsign.value = radio.callsign
@@ -361,12 +407,13 @@ function openEditRadio(radio: RadioDto) {
   rFrequencyMhz.value = radio.frequencyMhz
   rMode.value = radio.mode ?? ''
   rModem.value = { ...radio.modem }
-  radioDialogOpen.value = true
+  seedRadioFormDone()
 }
 
 async function saveRadio() {
   if (!radioFormValid.value || ssidError.value) return
   radioSaving.value = true
+  radioSaveError.value = ''
   const payload = {
     name: rName.value.trim(),
     callsign: rCallsign.value.trim().toUpperCase(),
@@ -399,22 +446,45 @@ async function saveRadio() {
       radios.value.push(created)
     }
     radioDialogOpen.value = false
+  } catch (e: unknown) {
+    // Keep the dialog open and say why — a silent failure looks like a frozen save.
+    const detail = (e as { response?: { data?: unknown } })?.response?.data
+    radioSaveError.value =
+      typeof detail === 'string' && detail
+        ? detail
+        : 'Failed to save the radio — check the values and that the backend is reachable.'
   } finally {
     radioSaving.value = false
   }
 }
 
 async function toggleActive(id: string) {
-  const updated = await toggleRadioActive(id)
-  const idx = radios.value.findIndex((r) => r.id === id)
-  if (idx !== -1) radios.value[idx] = updated
+  try {
+    const updated = await toggleRadioActive(id)
+    const idx = radios.value.findIndex((r) => r.id === id)
+    if (idx !== -1) radios.value[idx] = updated
+  } catch {
+    const radio = radios.value.find((r) => r.id === id)
+    showToast(
+      `Couldn't ${radio?.isActive ? 'deactivate' : 'activate'} ${radio?.fullCallsign ?? 'radio'} — the backend may be unreachable.`,
+      'error',
+    )
+  }
+}
+
+// ─── Toast (shared across tabs) ───────────────────────────────────────────────
+const beaconToast = ref(false)
+const beaconToastText = ref('')
+const beaconToastColor = ref<'success' | 'error'>('success')
+
+function showToast(text: string, color: 'success' | 'error') {
+  beaconToastColor.value = color
+  beaconToastText.value = text
+  beaconToast.value = true
 }
 
 // ─── Beacon now ───────────────────────────────────────────────────────────────
 const beaconing = ref<Record<string, boolean>>({})
-const beaconToast = ref(false)
-const beaconToastText = ref('')
-const beaconToastColor = ref<'success' | 'error'>('success')
 
 async function doBeaconNow(radio: RadioDto) {
   beaconing.value[radio.id] = true
@@ -553,6 +623,108 @@ let mapMarker: L.Marker | null = null
 let mapCircle: L.Circle | null = null
 let pickingFor: 'geofence' | 'rule' | null = null
 
+// ─── Station identity (callsign + home position) ──────────────────────────────
+const stationCallsign = ref('')
+const homeLatText = ref('')
+const homeLonText = ref('')
+const stationSaving = ref(false)
+const stationSaved = ref(false)
+const stationSaveError = ref('')
+
+let stationHomeMap: L.Map | null = null
+let stationHomeMarker: L.Marker | null = null
+
+const CALLSIGN_REGEX = /^[A-Z0-9]{1,6}(-(\d|1[0-5]))?$/
+
+const stationCallsignError = computed(() => {
+  const cs = stationCallsign.value.trim().toUpperCase()
+  if (!cs) return 'Callsign is required'
+  return CALLSIGN_REGEX.test(cs) ? '' : 'Use BASE or BASE-SSID, e.g. W3UWU or W3UWU-10'
+})
+
+function parsedHome(): { lat: number; lon: number } | null {
+  const lat = Number.parseFloat(homeLatText.value)
+  const lon = Number.parseFloat(homeLonText.value)
+  if (Number.isNaN(lat) || Number.isNaN(lon)) return null
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null
+  return { lat, lon }
+}
+
+function setHomeFromMap(lat: number, lon: number) {
+  homeLatText.value = lat.toFixed(6)
+  homeLonText.value = lon.toFixed(6)
+  syncHomeMarker()
+}
+
+function syncHomeMarker() {
+  if (!stationHomeMap) return
+  const pos = parsedHome()
+  if (!pos) return
+  if (stationHomeMarker) {
+    stationHomeMarker.setLatLng([pos.lat, pos.lon])
+  } else {
+    stationHomeMarker = L.marker([pos.lat, pos.lon]).addTo(stationHomeMap)
+  }
+  stationHomeMap.panTo([pos.lat, pos.lon])
+}
+
+function initStationHomeMap() {
+  const el = document.getElementById('station-home-map')
+  if (!el) return
+  if (stationHomeMap) {
+    stationHomeMap.invalidateSize()
+    return
+  }
+  const pos = parsedHome()
+  stationHomeMap = L.map(el).setView(pos ? [pos.lat, pos.lon] : [39.0, -98.0], pos ? 11 : 4)
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(stationHomeMap)
+  stationHomeMap.on('click', (e: L.LeafletMouseEvent) => {
+    setHomeFromMap(e.latlng.lat, e.latlng.lng)
+  })
+  if (pos) syncHomeMarker()
+}
+
+watch(
+  activeTab,
+  (tab) => {
+    if (tab === 'station') {
+      // The map container only exists once the tab's DOM is rendered.
+      setTimeout(initStationHomeMap, 50)
+    }
+  },
+  { immediate: true },
+)
+
+async function saveStationIdentity() {
+  if (stationCallsignError.value) return
+  const hasLatText = homeLatText.value.trim() !== '' || homeLonText.value.trim() !== ''
+  const pos = parsedHome()
+  if (hasLatText && !pos) {
+    stationSaveError.value =
+      'Home position must be a valid latitude (−90…90) and longitude (−180…180) pair.'
+    return
+  }
+  stationSaving.value = true
+  stationSaveError.value = ''
+  try {
+    await updateStationIdentity({
+      callsign: stationCallsign.value.trim().toUpperCase(),
+      homeLat: pos?.lat ?? null,
+      homeLon: pos?.lon ?? null,
+    })
+    stationSaved.value = true
+    setTimeout(() => (stationSaved.value = false), 2500)
+    syncHomeMarker()
+  } catch {
+    stationSaveError.value = 'Save failed — check the values and that the backend is reachable.'
+  } finally {
+    stationSaving.value = false
+  }
+}
+
 // ─── Database maintenance ─────────────────────────────────────────────────────
 const dbSizeBytes = ref(0)
 const cleanupIntervalHours = ref(0)
@@ -633,13 +805,71 @@ function stopCleanupPolling() {
   }
 }
 
+// ─── Packet reprocessing ──────────────────────────────────────────────────────
+const reprocessStatus = ref<ReprocessStatusDto | null>(null)
+const reprocessStarting = ref(false)
+const reprocessForce = ref(false)
+let reprocessPollTimer: ReturnType<typeof setInterval> | null = null
+
+async function loadReprocess() {
+  try {
+    reprocessStatus.value = await getReprocessStatus()
+    if (reprocessStatus.value.isRunning) startReprocessPolling()
+    else stopReprocessPolling()
+  } catch {
+    /* card shows last known state; maintenance load error is surfaced elsewhere */
+  }
+}
+
+function startReprocessPolling() {
+  if (reprocessPollTimer) return
+  reprocessPollTimer = setInterval(loadReprocess, 1500)
+}
+
+function stopReprocessPolling() {
+  if (reprocessPollTimer) {
+    clearInterval(reprocessPollTimer)
+    reprocessPollTimer = null
+  }
+}
+
+const reprocessProgressPercent = computed(() => {
+  const s = reprocessStatus.value
+  if (!s || !s.isRunning || s.total === 0) return null
+  return Math.min(100, (s.processed / s.total) * 100)
+})
+
+async function startReprocessNow() {
+  reprocessStarting.value = true
+  try {
+    await startReprocess({ force: reprocessForce.value })
+    showToast('Reprocess started — packets are being re-parsed in the background.', 'success')
+    startReprocessPolling()
+    await loadReprocess()
+  } catch {
+    showToast('Couldn’t start the reprocess — one may already be running.', 'error')
+    await loadReprocess()
+  } finally {
+    reprocessStarting.value = false
+  }
+}
+
+const cleanupConfirmOpen = ref(false)
+
+/** Human summary of the retention windows, for the confirmation dialog. */
+function retentionLabel(days: number): string {
+  return days === 0 ? 'kept forever' : `deleted after ${days} day${days === 1 ? '' : 's'}`
+}
+
 async function runCleanupNow() {
+  cleanupConfirmOpen.value = false
   cleanupRunning.value = true
   try {
     await runCleanup()
     startCleanupPolling()
   } catch {
     cleanupRunning.value = false
+    showToast('Cleanup failed to start — the backend may be unreachable.', 'error')
   }
 }
 
@@ -647,6 +877,11 @@ onMounted(async () => {
   try {
     const s = await getSettings()
     retrySettings.value = s
+    stationCallsign.value = s.ourCallsign
+    if (s.homePosition) {
+      homeLatText.value = s.homePosition.lat.toFixed(6)
+      homeLonText.value = s.homePosition.lon.toFixed(6)
+    }
     outboundPath.value = s.outboundPath
     aprsIsEnabled.value = s.aprsIsEnabled
     aprsIsHost.value = s.aprsIsHost
@@ -674,14 +909,26 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
-  await Promise.all([loadRadios(), loadGeofences(), loadRules(), loadMaintenance()])
+  await Promise.all([
+    loadRadios(),
+    loadGeofences(),
+    loadRules(),
+    loadMaintenance(),
+    loadReprocess(),
+  ])
 })
 
 onUnmounted(() => {
   stopCleanupPolling()
+  stopReprocessPolling()
   if (map) {
     map.remove()
     map = null
+  }
+  if (stationHomeMap) {
+    stationHomeMap.remove()
+    stationHomeMap = null
+    stationHomeMarker = null
   }
 })
 
@@ -860,6 +1107,83 @@ async function confirmDelete() {
       <v-tabs-window-item value="station" class="pa-4">
         <div class="settings-grid">
           <div class="settings-section">
+            <!-- ================================================================ -->
+            <!-- Station identity -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Station Identity</span>
+              <v-fade-transition>
+                <v-icon v-if="stationSaved" color="success" size="18" class="ml-2">
+                  mdi-check-circle
+                </v-icon>
+              </v-fade-transition>
+            </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="text-subtitle-2 font-weight-medium mb-1">Callsign</div>
+              <div class="text-caption text-medium-emphasis mb-2">
+                Stamped on every transmitted packet and used for the APRS-IS login.
+              </div>
+              <v-text-field
+                v-model="stationCallsign"
+                density="compact"
+                variant="outlined"
+                placeholder="e.g. W3UWU-10"
+                :error-messages="stationCallsignError || undefined"
+                hide-details="auto"
+                class="mb-4"
+                style="max-width: 240px"
+              />
+
+              <div class="text-subtitle-2 font-weight-medium mb-1">Home position</div>
+              <div class="text-caption text-medium-emphasis mb-2">
+                Where your beacons say you are — also anchors range rings and distance columns.
+                Click the map or type coordinates.
+              </div>
+              <div class="d-flex ga-4 flex-wrap mb-3">
+                <div id="station-home-map" class="station-home-map" />
+                <div class="d-flex flex-column ga-3" style="min-width: 200px">
+                  <v-text-field
+                    v-model="homeLatText"
+                    label="Latitude"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    @change="syncHomeMarker"
+                  />
+                  <v-text-field
+                    v-model="homeLonText"
+                    label="Longitude"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    @change="syncHomeMarker"
+                  />
+                </div>
+              </div>
+
+              <v-alert
+                v-if="stationSaveError"
+                type="error"
+                variant="tonal"
+                density="compact"
+                class="mb-3"
+              >
+                {{ stationSaveError }}
+              </v-alert>
+
+              <v-btn
+                color="primary"
+                variant="tonal"
+                prepend-icon="mdi-content-save"
+                :loading="stationSaving"
+                :disabled="!!stationCallsignError"
+                @click="saveStationIdentity"
+              >
+                Save station
+              </v-btn>
+            </v-card>
+
             <!-- ================================================================ -->
             <!-- Messaging -->
             <!-- ================================================================ -->
@@ -1077,17 +1401,6 @@ async function confirmDelete() {
             <div v-else class="text-center text-medium-emphasis py-4">No radios configured</div>
           </v-card>
         </div>
-        <v-snackbar
-          v-model="beaconToast"
-          :color="beaconToastColor"
-          :timeout="5000"
-          location="bottom right"
-        >
-          {{ beaconToastText }}
-          <template #actions>
-            <v-btn variant="text" @click="beaconToast = false">Dismiss</v-btn>
-          </template>
-        </v-snackbar>
       </v-tabs-window-item>
 
       <v-tabs-window-item value="rf" class="pa-4">
@@ -1644,7 +1957,7 @@ async function confirmDelete() {
                 :loading="cleanupRunning"
                 :disabled="cleanupRunning"
                 prepend-icon="mdi-broom"
-                @click="runCleanupNow"
+                @click="cleanupConfirmOpen = true"
               >
                 {{ cleanupRunning ? 'Cleaning…' : 'Run Cleanup Now' }}
               </v-btn>
@@ -1747,15 +2060,97 @@ async function confirmDelete() {
               >
             </div>
           </v-card>
+
+          <!-- ================================================================ -->
+          <!-- Packet reprocessing -->
+          <!-- ================================================================ -->
+          <div class="section-header d-flex align-center mb-2">
+            <span class="text-h6">Packet Reprocessing</span>
+          </div>
+
+          <v-card variant="outlined" class="mb-6 pa-4">
+            <div class="text-body-2 mb-3">
+              Re-derives positions, weather, telemetry, and resolved paths from the stored raw
+              packets — useful after a parser fix. Runs in the background; parser version
+              <strong>{{ reprocessStatus?.currentParserVersion ?? '…' }}</strong
+              >.
+            </div>
+
+            <template v-if="reprocessStatus?.isRunning">
+              <v-progress-linear
+                :model-value="reprocessProgressPercent ?? 0"
+                :indeterminate="reprocessProgressPercent === null"
+                color="primary"
+                height="8"
+                rounded
+                class="mb-2"
+              />
+              <div class="text-caption text-medium-emphasis mb-2">
+                {{ reprocessStatus.processed.toLocaleString() }}
+                <template v-if="reprocessStatus.total > 0">
+                  of {{ reprocessStatus.total.toLocaleString() }}
+                </template>
+                packets reprocessed…
+              </div>
+            </template>
+
+            <div class="d-flex align-center ga-4 flex-wrap">
+              <v-switch
+                v-model="reprocessForce"
+                label="Force — re-parse every packet, not just outdated ones"
+                density="compact"
+                hide-details
+                color="primary"
+                :disabled="reprocessStatus?.isRunning"
+              />
+              <v-btn
+                color="primary"
+                variant="tonal"
+                prepend-icon="mdi-cog-refresh"
+                :loading="reprocessStarting"
+                :disabled="reprocessStatus?.isRunning"
+                @click="startReprocessNow"
+              >
+                {{ reprocessStatus?.isRunning ? 'Running…' : 'Start Reprocess' }}
+              </v-btn>
+            </div>
+
+            <template v-if="reprocessStatus?.lastResult">
+              <v-divider class="my-3" />
+              <div class="text-caption text-medium-emphasis mb-1">Last run</div>
+              <div v-if="reprocessStatus.lastResult.error" class="text-body-2 text-error">
+                Failed: {{ reprocessStatus.lastResult.error }}
+              </div>
+              <div v-else class="text-body-2">
+                Reprocessed
+                <strong>{{ reprocessStatus.lastResult.processed.toLocaleString() }}</strong>
+                packets ({{ reprocessStatus.lastResult.failed.toLocaleString() }} failed<template
+                  v-if="reprocessStatus.lastResult.orphanStationsDeleted > 0"
+                >
+                  · {{ reprocessStatus.lastResult.orphanStationsDeleted.toLocaleString() }} orphan
+                  stations removed</template
+                >)
+                <span class="text-medium-emphasis">
+                  · {{ new Date(reprocessStatus.lastResult.completedAt).toLocaleString() }}</span
+                >
+              </div>
+            </template>
+          </v-card>
         </div>
       </v-tabs-window-item>
     </v-tabs-window>
 
     <!-- ── Dialogs ── -->
     <!-- Add / Edit Radio dialog -->
-    <v-dialog v-model="radioDialogOpen" max-width="640">
+    <v-dialog v-model="radioDialogOpen" max-width="880" scrollable>
       <v-card>
-        <v-card-title>{{ editingRadioId ? 'Edit Radio' : 'Add Radio' }}</v-card-title>
+        <v-card-title class="d-flex align-center ga-2">
+          {{ editingRadioId ? 'Edit Radio' : 'Add Radio' }}
+          <span v-if="computedFullCallsign" class="text-caption text-medium-emphasis">
+            {{ computedFullCallsign }}
+          </span>
+        </v-card-title>
+        <v-divider />
         <v-card-text>
           <!-- Duplicate warning -->
           <v-alert
@@ -1769,220 +2164,208 @@ async function confirmDelete() {
             sure?
           </v-alert>
 
-          <v-text-field
-            v-model="rName"
-            label="Name *"
-            density="compact"
-            class="mb-2"
-            :rules="[(v: string) => v.trim().length > 0 || 'Required']"
-          />
-          <div class="d-flex ga-2 mb-2">
-            <v-text-field
-              v-model="rCallsign"
-              label="Callsign *"
-              density="compact"
-              :rules="[(v: string) => /^[A-Z0-9]{3,6}$/i.test(v.trim()) || '3–6 letters/digits']"
-              style="flex: 2"
-            />
-            <v-text-field
-              v-model="rSsid"
-              label="SSID"
-              density="compact"
-              :error-messages="ssidError || undefined"
-              placeholder="0–15"
-              style="flex: 1"
-            />
-          </div>
-          <v-text-field
-            v-model.number="rChannel"
-            label="Channel"
-            density="compact"
-            type="number"
-            :rules="[(v: number) => (v >= 0 && v <= 15) || '0–15']"
-            hint="KISS channel identifying this radio's traffic. Most single-radio setups use channel 0."
-            persistent-hint
-            class="mb-3"
-          />
-          <v-text-field
-            v-model.number="rExpectedInterval"
-            label="Expected beacon interval (seconds)"
-            density="compact"
-            type="number"
-            class="mb-2"
-          />
-          <div class="d-flex ga-2">
-            <v-text-field
-              v-model.number="rFrequencyMhz"
-              label="Frequency (MHz)"
-              density="compact"
-              type="number"
-              step="0.005"
-              placeholder="e.g. 144.390"
-              style="flex: 1"
-            />
-            <v-text-field
-              v-model="rMode"
-              label="Mode"
-              density="compact"
-              placeholder="e.g. FM"
-              style="flex: 1"
-            />
-          </div>
-          <v-text-field v-model="rNotes" label="Notes" density="compact" class="mb-3" />
-          <div class="text-subtitle-2 font-weight-medium mb-2">Beacon Config (optional)</div>
-          <v-text-field
-            v-model="rBeaconPath"
-            label="Beacon path"
-            density="compact"
-            class="mb-2"
-            placeholder="e.g. WIDE1-1,WIDE2-1"
-            hint="Leave blank for direct (no digipeating)"
-            persistent-hint
-          />
-          <div class="d-flex align-start ga-2">
-            <div style="flex: 1; min-width: 0">
-              <AprsSymbolPicker v-model="rBeaconSymbol" />
+          <!-- ── Identity ── -->
+          <div class="radio-form-section">
+            <div class="text-subtitle-2 font-weight-medium">Identity</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              How this radio appears in the app and on the air.
             </div>
-            <v-text-field
-              v-model="rBeaconComment"
-              label="Comment"
-              density="compact"
-              style="flex: 2; min-width: 0"
-            />
-          </div>
-          <v-switch
-            v-model="rAutoBeaconEnabled"
-            label="Automatically beacon on a schedule"
-            hide-details
-            density="compact"
-            class="mb-2"
-          />
-          <v-text-field
-            v-if="rAutoBeaconEnabled"
-            v-model.number="rAutoBeaconInterval"
-            label="Auto-beacon interval (seconds)"
-            density="compact"
-            type="number"
-            class="mb-2"
-            :rules="[(v: number) => v >= 60 || 'Minimum 60 seconds']"
-            hint="How often to transmit automatically. Requires home position and a TX-enabled modem."
-            persistent-hint
-          />
-
-          <v-divider class="my-3" />
-          <div class="text-subtitle-2 font-weight-medium mb-1">Sound Modem (audio feed)</div>
-          <v-switch
-            v-model="rModem.modemEnabled"
-            label="Decode RF for this radio with the native modem"
-            hide-details
-            density="compact"
-            class="mb-2"
-          />
-          <template v-if="rModem.modemEnabled">
-            <v-combobox
-              v-model="rModem.modemCaptureDevice"
-              :items="modemCaptureDeviceItems"
-              label="Capture device"
-              density="compact"
-              class="mb-2"
-              :return-object="false"
-            />
-            <v-switch
-              v-model="rModem.txEnabled"
-              label="Transmit (beacons, messages, digipeats)"
-              hide-details
-              density="compact"
-              class="mb-2"
-            />
-            <template v-if="rModem.txEnabled">
-              <v-combobox
-                v-model="rModem.modemPlaybackDevice"
-                :items="modemPlaybackDeviceItems"
-                label="Playback device"
+            <div class="radio-form-row">
+              <v-text-field
+                v-model="rName"
+                label="Name *"
                 density="compact"
-                class="mb-2"
-                :return-object="false"
+                :rules="[(v: string) => v.trim().length > 0 || 'Required']"
               />
-              <div class="d-flex ga-2 flex-wrap mb-1">
-                <v-text-field
-                  v-model.number="rModem.txAudioLevelPct"
-                  label="TX level (%)"
+              <v-text-field
+                v-model="rCallsign"
+                label="Callsign *"
+                density="compact"
+                :rules="[(v: string) => /^[A-Z0-9]{3,6}$/i.test(v.trim()) || '3–6 letters/digits']"
+              />
+              <v-text-field
+                v-model="rSsid"
+                label="SSID"
+                density="compact"
+                :error-messages="ssidError || undefined"
+                placeholder="0–15"
+              />
+              <v-text-field
+                v-model.number="rChannel"
+                label="KISS channel"
+                density="compact"
+                type="number"
+                :rules="[(v: number) => (v >= 0 && v <= 15) || '0–15']"
+                hint="Most single-radio setups use 0"
+                persistent-hint
+              />
+            </div>
+          </div>
+
+          <!-- ── Frequency ── -->
+          <div class="radio-form-section">
+            <div class="text-subtitle-2 font-weight-medium">Frequency</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              Used for labels and the frequencies table — not rig control.
+            </div>
+            <div class="radio-form-row">
+              <v-text-field
+                v-model.number="rFrequencyMhz"
+                label="Frequency (MHz)"
+                density="compact"
+                type="number"
+                step="0.005"
+                placeholder="e.g. 144.390"
+              />
+              <v-text-field v-model="rMode" label="Mode" density="compact" placeholder="e.g. FM" />
+              <v-text-field
+                v-model.number="rExpectedInterval"
+                label="Expected beacon interval (s)"
+                density="compact"
+                type="number"
+              />
+              <v-text-field v-model="rNotes" label="Notes" density="compact" />
+            </div>
+          </div>
+
+          <!-- ── Beaconing ── -->
+          <div class="radio-form-section">
+            <div class="text-subtitle-2 font-weight-medium">Beaconing</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              Position beacons transmitted as this radio.
+            </div>
+            <div class="radio-form-row">
+              <v-text-field
+                v-model="rBeaconPath"
+                label="Beacon path"
+                density="compact"
+                placeholder="e.g. WIDE1-1,WIDE2-1"
+                hint="Leave blank for direct (no digipeating)"
+                persistent-hint
+              />
+              <v-text-field v-model="rBeaconComment" label="Comment" density="compact" />
+            </div>
+            <div class="d-flex align-start ga-4 flex-wrap mt-1">
+              <div style="flex: 1 1 260px; min-width: 240px">
+                <AprsSymbolPicker v-model="rBeaconSymbol" />
+              </div>
+              <div style="flex: 1 1 260px; min-width: 240px">
+                <v-switch
+                  v-model="rAutoBeaconEnabled"
+                  label="Automatically beacon on a schedule"
+                  hide-details
                   density="compact"
-                  type="number"
-                  style="max-width: 120px"
+                  color="primary"
+                  class="mb-1"
                 />
                 <v-text-field
-                  v-model.number="rModem.txDelayMs"
-                  label="TX delay (ms)"
+                  v-if="rAutoBeaconEnabled"
+                  v-model.number="rAutoBeaconInterval"
+                  label="Auto-beacon interval (seconds)"
                   density="compact"
                   type="number"
-                  style="max-width: 130px"
-                />
-                <v-text-field
-                  v-model.number="rModem.txTailMs"
-                  label="Tail (ms)"
-                  density="compact"
-                  type="number"
-                  style="max-width: 110px"
-                />
-                <v-text-field
-                  v-model.number="rModem.txPersistence"
-                  label="Persistence"
-                  density="compact"
-                  type="number"
-                  style="max-width: 120px"
-                />
-                <v-text-field
-                  v-model.number="rModem.txSlotTimeMs"
-                  label="Slot (ms)"
-                  density="compact"
-                  type="number"
-                  style="max-width: 110px"
+                  :rules="[(v: number) => v >= 60 || 'Minimum 60 seconds']"
+                  hint="Requires home position and a TX-enabled modem"
+                  persistent-hint
                 />
               </div>
+            </div>
+          </div>
+
+          <!-- ── Sound modem ── -->
+          <div class="radio-form-section">
+            <div class="text-subtitle-2 font-weight-medium">Sound Modem</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              Native AFSK decode/transmit over this radio's audio feed.
+            </div>
+            <v-switch
+              v-model="rModem.modemEnabled"
+              label="Decode RF for this radio with the native modem"
+              hide-details
+              density="compact"
+              color="primary"
+              class="mb-2"
+            />
+            <template v-if="rModem.modemEnabled">
+              <div class="radio-form-row">
+                <v-combobox
+                  v-model="rModem.modemCaptureDevice"
+                  :items="modemCaptureDeviceItems"
+                  label="Capture device"
+                  density="compact"
+                  :return-object="false"
+                />
+              </div>
+              <v-switch
+                v-model="rModem.txEnabled"
+                label="Transmit (beacons, messages, digipeats)"
+                hide-details
+                density="compact"
+                color="primary"
+                class="mb-2"
+              />
+              <template v-if="rModem.txEnabled">
+                <div class="radio-form-row">
+                  <v-combobox
+                    v-model="rModem.modemPlaybackDevice"
+                    :items="modemPlaybackDeviceItems"
+                    label="Playback device"
+                    density="compact"
+                    :return-object="false"
+                  />
+                  <v-text-field
+                    v-model.number="rModem.txAudioLevelPct"
+                    label="TX level (%)"
+                    density="compact"
+                    type="number"
+                  />
+                </div>
+              </template>
+            </template>
+          </div>
+
+          <!-- ── PTT ── -->
+          <div v-if="rModem.modemEnabled && rModem.txEnabled" class="radio-form-section">
+            <div class="text-subtitle-2 font-weight-medium">PTT</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              How transmit is keyed — the fields follow the chosen method.
+            </div>
+            <div class="radio-form-row">
               <v-select
                 v-model="rModem.pttMethod"
                 :items="pttMethodItems"
                 label="PTT method"
                 density="compact"
-                class="mb-2"
-                style="max-width: 300px"
               />
-              <div
-                v-if="rModem.pttMethod === PttMethods.SerialRtsDtr"
-                class="d-flex ga-2 align-center flex-wrap mb-2"
-              >
+              <template v-if="rModem.pttMethod === PttMethods.SerialRtsDtr">
                 <v-combobox
                   v-model="rModem.pttSerialPort"
                   :items="modemDevices.serialPorts"
                   label="Serial port"
                   density="compact"
-                  style="max-width: 260px"
                   :return-object="false"
                 />
-                <v-checkbox
-                  v-model="rModem.pttSerialUseRts"
-                  label="RTS"
-                  hide-details
-                  density="compact"
-                />
-                <v-checkbox
-                  v-model="rModem.pttSerialUseDtr"
-                  label="DTR"
-                  hide-details
-                  density="compact"
-                />
-              </div>
-              <div
-                v-else-if="rModem.pttMethod === PttMethods.Cm108"
-                class="d-flex ga-2 align-center flex-wrap mb-2"
-              >
+                <div class="d-flex align-center ga-2">
+                  <v-checkbox
+                    v-model="rModem.pttSerialUseRts"
+                    label="RTS"
+                    hide-details
+                    density="compact"
+                  />
+                  <v-checkbox
+                    v-model="rModem.pttSerialUseDtr"
+                    label="DTR"
+                    hide-details
+                    density="compact"
+                  />
+                </div>
+              </template>
+              <template v-else-if="rModem.pttMethod === PttMethods.Cm108">
                 <v-combobox
                   v-model="rModem.pttHidDevice"
                   :items="modemHidDeviceItems"
                   label="HID device"
                   density="compact"
-                  style="max-width: 340px"
                   :return-object="false"
                 />
                 <v-text-field
@@ -1990,26 +2373,20 @@ async function confirmDelete() {
                   label="Pin"
                   density="compact"
                   type="number"
-                  style="max-width: 90px"
                 />
-              </div>
-              <div
-                v-else-if="rModem.pttMethod === PttMethods.Gpio"
-                class="d-flex ga-2 align-center flex-wrap mb-2"
-              >
+              </template>
+              <template v-else-if="rModem.pttMethod === PttMethods.Gpio">
                 <v-text-field
                   v-model.number="rModem.pttGpioChip"
                   label="Chip"
                   density="compact"
                   type="number"
-                  style="max-width: 100px"
                 />
                 <v-text-field
                   v-model.number="rModem.pttGpioLine"
                   label="Line"
                   density="compact"
                   type="number"
-                  style="max-width: 100px"
                 />
                 <v-checkbox
                   v-model="rModem.pttGpioActiveLow"
@@ -2017,30 +2394,87 @@ async function confirmDelete() {
                   hide-details
                   density="compact"
                 />
-              </div>
-              <div v-else-if="rModem.pttMethod === PttMethods.Rigctld" class="d-flex ga-2 mb-2">
+              </template>
+              <template v-else-if="rModem.pttMethod === PttMethods.Rigctld">
                 <v-text-field
                   v-model="rModem.pttRigctldHost"
                   label="rigctld host"
                   density="compact"
-                  style="max-width: 240px"
                 />
                 <v-text-field
                   v-model.number="rModem.pttRigctldPort"
                   label="Port"
                   density="compact"
                   type="number"
-                  style="max-width: 110px"
                 />
-              </div>
-            </template>
-          </template>
+              </template>
+            </div>
+
+            <!-- Advanced TX timing — defaults suit most rigs -->
+            <v-btn
+              size="x-small"
+              variant="text"
+              color="primary"
+              class="px-1"
+              @click="showTxTiming = !showTxTiming"
+            >
+              {{ showTxTiming ? 'Hide advanced TX timing ▴' : 'Show advanced TX timing ▾' }}
+            </v-btn>
+            <div v-if="showTxTiming" class="radio-form-row mt-2">
+              <v-text-field
+                v-model.number="rModem.txDelayMs"
+                label="TX delay (ms)"
+                density="compact"
+                type="number"
+                hint="Keyed carrier before data"
+                persistent-hint
+              />
+              <v-text-field
+                v-model.number="rModem.txTailMs"
+                label="Tail (ms)"
+                density="compact"
+                type="number"
+                hint="Carrier after data"
+                persistent-hint
+              />
+              <v-text-field
+                v-model.number="rModem.txPersistence"
+                label="Persistence"
+                density="compact"
+                type="number"
+                hint="p-persistence CSMA (0–255)"
+                persistent-hint
+              />
+              <v-text-field
+                v-model.number="rModem.txSlotTimeMs"
+                label="Slot (ms)"
+                density="compact"
+                type="number"
+                hint="CSMA slot time"
+                persistent-hint
+              />
+            </div>
+          </div>
         </v-card-text>
-        <v-card-actions>
+        <v-divider />
+        <v-card-actions class="flex-wrap">
+          <v-alert
+            v-if="radioSaveError"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="flex-1-1-100 mb-2"
+          >
+            {{ radioSaveError }}
+          </v-alert>
+          <span v-if="radioFormDirty" class="text-caption text-warning ml-2">
+            ● Unsaved changes
+          </span>
           <v-spacer />
           <v-btn variant="text" @click="radioDialogOpen = false">Cancel</v-btn>
           <v-btn
             color="primary"
+            variant="tonal"
             :disabled="!radioFormValid || !!ssidError"
             :loading="radioSaving"
             @click="saveRadio"
@@ -2155,6 +2589,40 @@ async function confirmDelete() {
       </v-card>
     </v-dialog>
 
+    <!-- Shared toast (used by beacon-now, radio toggle, and maintenance) -->
+    <v-snackbar
+      v-model="beaconToast"
+      :color="beaconToastColor"
+      :timeout="5000"
+      location="bottom right"
+    >
+      {{ beaconToastText }}
+      <template #actions>
+        <v-btn variant="text" @click="beaconToast = false">Dismiss</v-btn>
+      </template>
+    </v-snackbar>
+
+    <!-- Cleanup confirmation dialog -->
+    <v-dialog v-model="cleanupConfirmOpen" max-width="460">
+      <v-card>
+        <v-card-title>
+          <v-icon color="error" class="mr-2">mdi-broom</v-icon>
+          Run cleanup now?
+        </v-card-title>
+        <v-card-text>
+          This permanently deletes packets outside the retention windows — RF packets
+          {{ retentionLabel(retentionRfDays) }}, APRS-IS packets
+          {{ retentionLabel(retentionAprsIsDays) }}, own beacons
+          {{ retentionLabel(retentionOwnDays) }}. This cannot be undone.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="cleanupConfirmOpen = false">Cancel</v-btn>
+          <v-btn color="error" variant="tonal" @click="runCleanupNow">Delete old packets</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Delete confirmation dialog -->
     <v-dialog v-model="deleteConfirmOpen" max-width="400">
       <v-card>
@@ -2174,6 +2642,25 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
+.radio-form-section {
+  margin-bottom: 18px;
+}
+
+.radio-form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0 12px;
+  align-items: start;
+}
+
+.station-home-map {
+  width: 340px;
+  max-width: 100%;
+  height: 220px;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
 .settings-view {
   height: 100%;
   display: flex;

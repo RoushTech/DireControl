@@ -4,7 +4,11 @@ let offsetMs = 0
 
 // Estimate the offset from a timed /about call. Using the midpoint of the round
 // trip cancels out network latency (Cristian's algorithm).
-export function recordServerSync(serverTimeIso: string, requestStart: number, responseEnd: number): void {
+export function recordServerSync(
+  serverTimeIso: string,
+  requestStart: number,
+  responseEnd: number,
+): void {
   const clientMid = requestStart + (responseEnd - requestStart) / 2
   offsetMs = new Date(serverTimeIso).getTime() - clientMid
 }

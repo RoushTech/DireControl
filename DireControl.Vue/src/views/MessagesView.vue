@@ -1,30 +1,28 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
 import { useMessagesStore } from '@/stores/messagesStore'
+import { usePacketHubStore } from '@/stores/packetHub'
 import { getAllMessages } from '@/api/messagesApi'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
-import type {
-  AllMessagePacketDto,
-  InboxMessageDto,
-  MessageAcknowledgedDto,
-  MessageAckDto,
-  MessageFailedDto,
-  MessageRetriedDto,
-} from '@/types/message'
+import type { AllMessagePacketDto, InboxMessageDto, MessageFailedDto } from '@/types/message'
 import { RetryState } from '@/types/message'
 import { type StationDto, StationType } from '@/types/station'
 import { useUiStore } from '@/stores/uiStore'
+import { useStationSelectionStore } from '@/stores/stationSelection'
+import { useRouter } from 'vue-router'
 import { useTick } from '@/composables/useTick'
 
 const store = useMessagesStore()
 const uiStore = useUiStore()
+const stationSelection = useStationSelectionStore()
+const router = useRouter()
 const { now } = useTick(1000)
+
+function goToStation(callsign: string) {
+  stationSelection.selectStation(callsign)
+  router.push('/')
+}
 
 // ─── Settings & stations ────────────────────────────────────────────────────
 const ourCallsign = ref('')
@@ -50,7 +48,9 @@ const allPageSize = ref(50)
 const allTotalCount = ref(0)
 const allLoading = ref(false)
 
-const allTotalPages = computed(() => Math.max(1, Math.ceil(allTotalCount.value / allPageSize.value)))
+const allTotalPages = computed(() =>
+  Math.max(1, Math.ceil(allTotalCount.value / allPageSize.value)),
+)
 
 async function fetchAllMessages() {
   allLoading.value = true
@@ -81,14 +81,14 @@ watch([filterSender, filterAddressee, filterText], () => {
 // ─── Inbox / Outbox ──────────────────────────────────────────────────────────
 const inboundMessages = computed(() =>
   store.inboxMessages.filter(
-    (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase()
-  )
+    (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase(),
+  ),
 )
 
 const outboxMessages = computed(() =>
   store.inboxMessages.filter(
-    (m) => m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
-  )
+    (m) => m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase(),
+  ),
 )
 
 const actionLoading = ref<Record<number, 'retry' | 'reset' | 'cancel' | null>>({})
@@ -117,7 +117,9 @@ async function doRetryNow(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'retry'
   try {
     await store.retryNow(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch {
+    /* ignore */
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -139,7 +141,9 @@ async function confirmReset() {
   actionLoading.value[msg.id] = 'reset'
   try {
     await store.resetRetry(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch {
+    /* ignore */
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -148,7 +152,9 @@ async function doCancel(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'cancel'
   try {
     await store.cancelRetry(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch {
+    /* ignore */
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -184,9 +190,7 @@ const composePathError = computed(() => {
 const addresseeSuggestions = computed(() => {
   const q = composeTo.value?.trim().toUpperCase()
   if (!q || q.length < 2) return []
-  return allStations.value
-    .filter(s => s.callsign.toUpperCase().startsWith(q))
-    .slice(0, 8)
+  return allStations.value.filter((s) => s.callsign.toUpperCase().startsWith(q)).slice(0, 8)
 })
 
 function openCompose(prefillTo = '') {
@@ -235,64 +239,53 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // Open compose when triggered via global shortcut (M key from any view)
-watch(() => uiStore.pendingComposeOpen, (pending) => {
-  if (pending) {
-    uiStore.consumeCompose()
-    openCompose()
-  }
-})
+watch(
+  () => uiStore.pendingComposeOpen,
+  (pending) => {
+    if (pending) {
+      uiStore.consumeCompose()
+      openCompose()
+    }
+  },
+)
 
 // ─── Inbox actions ───────────────────────────────────────────────────────────
 async function onRowClick(message: InboxMessageDto) {
+  toggleExpand(message.id)
   if (!message.isRead) {
     await store.markRead(message.id)
   }
 }
 
-// ─── SignalR ─────────────────────────────────────────────────────────────────
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+// ─── Expandable message bodies ───────────────────────────────────────────────
+// APRS messages are ≤67 chars but "all messages" rows (telemetry defs, bulletins)
+// can be long — a click un-clips the row instead of hiding the tail forever.
+const expandedMessages = ref(new Set<string>())
 
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
+function toggleExpand(id: number | string) {
+  const key = String(id)
+  const next = new Set(expandedMessages.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedMessages.value = next
+}
 
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
+function isExpanded(id: number | string): boolean {
+  return expandedMessages.value.has(String(id))
+}
 
-  connection.on('messageReceived', (message: InboxMessageDto) => {
-    store.onMessageReceived(message)
-    showBrowserNotification(message)
-  })
+// ─── SignalR (shared hub) ────────────────────────────────────────────────────
+// Store mutations are registered app-level in messagesStore; this view only
+// adds its UI reactions (browser notification, failed toast) while mounted.
+const hub = usePacketHubStore()
+const connectionStatus = computed(() => hub.state)
 
-  connection.on('messageAcked', (ack: MessageAckDto) => {
-    store.onMessageAcked(ack)
-  })
+function onHubMessageReceived(message: InboxMessageDto) {
+  showBrowserNotification(message)
+}
 
-  connection.on('messageRetried', (data: MessageRetriedDto) => {
-    store.onMessageRetried(data)
-  })
-
-  connection.on('messageAcknowledged', (data: MessageAcknowledgedDto) => {
-    store.onMessageAcknowledged(data)
-  })
-
-  connection.on('messageFailed', (data: MessageFailedDto) => {
-    store.onMessageFailed(data)
-    showFailedToast(data)
-  })
-
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
-  }
+function onHubMessageFailed(data: MessageFailedDto) {
+  showFailedToast(data)
 }
 
 // ─── Browser notifications ───────────────────────────────────────────────────
@@ -323,20 +316,26 @@ onMounted(async () => {
     ourCallsign.value = settings.ourCallsign
     defaultOutboundPath.value = settings.outboundPath
     composePath.value = settings.outboundPath
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   try {
     const stations = await getStations(true)
     allStations.value = stations
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   await Promise.all([store.fetchInbox(), fetchAllMessages()])
-  await connectSignalR()
+  hub.on('messageReceived', onHubMessageReceived)
+  hub.on('messageFailed', onHubMessageFailed)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  connection?.stop()
+  hub.off('messageReceived', onHubMessageReceived)
+  hub.off('messageFailed', onHubMessageFailed)
 })
 
 function replyTo(message: InboxMessageDto) {
@@ -351,12 +350,7 @@ function replyTo(message: InboxMessageDto) {
       <v-col>
         <div class="d-flex align-center gap-2">
           <span class="text-h6">Messages</span>
-          <v-chip
-            v-if="store.unreadCount > 0"
-            color="error"
-            size="small"
-            class="ml-2"
-          >
+          <v-chip v-if="store.unreadCount > 0" color="error" size="small" class="ml-2">
             {{ store.unreadCount }} unread
           </v-chip>
           <v-chip
@@ -370,12 +364,7 @@ function replyTo(message: InboxMessageDto) {
         </div>
       </v-col>
       <v-col cols="auto">
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-pencil"
-          size="small"
-          @click="openCompose()"
-        >
+        <v-btn color="primary" prepend-icon="mdi-pencil" size="small" @click="openCompose()">
           Compose
           <v-tooltip activator="parent" location="bottom">Press M</v-tooltip>
         </v-btn>
@@ -423,38 +412,31 @@ function replyTo(message: InboxMessageDto) {
                 <a
                   href="#"
                   class="text-decoration-none"
-                  @click.stop.prevent="$router.push('/')"
-                >{{ msg.fromCallsign }}</a>
+                  @click.stop.prevent="goToStation(msg.fromCallsign)"
+                  >{{ msg.fromCallsign }}</a
+                >
               </td>
-              <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+              <td
+                class="msg-body"
+                :class="{ 'msg-body--open': isExpanded(msg.id) }"
+                :title="isExpanded(msg.id) ? undefined : msg.body"
+              >
                 {{ msg.body }}
               </td>
               <td class="text-no-wrap">
-                <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
+                <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt, now) }}</span>
               </td>
               <td>
-                <v-chip
-                  v-if="!msg.isRead"
-                  color="primary"
-                  size="x-small"
-                  class="mr-1"
-                >
+                <v-chip v-if="!msg.isRead" color="primary" size="x-small" class="mr-1">
                   Unread
                 </v-chip>
               </td>
               <td>
-                <v-btn
-                  icon="mdi-reply"
-                  size="x-small"
-                  variant="text"
-                  @click.stop="replyTo(msg)"
-                />
+                <v-btn icon="mdi-reply" size="x-small" variant="text" @click.stop="replyTo(msg)" />
               </td>
             </tr>
             <tr v-if="inboundMessages.length === 0">
-              <td colspan="5" class="text-center text-medium-emphasis py-6">
-                No messages yet.
-              </td>
+              <td colspan="5" class="text-center text-medium-emphasis py-6">No messages yet.</td>
             </tr>
           </tbody>
         </v-table>
@@ -474,29 +456,35 @@ function replyTo(message: InboxMessageDto) {
           <tbody>
             <tr v-for="msg in outboxMessages" :key="msg.id">
               <td class="text-no-wrap">{{ msg.toCallsign }}</td>
-              <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+              <td
+                class="msg-body msg-body--narrow"
+                :class="{ 'msg-body--open': isExpanded(`out-${msg.id}`) }"
+                :title="isExpanded(`out-${msg.id}`) ? undefined : msg.body"
+                style="cursor: pointer"
+                @click="toggleExpand(`out-${msg.id}`)"
+              >
                 {{ msg.body }}
               </td>
               <td>
-                <v-chip
-                  :color="retryBadge(msg).color"
-                  size="x-small"
-                  class="mr-1"
-                >
-                  {{ retryBadge(msg).text }}
-                </v-chip>
-                <span
-                  v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
-                  class="text-caption text-medium-emphasis"
-                >
-                  · Next retry in {{ secondsUntilRetry(msg) }}s
-                </span>
-                <span
-                  v-if="msg.lastSentAt"
-                  class="text-caption text-medium-emphasis ml-1"
-                >
-                  · Sent {{ formatUtc(msg.lastSentAt) }}
-                </span>
+                <!-- Stacked: chip on top, detail lines under it — no more one-line cram -->
+                <div class="d-flex flex-column align-start ga-1 py-1">
+                  <v-chip :color="retryBadge(msg).color" size="x-small">
+                    {{ retryBadge(msg).text }}
+                  </v-chip>
+                  <span
+                    v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
+                    class="text-caption text-medium-emphasis"
+                  >
+                    next retry in {{ secondsUntilRetry(msg) }}s
+                  </span>
+                  <span
+                    v-if="msg.lastSentAt"
+                    class="text-caption text-medium-emphasis"
+                    :title="formatUtc(msg.lastSentAt)"
+                  >
+                    sent {{ timeAgo(msg.lastSentAt, now) }}
+                  </span>
+                </div>
               </td>
               <td class="text-no-wrap">
                 <v-btn
@@ -591,25 +579,30 @@ function replyTo(message: InboxMessageDto) {
           </thead>
           <tbody>
             <tr v-if="allLoading">
-              <td colspan="4" class="text-center text-medium-emphasis py-6">
-                Loading…
-              </td>
+              <td colspan="4" class="text-center text-medium-emphasis py-6">Loading…</td>
             </tr>
             <template v-else>
               <tr
                 v-for="msg in allItems"
                 :key="msg.packetId"
                 :class="{
-                  'bg-blue-lighten-5': msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
+                  'msg-row-own':
+                    msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
                 }"
               >
                 <td>{{ msg.fromCallsign }}</td>
                 <td>{{ msg.toCallsign || '—' }}</td>
-                <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+                <td
+                  class="msg-body"
+                  :class="{ 'msg-body--open': isExpanded(`all-${msg.packetId}`) }"
+                  :title="isExpanded(`all-${msg.packetId}`) ? undefined : msg.body"
+                  style="cursor: pointer"
+                  @click="toggleExpand(`all-${msg.packetId}`)"
+                >
                   {{ msg.body }}
                 </td>
                 <td class="text-no-wrap">
-                  <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
+                  <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt, now) }}</span>
                 </td>
               </tr>
               <tr v-if="allItems.length === 0">
@@ -622,9 +615,7 @@ function replyTo(message: InboxMessageDto) {
         </v-table>
 
         <div class="d-flex align-center justify-space-between mt-2">
-          <span class="text-caption text-medium-emphasis">
-            {{ allTotalCount }} total
-          </span>
+          <span class="text-caption text-medium-emphasis"> {{ allTotalCount }} total </span>
           <v-pagination
             v-if="allTotalPages > 1"
             v-model="allPage"
@@ -663,13 +654,14 @@ function replyTo(message: InboxMessageDto) {
             :rules="[
               (v: string) => !!v?.trim() || 'Required',
               (v: string) => !v || v.trim().length <= 9 || 'Max 9 characters',
-              (v: string) => !v || /^[A-Za-z0-9-]+$/.test(v.trim()) || 'Letters, digits, and - only',
+              (v: string) =>
+                !v || /^[A-Za-z0-9-]+$/.test(v.trim()) || 'Letters, digits, and - only',
             ]"
           >
             <template #item="{ item, props: itemProps }">
               <v-list-item
                 v-bind="itemProps"
-                :subtitle="`${stationTypeName(item.stationType)} · ${timeAgo(item.lastSeen)}`"
+                :subtitle="`${stationTypeName(item.stationType)} · ${timeAgo(item.lastSeen, now)}`"
               />
             </template>
           </v-combobox>
@@ -725,20 +717,23 @@ function replyTo(message: InboxMessageDto) {
               />
               <div class="d-flex align-center flex-wrap gap-1 mb-1">
                 <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'">WIDE1-1,WIDE2-1</v-btn>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE2-1'">WIDE2-1</v-btn>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1'">WIDE1-1</v-btn>
-                <v-btn size="x-small" variant="tonal" @click="composePath = ''">Direct (no path)</v-btn>
+                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'"
+                  >WIDE1-1,WIDE2-1</v-btn
+                >
+                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE2-1'"
+                  >WIDE2-1</v-btn
+                >
+                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1'"
+                  >WIDE1-1</v-btn
+                >
+                <v-btn size="x-small" variant="tonal" @click="composePath = ''"
+                  >Direct (no path)</v-btn
+                >
               </div>
             </div>
           </div>
 
-          <v-alert
-            v-if="sendError"
-            type="error"
-            density="compact"
-            class="mt-3"
-          >
+          <v-alert v-if="sendError" type="error" density="compact" class="mt-3">
             {{ sendError }}
           </v-alert>
         </v-card-text>
@@ -784,6 +779,30 @@ function replyTo(message: InboxMessageDto) {
 </template>
 
 <style scoped>
+/* Theme-safe "addressed to us" highlight (works in light and dark). */
+.msg-row-own td {
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+/* Clipped by default; click expands to the full text. */
+.msg-body {
+  max-width: 400px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msg-body--narrow {
+  max-width: 300px;
+}
+
+.msg-body--open {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
 .messages-view {
   display: flex;
   flex-direction: column;

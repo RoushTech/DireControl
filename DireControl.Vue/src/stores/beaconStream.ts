@@ -1,7 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { PacketBroadcastDto } from '@/types/packet'
-import { parsedTypeFromString } from '@/types/packet'
+import { PacketSource, parsedTypeFromString } from '@/types/packet'
+import { usePacketHubStore } from '@/stores/packetHub'
+
+export type SourceFilter = '' | 'rf' | 'is'
 
 const MAX_DISPLAYED = 200
 
@@ -10,14 +13,22 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
   const pendingPackets = ref<PacketBroadcastDto[]>([])
   const paused = ref(false)
 
-  // Filters
-  const callsignFilter = ref('')
+  // Filters — one search box matches callsign and summary text.
+  const searchFilter = ref('')
   const typeFilter = ref<string>('') // '' = all
-  const textFilter = ref('')
+  const sourceFilter = ref<SourceFilter>('')
 
   const pendingCount = computed(() => pendingPackets.value.length)
 
   function addPacket(p: PacketBroadcastDto) {
+    // Multiple views push into this store from their own hub connections, and a
+    // REST seed can overlap live delivery — drop anything already present.
+    if (
+      displayedPackets.value.some((x) => x.id === p.id) ||
+      pendingPackets.value.some((x) => x.id === p.id)
+    ) {
+      return
+    }
     if (paused.value) {
       pendingPackets.value.unshift(p)
     } else {
@@ -59,10 +70,24 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
     }
   }
 
+  const hasActiveFilters = computed(
+    () => searchFilter.value.trim() !== '' || typeFilter.value !== '' || sourceFilter.value !== '',
+  )
+
+  function clearFilters() {
+    searchFilter.value = ''
+    typeFilter.value = ''
+    sourceFilter.value = ''
+  }
+
   const filteredPackets = computed(() => {
     let list = displayedPackets.value
-    const cs = callsignFilter.value.trim().toUpperCase()
-    if (cs) list = list.filter((p) => p.callsign.toUpperCase().includes(cs))
+    const q = searchFilter.value.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (p) => p.callsign.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q),
+      )
+    }
     const tf = typeFilter.value
     if (tf) {
       list = list.filter((p) => {
@@ -70,18 +95,31 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
         return pt === Number(tf)
       })
     }
-    const tx = textFilter.value.trim().toLowerCase()
-    if (tx) list = list.filter((p) => p.summary.toLowerCase().includes(tx))
+    if (sourceFilter.value === 'rf') {
+      list = list.filter((p) => p.source !== PacketSource.AprsIs)
+    } else if (sourceFilter.value === 'is') {
+      list = list.filter((p) => p.source === PacketSource.AprsIs)
+    }
     return list
   })
+
+  // Store-level hub subscriptions — the stream buffer fills from app start, so
+  // opening the Beacon Stream view shows history instead of starting cold.
+  const hub = usePacketHubStore()
+  hub.on('packetReceived', (p: PacketBroadcastDto) => addPacket(p))
+  hub.on('packetSourceUpgraded', (upgrade: { id: number; source: PacketBroadcastDto['source'] }) =>
+    upgradeSource(upgrade.id, upgrade.source),
+  )
 
   return {
     displayedPackets,
     pendingCount,
     paused,
-    callsignFilter,
+    searchFilter,
     typeFilter,
-    textFilter,
+    sourceFilter,
+    hasActiveFilters,
+    clearFilters,
     filteredPackets,
     addPacket,
     pause,

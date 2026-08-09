@@ -27,10 +27,7 @@ type ProviderItem = {
   requiresApiKey: boolean
 }
 
-type SelectItem =
-  | { type: 'subheader'; title: string }
-  | { type: 'divider' }
-  | ProviderItem
+type SelectItem = { type: 'subheader'; title: string } | { type: 'divider' } | ProviderItem
 
 const items = computed<SelectItem[]>(() => {
   const result: SelectItem[] = []
@@ -80,7 +77,9 @@ function onSelect(v: unknown) {
           <template v-if="isDisabledKeyProvider(item)" #append>
             <v-tooltip text="Add API key in Settings to enable" location="left">
               <template #activator="{ props: tipProps }">
-                <v-icon v-bind="tipProps" size="14" color="warning" class="ml-1">mdi-key-outline</v-icon>
+                <v-icon v-bind="tipProps" size="14" color="warning" class="ml-1"
+                  >mdi-key-outline</v-icon
+                >
               </template>
             </v-tooltip>
           </template>
