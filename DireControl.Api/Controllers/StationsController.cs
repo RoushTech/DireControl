@@ -315,27 +315,46 @@ public class StationsController(
     [HttpGet("{callsign}/signal")]
     public async Task<ActionResult<IReadOnlyList<SignalPointDto>>> GetStationSignal(
         string callsign,
-        CancellationToken ct)
+        [FromQuery] int hours = 24,
+        CancellationToken ct = default)
     {
+        hours = Math.Clamp(hours, 1, 24 * 30);
+
         var stationExists = await db.Stations.AsNoTracking().AnyAsync(s => s.Callsign == callsign, ct);
         if (!stationExists)
             return NotFound();
 
+        var since = DateTime.UtcNow.AddHours(-hours);
+
         // SignalData is null for all packets received via KISS TCP (Direwolf does not
-        // expose signal metadata over the KISS interface).  This endpoint returns an
-        // empty array in that case, which the frontend treats as "not available".
+        // expose signal metadata over the KISS interface).  Hop/path data still exists
+        // for those, so only the audio-level series goes missing in that case.
         var packets = await db.Packets
             .AsNoTracking()
-            .Where(p => p.StationCallsign == callsign && p.SignalData != null)
-            .OrderBy(p => p.ReceivedAt)
+            .Where(p => p.StationCallsign == callsign
+                        && p.ReceivedAt >= since
+                        && p.Source == PacketSource.Rf)
+            .OrderByDescending(p => p.ReceivedAt)
+            .Take(2000)
             .ToListAsync(ct);
 
-        var points = packets.Select(p => new SignalPointDto
-        {
-            ReceivedAt = p.ReceivedAt,
-            DecodeQuality = p.SignalData!.DecodeQuality,
-            FrequencyOffsetHz = p.SignalData.FrequencyOffsetHz,
-        }).ToList();
+        var points = packets
+            .OrderBy(p => p.ReceivedAt)
+            .Select(p => new SignalPointDto
+            {
+                ReceivedAt = p.ReceivedAt,
+                DecodeQuality = p.SignalData?.DecodeQuality,
+                FrequencyOffsetHz = p.SignalData?.FrequencyOffsetHz,
+                AudioLevel = p.SignalData?.AudioLevel,
+                DemodProfile = p.SignalData?.DemodProfile,
+                HopCount = p.HopCount,
+                FirstDigi = p.ResolvedPath
+                    .Where(e => e.HopIndex > 0 && e.Callsign != p.StationCallsign)
+                    .OrderBy(e => e.HopIndex)
+                    .Select(e => e.Callsign)
+                    .FirstOrDefault(),
+            })
+            .ToList();
 
         return Ok(points);
     }

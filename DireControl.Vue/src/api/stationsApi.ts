@@ -104,9 +104,10 @@ export async function getStationStats(callsign: string): Promise<StationStatisti
   return data
 }
 
-export async function getStationSignal(callsign: string): Promise<SignalPointDto[]> {
+export async function getStationSignal(callsign: string, hours = 24): Promise<SignalPointDto[]> {
   const { data } = await http.get<SignalPointDto[]>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/signal`,
+    { params: { hours } },
   )
   return data
 }

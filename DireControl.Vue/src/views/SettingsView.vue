@@ -32,9 +32,18 @@ import {
   getModemDevices,
   updateRfServices,
   updateExternalTnc,
+  sendTestTone,
+  setModemTxLevel,
+  decodeSpectrumPayload,
   PttMethods,
+  TestToneKinds,
   type ModemDevicesDto,
+  type ModemLevelDto,
+  type ModemSpectrumDto,
+  type TestToneKind,
 } from '@/api/modemApi'
+import { usePacketHubStore } from '@/stores/packetHub'
+import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
 import { getWeatherStatus } from '@/api/weatherApi'
 import {
   getMaintenanceStatus,
@@ -272,6 +281,71 @@ const editingRadioId = ref<string | null>(null)
 const radioSaving = ref(false)
 const radioSaveError = ref('')
 const radioFormDirty = ref(false)
+
+// ─── Live calibration (edit dialog) ──────────────────────────────────────────
+// While editing a saved radio, the dialog shows the live meter + waterfall so
+// audio levels can be set against what the modem actually hears/sends.
+const packetHub = usePacketHubStore()
+const editorLevel = ref<ModemLevelDto | null>(null)
+const editorWaterfall = ref<InstanceType<typeof WaterfallCanvas> | null>(null)
+
+function onEditorModemLevel(batch: ModemLevelDto[]) {
+  const level = batch.find((l) => l.radioId === editingRadioId.value)
+  if (level) editorLevel.value = level
+}
+
+function onEditorModemSpectrum(batch: ModemSpectrumDto[]) {
+  for (const spectrum of batch) {
+    if (spectrum.radioId === editingRadioId.value) {
+      editorWaterfall.value?.drawRow(decodeSpectrumPayload(spectrum.bins))
+    }
+  }
+}
+
+watch(radioDialogOpen, (open) => {
+  if (open && editingRadioId.value) {
+    packetHub.on('modemLevel', onEditorModemLevel)
+    packetHub.on('modemSpectrum', onEditorModemSpectrum)
+  } else {
+    packetHub.off('modemLevel', onEditorModemLevel)
+    packetHub.off('modemSpectrum', onEditorModemSpectrum)
+    editorLevel.value = null
+  }
+})
+
+// TX gain applies live while dragging (debounced) so the change is audible on
+// the next test tone — and it still saves with the radio.
+let txGainTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => rModem.value.txAudioLevelPct,
+  (value) => {
+    if (!radioDialogOpen.value || !editingRadioId.value) return
+    if (txGainTimer) clearTimeout(txGainTimer)
+    txGainTimer = setTimeout(() => {
+      setModemTxLevel(editingRadioId.value!, Math.round(value)).catch(() => {
+        /* transient — next adjustment retries */
+      })
+    }, 250)
+  },
+)
+
+// Test-tone calibration — only for a saved radio with a live TX-enabled modem.
+const toneSending = ref(false)
+const TEST_TONE_MS = 2000
+
+async function doTestTone(kind: TestToneKind) {
+  if (!editingRadioId.value) return
+  toneSending.value = true
+  try {
+    await sendTestTone(editingRadioId.value, kind, TEST_TONE_MS)
+  } catch {
+    showToast('Test tone failed — is the modem running with TX enabled?', 'error')
+  } finally {
+    setTimeout(() => {
+      toneSending.value = false
+    }, TEST_TONE_MS)
+  }
+}
 const showTxTiming = ref(false)
 let suppressRadioDirty = false
 
@@ -2308,6 +2382,14 @@ async function confirmDelete() {
                   density="compact"
                   :return-object="false"
                 />
+                <v-combobox
+                  v-if="rModem.txEnabled"
+                  v-model="rModem.modemPlaybackDevice"
+                  :items="modemPlaybackDeviceItems"
+                  label="Playback device"
+                  density="compact"
+                  :return-object="false"
+                />
               </div>
               <v-switch
                 v-model="rModem.txEnabled"
@@ -2317,20 +2399,105 @@ async function confirmDelete() {
                 color="primary"
                 class="mb-2"
               />
-              <template v-if="rModem.txEnabled">
-                <div class="radio-form-row">
-                  <v-combobox
-                    v-model="rModem.modemPlaybackDevice"
-                    :items="modemPlaybackDeviceItems"
-                    label="Playback device"
-                    density="compact"
-                    :return-object="false"
-                  />
+
+              <!-- Live calibration — mirrors the Radio page so levels are set
+                   against what the modem actually hears and sends. -->
+              <div v-if="editingRadioId" class="calibration-box">
+                <div class="d-flex align-center ga-2 mb-2">
+                  <span class="text-caption font-weight-bold text-uppercase calibration-label">
+                    Live calibration
+                  </span>
+                  <v-chip
+                    :color="editorLevel?.carrierDetected ? 'success' : 'grey'"
+                    size="x-small"
+                    variant="tonal"
+                  >
+                    {{ editorLevel?.carrierDetected ? 'carrier' : 'quiet' }}
+                  </v-chip>
+                  <v-chip
+                    v-if="editorLevel?.transmitting"
+                    color="error"
+                    size="x-small"
+                    variant="tonal"
+                  >
+                    TX
+                  </v-chip>
+                </div>
+
+                <div class="d-flex align-center justify-space-between mb-1">
+                  <span class="text-caption text-medium-emphasis">Audio level (RX)</span>
+                  <span class="text-caption text-medium-emphasis">
+                    {{ (editorLevel?.audioLevel ?? 0).toFixed(2) }}
+                  </span>
+                </div>
+                <v-progress-linear
+                  :model-value="Math.min(100, (editorLevel?.audioLevel ?? 0) * 100)"
+                  :color="(editorLevel?.audioLevel ?? 0) > 0.9 ? 'error' : 'success'"
+                  height="6"
+                  rounded
+                  class="mb-3"
+                />
+
+                <WaterfallCanvas ref="editorWaterfall" :height="80" class="mb-3" />
+
+                <template v-if="rModem.txEnabled">
+                  <div class="d-flex align-center ga-2 mb-1 flex-nowrap">
+                    <span class="text-caption text-medium-emphasis flex-shrink-0">TX gain</span>
+                    <v-slider
+                      v-model.number="rModem.txAudioLevelPct"
+                      :min="1"
+                      :max="100"
+                      :step="1"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      thumb-label
+                    />
+                    <span class="text-caption text-medium-emphasis flex-shrink-0">
+                      {{ Math.round(rModem.txAudioLevelPct) }}%
+                    </span>
+                  </div>
+                  <div class="d-flex align-center ga-2 flex-wrap">
+                    <span class="text-caption text-medium-emphasis">Test tones</span>
+                    <v-btn-group density="compact" variant="outlined" divided>
+                      <v-btn
+                        size="x-small"
+                        :loading="toneSending"
+                        @click="doTestTone(TestToneKinds.Mark)"
+                      >
+                        Mark
+                      </v-btn>
+                      <v-btn
+                        size="x-small"
+                        :disabled="toneSending"
+                        @click="doTestTone(TestToneKinds.Space)"
+                      >
+                        Space
+                      </v-btn>
+                      <v-btn
+                        size="x-small"
+                        :disabled="toneSending"
+                        @click="doTestTone(TestToneKinds.Alternating)"
+                      >
+                        Alt
+                      </v-btn>
+                    </v-btn-group>
+                    <span class="text-caption text-medium-emphasis">
+                      keys TX ~2s · gain applies live while you drag
+                    </span>
+                  </div>
+                </template>
+              </div>
+
+              <template v-else>
+                <div v-if="rModem.txEnabled" class="radio-form-row">
                   <v-text-field
                     v-model.number="rModem.txAudioLevelPct"
                     label="TX level (%)"
                     density="compact"
                     type="number"
+                    hint="Save the radio, then reopen to calibrate against the live waterfall"
+                    persistent-hint
                   />
                 </div>
               </template>
@@ -2676,6 +2843,19 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
+.calibration-box {
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: rgba(var(--v-theme-on-surface), 0.03);
+}
+
+.calibration-label {
+  letter-spacing: 0.08em;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
 .radio-form-section {
   margin-bottom: 18px;
 }

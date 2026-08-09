@@ -1002,18 +1002,16 @@ public sealed class AprsPacketParsingService(
 
         if (pending is not null)
         {
+            // The echo (Direwolf KISS echo, or the native modem's software loopback)
+            // only proves the frame went out the transmit path — it is NOT an
+            // off-air reception. Heard stays false until a digipeater actually
+            // relays the beacon (RecordDigiConfirmationAsync); marking it heard
+            // here showed "heard ✓" on beacons no station ever received.
             pending.HopCount = 0;
-            pending.Heard = true;
             await db.SaveChangesAsync(ct);
 
-            await hubContext.Clients.All.SendAsync(PacketHub.BeaconConfirmedHeardMethod, new BeaconConfirmedHeardDto
-            {
-                RadioId = radio.Id,
-                BeaconId = pending.Id,
-            }, ct);
-
             logger.LogDebug(
-                "Confirmed own beacon for {Callsign} (KISS echo received).",
+                "Own beacon for {Callsign} left the transmit path (echo received); awaiting off-air confirmation.",
                 radio.FullCallsign);
             return;
         }
@@ -1032,7 +1030,8 @@ public sealed class AprsPacketParsingService(
         }
 
         // No prior record — beacon originated outside DireControl (e.g. Direwolf
-        // timer beacon or heard via APRS-IS).  Create a new confirmed record.
+        // timer beacon or heard via APRS-IS).  A direct echo still only proves it
+        // was transmitted — Heard waits for a digipeater relay.
         var beacon = new OwnBeacon
         {
             RadioId = radio.Id,
@@ -1042,7 +1041,7 @@ public sealed class AprsPacketParsingService(
             Comment = string.IsNullOrEmpty(packet.Comment) ? null : packet.Comment,
             PathUsed = string.IsNullOrEmpty(packet.Path) ? null : packet.Path,
             HopCount = 0,
-            Heard = true,
+            Heard = false,
         };
 
         db.OwnBeacons.Add(beacon);
@@ -1057,7 +1056,7 @@ public sealed class AprsPacketParsingService(
             Lat = beacon.Latitude,
             Lon = beacon.Longitude,
             PathUsed = beacon.PathUsed,
-            Heard = true,
+            Heard = false,
         }, ct);
 
         logger.LogDebug("Recorded own beacon for {Callsign} at {Time}.", radio.FullCallsign, beacon.BeaconedAt);

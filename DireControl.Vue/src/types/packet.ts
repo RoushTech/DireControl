@@ -139,6 +139,11 @@ export interface SignalPointDto {
   receivedAt: string
   decodeQuality: number | null
   frequencyOffsetHz: number | null
+  audioLevel: number | null
+  demodProfile: string | null
+  hopCount: number
+  /** First digipeater the packet came through; null when heard direct. */
+  firstDigi: string | null
 }
 
 export interface PacketDto {

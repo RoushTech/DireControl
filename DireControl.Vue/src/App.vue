@@ -346,7 +346,7 @@ async function syncServerClock() {
     </v-navigation-drawer>
 
     <!-- App bar — hidden in pop-out windows -->
-    <v-app-bar v-if="!route.meta.isPopOut" density="compact" color="surface">
+    <v-app-bar v-if="!route.meta.isPopOut" density="compact" color="surface" flat border="b">
       <!-- Hamburger button — mobile only -->
       <v-app-bar-nav-icon
         class="d-flex d-mobile-nav-hide"
@@ -637,6 +637,12 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+}
+
+/* Mock convention: callsigns render in mono, app-wide. */
+.callsign-link {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-weight: 600;
 }
 
 .toast-stack {

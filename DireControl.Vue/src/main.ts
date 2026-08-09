@@ -21,6 +21,16 @@ const vuetify = createVuetify({
   display: {
     mobileBreakpoint: 768,
   },
+  // Component defaults matching the design mock: 8-10px radii, outlined
+  // compact inputs everywhere.
+  defaults: {
+    VCard: { rounded: 'lg' },
+    VBtn: { rounded: 'lg' },
+    VTextField: { variant: 'outlined', density: 'compact' },
+    VSelect: { variant: 'outlined', density: 'compact' },
+    VCombobox: { variant: 'outlined', density: 'compact' },
+    VAutocomplete: { variant: 'outlined', density: 'compact' },
+  },
   theme: {
     defaultTheme: initialTheme,
     themes: {
@@ -30,6 +40,12 @@ const vuetify = createVuetify({
       light: {
         dark: false,
         colors: {
+          background: '#f2f4f7',
+          surface: '#ffffff',
+          'surface-light': '#eef1f5',
+          'surface-bright': '#ffffff',
+          'on-background': '#1b2733',
+          'on-surface': '#1b2733',
           primary: '#1467c8',
           secondary: '#4d6070',
           success: '#1a7f37',
@@ -43,6 +59,13 @@ const vuetify = createVuetify({
       dark: {
         dark: true,
         colors: {
+          // Blue-tinted dark ground from the design mock, not stock #121212.
+          background: '#0e1116',
+          surface: '#161b22',
+          'surface-light': '#1d242e',
+          'surface-bright': '#242d38',
+          'on-background': '#e6edf3',
+          'on-surface': '#e6edf3',
           primary: '#4d9fff',
           secondary: '#9fb0c0',
           success: '#3fb950',

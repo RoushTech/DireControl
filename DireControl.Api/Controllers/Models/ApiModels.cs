@@ -479,6 +479,11 @@ public sealed class SignalPointDto
     public DateTime ReceivedAt { get; init; }
     public int? DecodeQuality { get; init; }
     public double? FrequencyOffsetHz { get; init; }
+    public double? AudioLevel { get; init; }
+    public string? DemodProfile { get; init; }
+    public int HopCount { get; init; }
+    /// <summary>First digipeater the packet came through, null when heard direct.</summary>
+    public string? FirstDigi { get; init; }
 }
 
 public sealed class DigipeaterAnalysisEntryDto

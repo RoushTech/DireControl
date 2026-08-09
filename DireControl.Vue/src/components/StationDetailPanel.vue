@@ -76,10 +76,12 @@ const { now } = useTick(1000)
 
 const inspectedPacketId = ref<number | null>(null)
 
-const tab = ref<'info' | 'packets' | 'weather' | 'stats' | 'signal'>('info')
+type TabValue = 'info' | 'packets' | 'weather' | 'stats' | 'signal'
+
+// Page mode binds this from the route page's own tab row (v-model:tab).
+const tab = defineModel<TabValue>('tab', { default: 'info' })
 const packetsNewData = ref(false)
 
-type TabValue = 'info' | 'packets' | 'weather' | 'stats' | 'signal'
 interface TabDef {
   value: TabValue
   label: string
@@ -377,7 +379,123 @@ const hourBarData = computed(() => {
   }
 })
 
-// ---- Signal chart ----
+// ---- Signal analytics ----
+
+const signalRange = ref<'24h' | '7d'>('24h')
+
+const hasAudioData = computed(() => signalPoints.value.some((p) => p.audioLevel != null))
+const hasOffsetData = computed(() => signalPoints.value.some((p) => p.frequencyOffsetHz != null))
+
+/** Aggregates for the summary tiles. */
+const signalSummary = computed(() => {
+  const points = signalPoints.value
+  const audio = points.filter((p) => p.audioLevel != null).map((p) => p.audioLevel!)
+  const direct = points.filter((p) => p.hopCount === 0).length
+
+  const digiCounts = new Map<string, number>()
+  for (const p of points) {
+    if (p.firstDigi) digiCounts.set(p.firstDigi, (digiCounts.get(p.firstDigi) ?? 0) + 1)
+  }
+  const viaDigis = [...digiCounts.entries()].sort((a, b) => b[1] - a[1])
+
+  const profiles = new Map<string, number>()
+  for (const p of points) {
+    if (p.demodProfile) profiles.set(p.demodProfile, (profiles.get(p.demodProfile) ?? 0) + 1)
+  }
+
+  return {
+    count: points.length,
+    avgAudio: audio.length > 0 ? audio.reduce((a, b) => a + b, 0) / audio.length : null,
+    peakAudio: audio.length > 0 ? Math.max(...audio) : null,
+    directPct: points.length > 0 ? (direct / points.length) * 100 : 0,
+    directCount: direct,
+    viaDigis,
+    profiles: [...profiles.entries()].sort((a, b) => b[1] - a[1]),
+  }
+})
+
+/** Direct + per-digipeater share of how this station reaches us. */
+const heardViaBars = computed(() => {
+  const total = signalPoints.value.length
+  if (total === 0) return []
+  const bars: { label: string; count: number; pct: number; direct: boolean }[] = []
+  if (signalSummary.value.directCount > 0) {
+    bars.push({
+      label: 'Direct',
+      count: signalSummary.value.directCount,
+      pct: (signalSummary.value.directCount / total) * 100,
+      direct: true,
+    })
+  }
+  for (const [digi, count] of signalSummary.value.viaDigis.slice(0, 5)) {
+    bars.push({ label: digi, count, pct: (count / total) * 100, direct: false })
+  }
+  return bars
+})
+
+function signalTimeLabel(iso: string): string {
+  const d = new Date(iso)
+  if (signalRange.value === '7d') {
+    return d.toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+  }
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const audioChartData = computed(() => ({
+  labels: signalPoints.value.map((p) => signalTimeLabel(p.receivedAt)),
+  datasets: [
+    {
+      label: 'Audio level',
+      data: signalPoints.value.map((p) => p.audioLevel),
+      borderColor: '#66BB6A',
+      backgroundColor: 'rgba(102, 187, 106, 0.08)',
+      borderWidth: 2,
+      tension: 0.2,
+      fill: true,
+      spanGaps: true,
+      pointRadius: 2,
+    },
+  ],
+}))
+
+const audioChartOptions = computed(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: false as const,
+  plugins: {
+    legend: { display: false },
+    tooltip: { enabled: true as const },
+  },
+  scales: {
+    x: {
+      display: true,
+      ticks: { font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+    },
+    y: {
+      beginAtZero: true,
+      suggestedMax: Math.max(0.5, signalSummary.value.peakAudio ?? 0),
+      ticks: { font: { size: 9 } },
+    },
+  },
+  elements: { point: { radius: 2 } },
+}))
+
+const offsetChartData = computed(() => ({
+  labels: signalPoints.value.map((p) => signalTimeLabel(p.receivedAt)),
+  datasets: [
+    {
+      label: 'Frequency offset (Hz)',
+      data: signalPoints.value.map((p) => p.frequencyOffsetHz),
+      borderColor: '#42A5F5',
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      tension: 0.2,
+      fill: false,
+      spanGaps: true,
+      pointRadius: 2,
+    },
+  ],
+}))
 
 const signalChartOptions = {
   responsive: true,
@@ -404,7 +522,7 @@ const signalChartOptions = {
 }
 
 const signalChartData = computed(() => ({
-  labels: signalPoints.value.map((p) => p.receivedAt),
+  labels: signalPoints.value.map((p) => signalTimeLabel(p.receivedAt)),
   datasets: [
     {
       label: 'Decode Quality',
@@ -418,7 +536,6 @@ const signalChartData = computed(() => ({
   ],
 }))
 
-const latestSignal = computed(() => signalPoints.value[signalPoints.value.length - 1] ?? null)
 const hasDecodeQualityData = computed(() => signalPoints.value.some((p) => p.decodeQuality != null))
 
 // ---- Station type label / color ----
@@ -551,13 +668,17 @@ async function fetchSignal() {
   if (!props.callsign) return
   signalLoading.value = true
   try {
-    signalPoints.value = await getStationSignal(props.callsign)
+    signalPoints.value = await getStationSignal(
+      props.callsign,
+      signalRange.value === '7d' ? 168 : 24,
+    )
   } catch {
     signalPoints.value = []
   } finally {
     signalLoading.value = false
   }
 }
+watch(signalRange, () => void fetchSignal())
 
 async function performLookup() {
   if (!props.callsign) return
@@ -746,7 +867,7 @@ watch(tab, (newTab) => {
 
     <div class="panel-main">
       <!-- Vertical tab sidebar -->
-      <nav class="tab-sidebar" role="tablist" @keydown="onTabKeydown">
+      <nav v-if="!props.pageVariant" class="tab-sidebar" role="tablist" @keydown="onTabKeydown">
         <button
           v-for="t in visibleTabs"
           :key="t.value"
@@ -1004,43 +1125,118 @@ watch(tab, (newTab) => {
         <template v-if="tab === 'signal'">
           <v-progress-linear v-if="signalLoading" indeterminate color="green" />
 
+          <!-- Range toggle -->
+          <div class="d-flex align-center ga-2 px-3 pt-2">
+            <v-btn-toggle v-model="signalRange" density="compact" mandatory variant="outlined">
+              <v-btn value="24h" size="x-small">24h</v-btn>
+              <v-btn value="7d" size="x-small">7d</v-btn>
+            </v-btn-toggle>
+            <span class="text-caption text-medium-emphasis">
+              {{ signalPoints.length }} RF packet{{ signalPoints.length === 1 ? '' : 's' }}
+            </span>
+          </div>
+
           <template v-if="!signalLoading && signalPoints.length === 0">
             <div class="px-3 py-4 text-caption text-medium-emphasis">
-              Direwolf did not provide signal metadata for this station. Signal quality and
-              frequency offset data are not available via the KISS TCP interface.
+              No RF packets from this station in the selected window — signal data comes from
+              packets the modem decodes off the air.
             </div>
           </template>
 
           <template v-if="!signalLoading && signalPoints.length > 0">
-            <template v-if="latestSignal">
-              <div
-                class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium"
-              >
-                MOST RECENT
+            <!-- Summary tiles -->
+            <div class="signal-tiles px-3 pt-3">
+              <div class="signal-tile">
+                <div class="signal-tile-value">
+                  {{ signalSummary.avgAudio != null ? signalSummary.avgAudio.toFixed(2) : '—' }}
+                </div>
+                <div class="signal-tile-label">avg audio level</div>
               </div>
-              <div class="info-section">
-                <template v-if="latestSignal.decodeQuality != null">
-                  <div class="info-label">Decode quality</div>
-                  <div class="info-value">{{ latestSignal.decodeQuality }}</div>
-                </template>
-                <template v-if="latestSignal.frequencyOffsetHz != null">
-                  <div class="info-label">Freq offset</div>
-                  <div class="info-value">
-                    {{ latestSignal.frequencyOffsetHz > 0 ? '+' : ''
-                    }}{{ latestSignal.frequencyOffsetHz.toFixed(1) }} Hz
-                  </div>
-                </template>
+              <div class="signal-tile">
+                <div class="signal-tile-value">
+                  {{ signalSummary.peakAudio != null ? signalSummary.peakAudio.toFixed(2) : '—' }}
+                </div>
+                <div class="signal-tile-label">peak audio</div>
+              </div>
+              <div class="signal-tile">
+                <div class="signal-tile-value">{{ signalSummary.directPct.toFixed(0) }}%</div>
+                <div class="signal-tile-label">heard direct</div>
+              </div>
+              <div class="signal-tile">
+                <div class="signal-tile-value">
+                  {{ signalSummary.viaDigis[0]?.[0] ?? '—' }}
+                </div>
+                <div class="signal-tile-label">top digipeater</div>
+              </div>
+            </div>
+
+            <!-- Audio level over time -->
+            <template v-if="hasAudioData">
+              <div
+                class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
+              >
+                AUDIO LEVEL OVER TIME
+              </div>
+              <div class="signal-chart-wrap px-3 pb-1">
+                <Line :data="audioChartData" :options="audioChartOptions" />
               </div>
             </template>
 
+            <!-- How the packets reach us -->
+            <div
+              class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
+            >
+              HEARD VIA
+            </div>
+            <div class="px-3 pb-2">
+              <div v-for="bar in heardViaBars" :key="bar.label" class="heard-bar-row">
+                <span class="heard-bar-label" :class="{ 'text-success': bar.direct }">
+                  {{ bar.label }}
+                </span>
+                <div class="heard-bar-track">
+                  <div
+                    class="heard-bar-fill"
+                    :class="bar.direct ? 'heard-bar-fill--direct' : ''"
+                    :style="{ width: `${Math.max(2, bar.pct)}%` }"
+                  />
+                </div>
+                <span class="heard-bar-count">{{ bar.count }} · {{ bar.pct.toFixed(0) }}%</span>
+              </div>
+            </div>
+
+            <!-- Demod profiles -->
+            <div v-if="signalSummary.profiles.length > 0" class="px-3 pb-2">
+              <span class="text-caption text-medium-emphasis mr-1">Demod profile:</span>
+              <v-chip
+                v-for="[profile, count] in signalSummary.profiles"
+                :key="profile"
+                size="x-small"
+                variant="tonal"
+                class="mr-1"
+              >
+                {{ profile }} · {{ count }}
+              </v-chip>
+            </div>
+
+            <!-- Decode quality / frequency offset — populated by TNCs that report them -->
             <template v-if="hasDecodeQualityData">
               <div
                 class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
               >
-                DECODE QUALITY ({{ signalPoints.length }} packets)
+                DECODE QUALITY
               </div>
               <div class="signal-chart-wrap px-3 pb-3">
                 <Line :data="signalChartData" :options="signalChartOptions" />
+              </div>
+            </template>
+            <template v-if="hasOffsetData">
+              <div
+                class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
+              >
+                FREQUENCY OFFSET
+              </div>
+              <div class="signal-chart-wrap px-3 pb-3">
+                <Line :data="offsetChartData" :options="signalChartOptions" />
               </div>
             </template>
           </template>
@@ -1341,6 +1537,74 @@ watch(tab, (newTab) => {
 
 .heard-via-dot--direct {
   background: #4caf50;
+}
+
+.signal-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.signal-tile {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.signal-tile-value {
+  font-size: 1rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-tile-label {
+  font-size: 0.68rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+.heard-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.heard-bar-label {
+  flex: 0 0 90px;
+  font-size: 0.72rem;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heard-bar-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  overflow: hidden;
+}
+
+.heard-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: rgb(var(--v-theme-rf));
+}
+
+.heard-bar-fill--direct {
+  background: rgb(var(--v-theme-success));
+}
+
+.heard-bar-count {
+  flex: 0 0 66px;
+  text-align: right;
+  font-size: 0.7rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  font-variant-numeric: tabular-nums;
 }
 
 .heard-via-dot--digi {

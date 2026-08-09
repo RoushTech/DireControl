@@ -65,6 +65,19 @@ async function loadStation() {
   }
 }
 
+// ─── Page tabs (mock order/style; drives the panel via v-model:tab) ──────────
+type PageTab = 'info' | 'packets' | 'weather' | 'stats' | 'signal'
+const pageTab = ref<PageTab>('info')
+const packetCount = ref<number | null>(null)
+
+const pageTabs = computed(() => [
+  { value: 'info' as const, label: 'Info' },
+  { value: 'packets' as const, label: 'Packets', count: packetCount.value },
+  ...(station.value?.isWeatherStation ? [{ value: 'weather' as const, label: 'Weather' }] : []),
+  { value: 'stats' as const, label: 'Stats' },
+  { value: 'signal' as const, label: 'Signal' },
+])
+
 // ─── "How it reached us" — the latest packet's resolved RF path ──────────────
 const latestPacket = ref<PacketDto | null>(null)
 
@@ -94,8 +107,9 @@ const latestPacketSource = computed(() =>
 
 async function loadLatestPacket() {
   try {
-    const { items } = await getStationPackets(callsign.value, 1, 1)
+    const { items, totalCount } = await getStationPackets(callsign.value, 1, 1)
     latestPacket.value = items[0] ?? null
+    packetCount.value = totalCount
   } catch {
     latestPacket.value = null
   }
@@ -230,10 +244,29 @@ onUnmounted(() => {
     </div>
     <v-divider />
 
-    <!-- Tabbed content — the detail panel in page mode (horizontal tabs) -->
+    <!-- Mock-style underline tabs, page-level -->
+    <div class="station-tabs">
+      <button
+        v-for="t in pageTabs"
+        :key="t.value"
+        class="station-tab"
+        :class="{ 'station-tab--active': pageTab === t.value }"
+        role="tab"
+        :aria-selected="pageTab === t.value"
+        @click="pageTab = t.value"
+      >
+        {{ t.label }}
+        <v-chip v-if="t.count != null" size="x-small" variant="tonal" class="ml-1">
+          {{ t.count.toLocaleString() }}
+        </v-chip>
+      </button>
+    </div>
+    <v-divider />
+
+    <!-- Tabbed content — the detail panel in page mode (page owns the tabs) -->
     <div class="station-page-body">
       <!-- Mock headline: the latest packet's resolved RF path, hop by hop -->
-      <v-card v-if="pathHops.length > 0" variant="outlined" class="mb-3">
+      <v-card v-if="pageTab === 'info' && pathHops.length > 0" variant="outlined" class="mb-3">
         <div class="d-flex align-center ga-2 px-4 pt-3 pb-2">
           <span class="text-subtitle-2 font-weight-medium">Last packet — how it reached us</span>
           <v-chip size="x-small" variant="tonal" :color="latestPacketSource.color">
@@ -268,6 +301,7 @@ onUnmounted(() => {
         </div>
       </v-card>
       <StationDetailPanel
+        v-model:tab="pageTab"
         :callsign="callsign"
         :refresh-key="refreshKey"
         page-variant
@@ -313,6 +347,37 @@ onUnmounted(() => {
 
 .min-width-0 {
   min-width: 0;
+}
+
+.station-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.station-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.station-tab:hover {
+  color: rgba(var(--v-theme-on-surface), 0.9);
+}
+
+.station-tab--active {
+  color: rgb(var(--v-theme-primary));
+  border-bottom-color: rgb(var(--v-theme-primary));
 }
 
 .station-page-body {

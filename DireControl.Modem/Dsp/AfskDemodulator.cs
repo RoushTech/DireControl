@@ -21,8 +21,10 @@ public sealed class AfskDemodulator
     private readonly HdlcDeframer _deframer = new();
 
     private readonly int _dcdHoldSamples;
+    private readonly int _dcdFlagPairWindowSamples;
     private long _sampleIndex;
-    private long _lastFlagSampleIndex = long.MinValue;
+    private long _prevFlagSampleIndex = long.MinValue;
+    private long _dcdArmedSampleIndex = long.MinValue;
 
     /// <summary>Raised with the AX.25 frame bytes (FCS stripped) on each valid decode.</summary>
     public event Action<byte[]>? FrameDemodulated;
@@ -49,10 +51,20 @@ public sealed class AfskDemodulator
         _pll = new BitClockPll(
             profile.SampleRate, profile.Baud, profile.PllLockedInertia, profile.PllSearchingInertia);
 
-        // DCD holds for half a second after the last HDLC flag.
+        // DCD holds for half a second after arming.
         _dcdHoldSamples = profile.SampleRate / 2;
+        // Random noise demodulates into lone 0x7E patterns surprisingly often, so a
+        // single flag must not arm DCD (it made "Carrier: detected" show on a dead
+        // band). A real transmission opens with a preamble of back-to-back flags, so
+        // arm only when two flags land within three flag-widths (24 bit times).
+        _dcdFlagPairWindowSamples = (int)(profile.SampleRate * 24 / profile.Baud);
         _deframer.FrameReceived += frame => FrameDemodulated?.Invoke(frame);
-        _deframer.FlagDetected += () => _lastFlagSampleIndex = _sampleIndex;
+        _deframer.FlagDetected += () =>
+        {
+            if (_sampleIndex - _prevFlagSampleIndex <= _dcdFlagPairWindowSamples)
+                _dcdArmedSampleIndex = _sampleIndex;
+            _prevFlagSampleIndex = _sampleIndex;
+        };
     }
 
     /// <summary>Valid frames decoded by this demodulator.</summary>
@@ -62,9 +74,13 @@ public sealed class AfskDemodulator
     public long InvalidFrameCount => _deframer.InvalidFrameCount;
 
     /// <summary>
-    /// Data-carrier detect: true while HDLC flags/frames have been seen recently.
+    /// Data-carrier detect: true while consecutive HDLC flags (a real preamble,
+    /// not a lone noise-decoded flag) have been seen recently. The sentinel check
+    /// matters: subtracting long.MinValue wraps negative, which made DCD read
+    /// "detected" from startup until the first flag ever arrived.
     /// </summary>
-    public bool CarrierDetected => _sampleIndex - _lastFlagSampleIndex < _dcdHoldSamples;
+    public bool CarrierDetected =>
+        _dcdArmedSampleIndex != long.MinValue && _sampleIndex - _dcdArmedSampleIndex < _dcdHoldSamples;
 
     /// <summary>
     /// Processes a block of mono float samples (any nominal level; AGC adapts).
@@ -105,6 +121,7 @@ public sealed class AfskDemodulator
         _pll.Reset();
         _nrzi.Reset();
         _deframer.Reset();
-        _lastFlagSampleIndex = long.MinValue;
+        _prevFlagSampleIndex = long.MinValue;
+        _dcdArmedSampleIndex = long.MinValue;
     }
 }
