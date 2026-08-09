@@ -6,6 +6,7 @@ using DireControl.Modem.Ax25;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Reflection;
 
 namespace DireControl.Api.Services;
 
@@ -22,6 +23,41 @@ public sealed class BeaconService(
     IOptions<DireControlOptions> options,
     ILogger<BeaconService> logger)
 {
+    /// <summary>Comment template used when the radio has none configured.</summary>
+    internal const string DefaultCommentTemplate = "DireControl v{version}";
+
+    /// <summary>
+    /// App version substituted for <c>{version}</c> tokens, with any
+    /// "+buildmetadata" suffix trimmed off the informational version.
+    /// </summary>
+    internal static readonly string Version = ResolveVersion(
+        typeof(BeaconService).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion);
+
+    internal static string ResolveVersion(string? informationalVersion)
+    {
+        var version = informationalVersion ?? "unknown";
+        var plus = version.IndexOf('+');
+        return plus >= 0 ? version[..plus] : version;
+    }
+
+    /// <summary>
+    /// The comment actually transmitted for <paramref name="radio"/>: the
+    /// configured comment (or <see cref="DefaultCommentTemplate"/> when blank)
+    /// with <c>{version}</c> tokens expanded.
+    /// </summary>
+    internal static string EffectiveComment(Radio radio) =>
+        EffectiveComment(radio, Version);
+
+    internal static string EffectiveComment(Radio radio, string version)
+    {
+        var template = string.IsNullOrWhiteSpace(radio.BeaconComment)
+            ? DefaultCommentTemplate
+            : radio.BeaconComment;
+        return template.Replace("{version}", version, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Transmits a position beacon for <paramref name="radio"/> and immediately
     /// records it as a <see cref="OwnBeacon"/> with <c>HopCount = -2</c> and
@@ -46,7 +82,8 @@ public sealed class BeaconService(
         var lon = opts.HomeLon.Value;
         var path = radio.BeaconPath ?? string.Empty;
 
-        var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", radio.BeaconComment);
+        var comment = EffectiveComment(radio);
+        var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", comment);
         var frame = Ax25Encoder.EncodeUiFrame(radio.FullCallsign, info, path);
 
         if (!transmitter.TrySend(frame, radio.ChannelNumber))
@@ -71,7 +108,7 @@ public sealed class BeaconService(
             BeaconedAt = DateTime.UtcNow,
             Latitude = lat,
             Longitude = lon,
-            Comment = string.IsNullOrEmpty(radio.BeaconComment) ? null : radio.BeaconComment,
+            Comment = comment,
             PathUsed = string.IsNullOrEmpty(path) ? null : path,
             HopCount = -2,
             Heard = false,

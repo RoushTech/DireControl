@@ -2411,7 +2411,13 @@ async function confirmDelete() {
                       hint="Leave blank for direct (no digipeating)"
                       persistent-hint
                     />
-                    <v-text-field v-model="rBeaconComment" label="Comment" density="compact" />
+                    <v-text-field
+                      v-model="rBeaconComment"
+                      label="Comment"
+                      density="compact"
+                      hint="{version} expands to the app version; blank sends “DireControl v{version}”"
+                      persistent-hint
+                    />
                   </div>
                   <div class="d-flex align-start ga-4 flex-wrap mt-1">
                     <div style="flex: 1 1 260px; min-width: 240px">
