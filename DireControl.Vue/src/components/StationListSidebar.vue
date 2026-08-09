@@ -168,26 +168,27 @@ const virtualItems = computed<VirtualItem[]>(() => {
     </div>
 
     <div class="sidebar-filters pa-2">
-      <v-text-field
-        ref="searchFieldRef"
-        v-model="searchText"
-        placeholder="Search callsign…"
-        density="compact"
-        variant="outlined"
-        hide-details
-        clearable
-        class="mb-2"
-      />
-      <div class="d-flex ga-2 mb-2">
+      <!-- Search + WX toggle share one row so the list starts sooner -->
+      <div class="d-flex ga-2 mb-2 align-center">
+        <v-text-field
+          ref="searchFieldRef"
+          v-model="searchText"
+          placeholder="Search callsign…"
+          density="compact"
+          variant="outlined"
+          hide-details
+          clearable
+          class="flex-1"
+        />
         <v-btn
           :color="showWeatherOnly ? 'teal' : 'default'"
           :variant="showWeatherOnly ? 'tonal' : 'outlined'"
           density="comfortable"
-          prepend-icon="mdi-weather-partly-cloudy"
+          icon="mdi-weather-partly-cloudy"
+          size="small"
+          :title="showWeatherOnly ? 'Showing weather stations only' : 'Show weather stations only'"
           @click="showWeatherOnly = !showWeatherOnly"
-        >
-          WX Only
-        </v-btn>
+        />
       </div>
       <div class="d-flex ga-2">
         <v-select
