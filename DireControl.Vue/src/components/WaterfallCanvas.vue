@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -10,6 +10,26 @@ const props = withDefaults(
 )
 
 const canvas = ref<HTMLCanvasElement | null>(null)
+const wrapper = ref<HTMLDivElement | null>(null)
+
+// Track the container so the canvas renders at native resolution at any card
+// width instead of stretching a fixed 342px bitmap. A resize clears the
+// history; the live spectrum repaints it within seconds.
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  resizeObserver = new ResizeObserver((entries) => {
+    const w = Math.floor(entries[0]?.contentRect.width ?? props.width)
+    const el = canvas.value
+    if (el && w > 0 && el.width !== w) el.width = w
+  })
+  if (wrapper.value) resizeObserver.observe(wrapper.value)
+})
+
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 
 /** Maps a 0-255 spectrum magnitude to a dark-blue → yellow heat colour. */
 function waterfallColor(v: number): [number, number, number] {
@@ -45,12 +65,9 @@ defineExpose({ drawRow })
 </script>
 
 <template>
-  <div>
+  <div ref="wrapper">
     <canvas ref="canvas" :width="props.width" :height="props.height" class="waterfall-canvas" />
-    <div
-      class="d-flex justify-space-between text-caption text-medium-emphasis"
-      :style="{ maxWidth: `${props.width}px` }"
-    >
+    <div class="d-flex justify-space-between text-caption text-medium-emphasis">
       <span>0</span><span>1k</span><span>2k</span><span>3k</span><span>4 kHz</span>
     </div>
   </div>

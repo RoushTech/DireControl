@@ -477,35 +477,23 @@ onUnmounted(() => {
               <div class="modem-body">
                 <!-- Left: meters + waterfall -->
                 <div class="modem-meters">
-                  <div class="d-flex align-center ga-2 mb-2 flex-nowrap">
-                    <v-chip
-                      :color="levelFor(m).carrierDetected ? 'success' : 'grey'"
-                      size="x-small"
-                      variant="tonal"
-                      class="flex-shrink-0"
-                    >
-                      <v-icon start size="12">mdi-arrow-down-bold</v-icon>RX
-                    </v-chip>
-                    <v-progress-linear
-                      :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
-                      :color="levelColor(levelFor(m).audioLevel)"
-                      height="12"
-                      rounded
-                    />
+                  <!-- Mock style: labeled thin meter, value right -->
+                  <div class="d-flex align-center justify-space-between mb-1">
+                    <span class="text-caption text-medium-emphasis">Audio level</span>
                     <span class="text-caption text-medium-emphasis meter-pct">
                       {{ (levelFor(m).audioLevel * 100).toFixed(0) }}%
                     </span>
                   </div>
+                  <v-progress-linear
+                    :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
+                    :color="levelColor(levelFor(m).audioLevel)"
+                    height="6"
+                    rounded
+                    class="mb-3"
+                  />
 
                   <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-1 flex-nowrap">
-                    <v-chip
-                      :color="levelFor(m).transmitting ? 'error' : 'grey'"
-                      size="x-small"
-                      variant="tonal"
-                      class="flex-shrink-0"
-                    >
-                      <v-icon start size="12">mdi-arrow-up-bold</v-icon>TX
-                    </v-chip>
+                    <span class="text-caption text-medium-emphasis flex-shrink-0">TX gain</span>
                     <v-slider
                       :model-value="txGain[m.radioId] ?? 80"
                       :min="1"
@@ -550,11 +538,8 @@ onUnmounted(() => {
                     <span class="text-caption text-medium-emphasis">keys TX ~2s</span>
                   </div>
 
-                  <WaterfallCanvas
-                    :ref="(el) => setWaterfallRef(m.radioId, el)"
-                    :height="100"
-                    class="mt-1"
-                  />
+                  <div class="text-caption text-medium-emphasis mt-1 mb-1">Waterfall</div>
+                  <WaterfallCanvas :ref="(el) => setWaterfallRef(m.radioId, el)" :height="100" />
                 </div>
 
                 <!-- Right: stats -->
@@ -709,14 +694,12 @@ onUnmounted(() => {
             @click="inspectedPacketId = p.id"
             @keydown.enter="inspectedPacketId = p.id"
           >
+            <!-- Mock order: time · callsign · type · summary, source badge right -->
             <span
               class="text-caption text-medium-emphasis feed-time"
               :title="formatUtc(p.receivedAt)"
               >{{ timeAgo(p.receivedAt, now) }}</span
             >
-            <v-chip size="x-small" variant="tonal" :color="sourceLabel(p) === 'RF' ? 'rf' : 'is'">
-              {{ sourceLabel(p) }}
-            </v-chip>
             <a
               class="callsign-link text-body-2 font-weight-medium"
               @click.stop.prevent="goToStation(p.callsign)"
@@ -727,6 +710,14 @@ onUnmounted(() => {
             <span class="text-caption text-medium-emphasis feed-summary" :title="p.summary">{{
               p.summary
             }}</span>
+            <v-chip
+              size="x-small"
+              variant="tonal"
+              class="feed-source"
+              :color="sourceLabel(p) === 'RF' ? 'rf' : 'is'"
+            >
+              {{ sourceLabel(p) }}
+            </v-chip>
           </div>
         </div>
       </v-card>
@@ -753,16 +744,22 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+/* Mock proportions: the radio card is the dominant column (7:5). */
 .radio-layout {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(420px, 7fr) minmax(320px, 5fr);
   gap: 16px;
-  align-items: flex-start;
-  flex-wrap: wrap;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .radio-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 .stack-column {
-  flex: 0 1 460px;
-  min-width: 320px;
+  min-width: 0;
 }
 
 .identity-chip {
@@ -834,8 +831,7 @@ onUnmounted(() => {
 }
 
 .feed-column {
-  flex: 1 1 480px;
-  min-width: 320px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 140px);
@@ -868,6 +864,13 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.feed-source {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .callsign-link {

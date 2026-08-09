@@ -863,6 +863,11 @@ async function startReprocessNow() {
 }
 
 const cleanupConfirmOpen = ref(false)
+const cleanupConfirmText = ref('')
+
+watch(cleanupConfirmOpen, (open) => {
+  if (open) cleanupConfirmText.value = ''
+})
 
 /** Human summary of the retention windows, for the confirmation dialog. */
 function retentionLabel(days: number): string {
@@ -2618,15 +2623,36 @@ async function confirmDelete() {
           Run cleanup now?
         </v-card-title>
         <v-card-text>
-          This permanently deletes packets outside the retention windows — RF packets
-          {{ retentionLabel(retentionRfDays) }}, APRS-IS packets
-          {{ retentionLabel(retentionAprsIsDays) }}, own beacons
-          {{ retentionLabel(retentionOwnDays) }}. This cannot be undone.
+          <p class="mb-3">
+            This permanently deletes packets outside the retention windows — RF packets
+            {{ retentionLabel(retentionRfDays) }}, APRS-IS packets
+            {{ retentionLabel(retentionAprsIsDays) }}, own beacons
+            {{ retentionLabel(retentionOwnDays) }}. This cannot be undone.
+          </p>
+          <p class="text-caption text-medium-emphasis mb-2">
+            Type <code>cleanup</code> to confirm:
+          </p>
+          <v-text-field
+            v-model="cleanupConfirmText"
+            density="compact"
+            variant="outlined"
+            hide-details
+            autofocus
+            aria-label="Type cleanup to confirm"
+            @keydown.enter="cleanupConfirmText.trim() === 'cleanup' && runCleanupNow()"
+          />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="cleanupConfirmOpen = false">Cancel</v-btn>
-          <v-btn color="error" variant="tonal" @click="runCleanupNow">Delete old packets</v-btn>
+          <v-btn
+            color="error"
+            variant="tonal"
+            :disabled="cleanupConfirmText.trim() !== 'cleanup'"
+            @click="runCleanupNow"
+          >
+            Delete old packets
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

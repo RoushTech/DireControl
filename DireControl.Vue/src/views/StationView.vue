@@ -6,9 +6,14 @@ import { usePacketHubStore } from '@/stores/packetHub'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useUiStore } from '@/stores/uiStore'
 import { useToastStore } from '@/stores/toastStore'
-import { getStation, toggleWatch } from '@/api/stationsApi'
+import { getStation, getStationPackets, toggleWatch } from '@/api/stationsApi'
 import { StationType, type StationDto } from '@/types/station'
-import type { PacketBroadcastDto } from '@/types/packet'
+import {
+  PacketSource,
+  type PacketBroadcastDto,
+  type PacketDto,
+  type ResolvedPathEntry,
+} from '@/types/packet'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
 import { timeAgo, formatUtc } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
@@ -60,6 +65,42 @@ async function loadStation() {
   }
 }
 
+// ─── "How it reached us" — the latest packet's resolved RF path ──────────────
+const latestPacket = ref<PacketDto | null>(null)
+
+const pathHops = computed<ResolvedPathEntry[]>(() => {
+  const path = latestPacket.value?.resolvedPath
+  if (!path || path.length < 2) return []
+  return path
+})
+
+function hopRole(hop: ResolvedPathEntry, index: number): string {
+  if (index === 0) return 'Origin'
+  if (index === pathHops.value.length - 1) return 'Heard by'
+  return hop.aliasUsed ? `Digipeater · ${hop.aliasUsed}` : 'Digipeater'
+}
+
+function hopClass(hop: ResolvedPathEntry, index: number): string {
+  if (index === 0) return ''
+  if (index === pathHops.value.length - 1) return 'hop--us'
+  return 'hop--digi'
+}
+
+const latestPacketSource = computed(() =>
+  latestPacket.value?.source === PacketSource.AprsIs
+    ? { label: 'IS', color: 'is' }
+    : { label: 'RF', color: 'rf' },
+)
+
+async function loadLatestPacket() {
+  try {
+    const { items } = await getStationPackets(callsign.value, 1, 1)
+    latestPacket.value = items[0] ?? null
+  } catch {
+    latestPacket.value = null
+  }
+}
+
 async function toggleWatchStatus() {
   watchLoading.value = true
   try {
@@ -86,6 +127,7 @@ function onHubPacketReceived(packet: PacketBroadcastDto) {
   if (packet.callsign === callsign.value) {
     refreshKey.value++
     void loadStation()
+    void loadLatestPacket()
   }
 }
 
@@ -109,10 +151,18 @@ function onClose() {
   else router.push('/')
 }
 
-watch(callsign, () => void loadStation(), { immediate: false })
+watch(
+  callsign,
+  () => {
+    void loadStation()
+    void loadLatestPacket()
+  },
+  { immediate: false },
+)
 
 onMounted(() => {
   void loadStation()
+  void loadLatestPacket()
   hub.on('packetReceived', onHubPacketReceived)
 })
 
@@ -182,6 +232,41 @@ onUnmounted(() => {
 
     <!-- Tabbed content — the detail panel in page mode (horizontal tabs) -->
     <div class="station-page-body">
+      <!-- Mock headline: the latest packet's resolved RF path, hop by hop -->
+      <v-card v-if="pathHops.length > 0" variant="outlined" class="mb-3">
+        <div class="d-flex align-center ga-2 px-4 pt-3 pb-2">
+          <span class="text-subtitle-2 font-weight-medium">Last packet — how it reached us</span>
+          <v-chip size="x-small" variant="tonal" :color="latestPacketSource.color">
+            {{ latestPacketSource.label }}
+          </v-chip>
+          <v-spacer />
+          <span
+            v-if="latestPacket"
+            class="text-caption text-medium-emphasis"
+            :title="formatUtc(latestPacket.receivedAt)"
+          >
+            {{ timeAgo(latestPacket.receivedAt, now) }}
+          </span>
+        </div>
+        <div class="px-4 pb-3">
+          <div class="path-viz">
+            <template v-for="(hop, i) in pathHops" :key="`${hop.callsign}-${i}`">
+              <v-icon v-if="i > 0" size="16" class="path-arrow">mdi-arrow-right</v-icon>
+              <div class="hop" :class="hopClass(hop, i)">
+                <div class="hop-role">{{ hopRole(hop, i) }}</div>
+                <div class="hop-callsign">{{ hop.callsign }}</div>
+                <div v-if="hop.latitude != null && hop.longitude != null" class="hop-coord">
+                  {{ hop.latitude.toFixed(4) }}, {{ hop.longitude.toFixed(4) }}
+                </div>
+                <div v-else class="hop-coord">position unknown</div>
+              </div>
+            </template>
+          </div>
+          <div v-if="latestPacket" class="raw-line" :title="latestPacket.rawPacket">
+            {{ latestPacket.rawPacket }}
+          </div>
+        </div>
+      </v-card>
       <StationDetailPanel
         :callsign="callsign"
         :refresh-key="refreshKey"
@@ -242,5 +327,70 @@ onUnmounted(() => {
 .station-page-body :deep(.detail-panel-content) {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 12px;
+}
+
+/* ── Resolved-path hop chain ── */
+.path-viz {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.path-arrow {
+  align-self: center;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  flex-shrink: 0;
+}
+
+.hop {
+  flex: 1 1 150px;
+  min-width: 140px;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.hop--digi {
+  border-color: rgba(var(--v-theme-rf), 0.6);
+}
+
+.hop--us {
+  border-color: rgba(var(--v-theme-success), 0.6);
+}
+
+.hop-role {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.hop-callsign {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  margin: 2px 0;
+}
+
+.hop-coord {
+  font-size: 0.7rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+.raw-line {
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 6px;
+  padding: 6px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -356,7 +356,28 @@ function heardViaLabel(p: PacketDto): string {
           <template v-if="isTelemetry && packet.telemetryData">
             <div class="section-label">Telemetry</div>
             <div class="px-3 pb-3">
-              <pre class="raw-block">{{ JSON.stringify(packet.telemetryData, null, 2) }}</pre>
+              <v-table density="compact">
+                <tbody>
+                  <tr v-if="packet.telemetryData.sequenceNumber != null">
+                    <td class="text-medium-emphasis">Sequence</td>
+                    <td>{{ packet.telemetryData.sequenceNumber }}</td>
+                  </tr>
+                  <tr v-for="(value, i) in packet.telemetryData.analogs ?? []" :key="`a${i}`">
+                    <td class="text-medium-emphasis">Analog {{ i + 1 }}</td>
+                    <td>{{ value }}</td>
+                  </tr>
+                  <tr v-if="packet.telemetryData.digitals?.length">
+                    <td class="text-medium-emphasis">Digital bits</td>
+                    <td class="font-mono">
+                      {{ packet.telemetryData.digitals.map((b) => (b ? '1' : '0')).join('') }}
+                    </td>
+                  </tr>
+                  <tr v-if="packet.telemetryData.comment">
+                    <td class="text-medium-emphasis">Comment</td>
+                    <td>{{ packet.telemetryData.comment }}</td>
+                  </tr>
+                </tbody>
+              </v-table>
             </div>
           </template>
 

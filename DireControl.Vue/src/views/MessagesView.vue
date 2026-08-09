@@ -19,9 +19,11 @@ const stationSelection = useStationSelectionStore()
 const router = useRouter()
 const { now } = useTick(1000)
 
+// Callsigns link to the station page (mock convention). The station page's
+// "Show on map" covers the old select-on-map behavior.
 function goToStation(callsign: string) {
   stationSelection.selectStation(callsign)
-  router.push('/')
+  router.push(`/stations/${encodeURIComponent(callsign)}`)
 }
 
 // ─── Settings & stations ────────────────────────────────────────────────────
@@ -79,11 +81,35 @@ watch([filterSender, filterAddressee, filterText], () => {
 })
 
 // ─── Inbox / Outbox ──────────────────────────────────────────────────────────
-const inboundMessages = computed(() =>
-  store.inboxMessages.filter(
+// Sortable inbox columns (mock: clickable "From ▲" headers).
+type InboxSortKey = 'from' | 'receivedAt'
+const inboxSortKey = ref<InboxSortKey>('receivedAt')
+const inboxSortDesc = ref(true)
+
+function toggleInboxSort(key: InboxSortKey) {
+  if (inboxSortKey.value === key) {
+    inboxSortDesc.value = !inboxSortDesc.value
+  } else {
+    inboxSortKey.value = key
+    inboxSortDesc.value = key === 'receivedAt'
+  }
+}
+
+function inboxSortIcon(key: InboxSortKey): string {
+  if (inboxSortKey.value !== key) return 'mdi-unfold-more-horizontal'
+  return inboxSortDesc.value ? 'mdi-arrow-down' : 'mdi-arrow-up'
+}
+
+const inboundMessages = computed(() => {
+  const list = store.inboxMessages.filter(
     (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase(),
-  ),
-)
+  )
+  const dir = inboxSortDesc.value ? -1 : 1
+  return [...list].sort((a, b) => {
+    if (inboxSortKey.value === 'from') return dir * a.fromCallsign.localeCompare(b.fromCallsign)
+    return dir * a.receivedAt.localeCompare(b.receivedAt)
+  })
+})
 
 const outboxMessages = computed(() =>
   store.inboxMessages.filter(
@@ -393,9 +419,17 @@ function replyTo(message: InboxMessageDto) {
         <v-table density="compact" hover>
           <thead>
             <tr>
-              <th>From</th>
+              <th>
+                <button class="sort-th" @click="toggleInboxSort('from')">
+                  From <v-icon size="12">{{ inboxSortIcon('from') }}</v-icon>
+                </button>
+              </th>
               <th>Message</th>
-              <th>Time</th>
+              <th>
+                <button class="sort-th" @click="toggleInboxSort('receivedAt')">
+                  Time <v-icon size="12">{{ inboxSortIcon('receivedAt') }}</v-icon>
+                </button>
+              </th>
               <th>Status</th>
               <th></th>
             </tr>
@@ -436,7 +470,22 @@ function replyTo(message: InboxMessageDto) {
               </td>
             </tr>
             <tr v-if="inboundMessages.length === 0">
-              <td colspan="5" class="text-center text-medium-emphasis py-6">No messages yet.</td>
+              <td colspan="5" class="text-center py-8">
+                <v-icon size="36" class="text-medium-emphasis mb-2">mdi-email-outline</v-icon>
+                <div class="text-body-2 font-weight-medium mb-1">No messages yet</div>
+                <div class="text-caption text-medium-emphasis mb-3">
+                  Anything addressed to {{ ourCallsign || 'your station' }} lands here.
+                </div>
+                <v-btn
+                  size="small"
+                  color="primary"
+                  variant="tonal"
+                  prepend-icon="mdi-email-edit-outline"
+                  @click="openCompose()"
+                >
+                  Compose your first message
+                </v-btn>
+              </td>
             </tr>
           </tbody>
         </v-table>
@@ -782,6 +831,22 @@ function replyTo(message: InboxMessageDto) {
 /* Theme-safe "addressed to us" highlight (works in light and dark). */
 .msg-row-own td {
   background: rgba(var(--v-theme-primary), 0.08);
+}
+
+.sort-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.sort-th:hover {
+  color: rgba(var(--v-theme-primary), 1);
 }
 
 /* Clipped by default; click expands to the full text. */
