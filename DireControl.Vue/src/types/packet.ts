@@ -94,6 +94,23 @@ export interface PacketBroadcastDto {
   source: PacketSource
 }
 
+/** Projects a full PacketDto (REST) down to the lightweight live-stream shape. */
+export function packetDtoToBroadcast(p: PacketDto): PacketBroadcastDto {
+  return {
+    id: p.id,
+    callsign: p.stationCallsign,
+    parsedType: PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown',
+    receivedAt:
+      typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
+    latitude: p.latitude,
+    longitude: p.longitude,
+    summary: p.comment || (PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown'),
+    hopCount: p.hopCount,
+    resolvedPath: p.resolvedPath,
+    source: p.source,
+  }
+}
+
 export interface TrackPointDto {
   latitude: number
   longitude: number

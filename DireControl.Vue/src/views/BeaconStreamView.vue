@@ -10,8 +10,8 @@ import {
   PACKET_TYPE_LABELS,
   PACKET_TYPE_COLORS,
   parsedTypeFromString,
+  packetDtoToBroadcast,
   type PacketBroadcastDto,
-  type PacketDto,
 } from '@/types/packet'
 import { timeAgo, formatUtc } from '@/utils/time'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
@@ -37,22 +37,6 @@ const packetTypeOptions = [
   { label: 'Unknown', value: `${PacketType.Unknown}` },
   { label: 'Unparseable', value: `${PacketType.Unparseable}` },
 ]
-
-function packetDtoToStreamEntry(p: PacketDto): PacketBroadcastDto {
-  return {
-    id: p.id,
-    callsign: p.stationCallsign,
-    parsedType: PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown',
-    receivedAt:
-      typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
-    latitude: p.latitude,
-    longitude: p.longitude,
-    summary: p.comment || (PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown'),
-    hopCount: p.hopCount,
-    resolvedPath: p.resolvedPath,
-    source: p.source,
-  }
-}
 
 function typeLabel(parsedType: string): string {
   const pt = parsedTypeFromString(parsedType)
@@ -82,8 +66,8 @@ async function seedFromApi() {
   try {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
     const packets = await getPacketsSince(since, 200)
-    // API returns ascending (oldest first) — seed in that order so newest is at bottom
-    store.seedFromApi(packets.map(packetDtoToStreamEntry))
+    // API returns newest first — matches the live unshift convention (newest at top)
+    store.seedFromApi(packets.map(packetDtoToBroadcast))
   } catch {
     // ignore
   }

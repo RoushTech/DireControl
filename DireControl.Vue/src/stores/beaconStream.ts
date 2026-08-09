@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import type { PacketBroadcastDto } from '@/types/packet'
 import { parsedTypeFromString } from '@/types/packet'
 
-const MAX_DISPLAYED = 1000
+const MAX_DISPLAYED = 200
 
 export const useBeaconStreamStore = defineStore('beaconStream', () => {
   const displayedPackets = ref<PacketBroadcastDto[]>([])
@@ -41,7 +41,7 @@ export const useBeaconStreamStore = defineStore('beaconStream', () => {
     }
   }
 
-  /** Seed with packets from the REST API on initial load (oldest first, so we unshift all). */
+  /** Seed with packets from the REST API on initial load (newest first, matching addPacket). */
   function seedFromApi(packets: PacketBroadcastDto[]) {
     if (displayedPackets.value.length === 0) {
       displayedPackets.value = packets.slice(0, MAX_DISPLAYED)

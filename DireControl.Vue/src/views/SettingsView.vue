@@ -17,6 +17,7 @@ import {
   updateRadio,
   deleteRadio,
   toggleRadioActive,
+  beaconNow,
 } from '@/api/radiosApi'
 import { defaultRadioModemConfig, type RadioDto, type RadioModemConfig } from '@/types/radio'
 import {
@@ -361,6 +362,27 @@ async function toggleActive(id: string) {
   const updated = await toggleRadioActive(id)
   const idx = radios.value.findIndex((r) => r.id === id)
   if (idx !== -1) radios.value[idx] = updated
+}
+
+// ─── Beacon now ───────────────────────────────────────────────────────────────
+const beaconing = ref<Record<string, boolean>>({})
+const beaconToast = ref(false)
+const beaconToastText = ref('')
+const beaconToastColor = ref<'success' | 'error'>('success')
+
+async function doBeaconNow(radio: RadioDto) {
+  beaconing.value[radio.id] = true
+  try {
+    await beaconNow(radio.id)
+    beaconToastColor.value = 'success'
+    beaconToastText.value = `Beacon sent for ${radio.fullCallsign}.`
+  } catch {
+    beaconToastColor.value = 'error'
+    beaconToastText.value = `Beacon failed for ${radio.fullCallsign}. Check that a TX modem is connected and home position is set.`
+  } finally {
+    beaconing.value[radio.id] = false
+    beaconToast.value = true
+  }
 }
 
 // ─── Delete (shared confirm dialog handles radios too) ────────────────────────
@@ -979,6 +1001,16 @@ async function confirmDelete() {
                   </td>
                   <td class="text-right" style="white-space: nowrap">
                     <v-btn
+                      icon="mdi-access-point"
+                      size="x-small"
+                      variant="text"
+                      color="primary"
+                      title="Beacon now"
+                      :loading="beaconing[radio.id]"
+                      :disabled="!radio.isActive"
+                      @click="doBeaconNow(radio)"
+                    />
+                    <v-btn
                       icon="mdi-pencil"
                       size="x-small"
                       variant="text"
@@ -998,6 +1030,17 @@ async function confirmDelete() {
             <div v-else class="text-center text-medium-emphasis py-4">No radios configured</div>
           </v-card>
         </div>
+        <v-snackbar
+          v-model="beaconToast"
+          :color="beaconToastColor"
+          :timeout="5000"
+          location="bottom right"
+        >
+          {{ beaconToastText }}
+          <template #actions>
+            <v-btn variant="text" @click="beaconToast = false">Dismiss</v-btn>
+          </template>
+        </v-snackbar>
       </v-tabs-window-item>
 
       <v-tabs-window-item value="rf" class="pa-4">

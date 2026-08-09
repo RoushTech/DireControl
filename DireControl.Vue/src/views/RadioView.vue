@@ -11,7 +11,7 @@ import {
   type ModemStatusDto,
 } from '@/api/modemApi'
 import { getStatus, type StatusDto } from '@/api/statusApi'
-import { getSettings } from '@/api/stationsApi'
+import { getSettings, getPacketsSince } from '@/api/stationsApi'
 import { getRadios } from '@/api/radiosApi'
 import type { RadioDto } from '@/types/radio'
 import type { SettingsDto } from '@/types/station'
@@ -19,6 +19,7 @@ import {
   PACKET_TYPE_LABELS,
   PACKET_TYPE_COLORS,
   parsedTypeFromString,
+  packetDtoToBroadcast,
   PacketSource,
   type PacketBroadcastDto,
 } from '@/types/packet'
@@ -132,6 +133,14 @@ onMounted(async () => {
     radios.value = await getRadios()
   } catch {
     /* ignore */
+  }
+  try {
+    // Seed the feed so the page isn't blank until the next live packet arrives.
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const recent = await getPacketsSince(since, MAX_FEED)
+    packets.value = recent.map(packetDtoToBroadcast)
+  } catch {
+    /* ignore — feed fills from live packets */
   }
 
   statusTimer = setInterval(refresh, 5000)
