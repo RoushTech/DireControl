@@ -43,9 +43,12 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     public int? AprsIsPasscode { get; set; }
 
     /// <summary>
-    /// APRS-IS server-side filter string, e.g. "r/35.18/-85.08/500 t/m".
+    /// APRS-IS server-side filter string, e.g. "r/35.18/-85.08/500".
+    /// Filter terms are OR'd by the server — an unscoped type filter like
+    /// "t/m" matches matching packets from the entire network, not just the
+    /// range given in another term.
     /// </summary>
-    public string AprsIsFilter { get; set; } = "r/39.0/-98.0/500 t/m";
+    public string AprsIsFilter { get; set; } = "r/39.0/-98.0/500";
 
     /// <summary>
     /// Number of seconds within which a duplicate packet (same callsign + info field)

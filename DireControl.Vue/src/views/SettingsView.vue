@@ -122,7 +122,7 @@ const aprsIsHost = ref('rotate.aprs2.net')
 const aprsIsPort = ref(14580)
 const aprsIsPasscodeOverride = ref<number | null>(null)
 const aprsIsPasscodeComputed = ref(0)
-const aprsIsFilter = ref('r/39.0/-98.0/500 t/m')
+const aprsIsFilter = ref('r/39.0/-98.0/500')
 const deduplicationWindowSeconds = ref(60)
 const aprsIsSaving = ref(false)
 const aprsIsSaveError = ref('')
@@ -314,22 +314,6 @@ watch(radioDialogOpen, (open) => {
   }
 })
 
-// TX gain applies live while dragging (debounced) so the change is audible on
-// the next test tone — and it still saves with the radio.
-let txGainTimer: ReturnType<typeof setTimeout> | null = null
-watch(
-  () => rModem.value.txAudioLevelPct,
-  (value) => {
-    if (!radioDialogOpen.value || !editingRadioId.value) return
-    if (txGainTimer) clearTimeout(txGainTimer)
-    txGainTimer = setTimeout(() => {
-      setModemTxLevel(editingRadioId.value!, Math.round(value)).catch(() => {
-        /* transient — next adjustment retries */
-      })
-    }, 250)
-  },
-)
-
 // Test-tone calibration — only for a saved radio with a live TX-enabled modem.
 const toneSending = ref(false)
 const TEST_TONE_MS = 2000
@@ -364,6 +348,23 @@ const rBeaconComment = ref('')
 const rFrequencyMhz = ref<number | null>(null)
 const rMode = ref('')
 const rModem = ref<RadioModemConfig>(defaultRadioModemConfig())
+
+// TX gain applies live while dragging (debounced) so the change is audible on
+// the next test tone — and it still saves with the radio. Must be registered
+// after the rModem declaration: watch() invokes the getter synchronously.
+let txGainTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => rModem.value.txAudioLevelPct,
+  (value) => {
+    if (!radioDialogOpen.value || !editingRadioId.value) return
+    if (txGainTimer) clearTimeout(txGainTimer)
+    txGainTimer = setTimeout(() => {
+      setModemTxLevel(editingRadioId.value!, Math.round(value)).catch(() => {
+        /* transient — next adjustment retries */
+      })
+    }, 250)
+  },
+)
 
 // Any edit flips the dirty flag so the save bar can say "unsaved changes";
 // suppressed while openAdd/openEdit seed the form.
@@ -1772,7 +1773,7 @@ async function confirmDelete() {
               label="Server-side filter"
               density="compact"
               class="mb-2"
-              hint="e.g. r/39.0/-98.0/500 t/m — restricts what packets the server sends to you"
+              hint="e.g. r/39.0/-98.0/500 — stations within 500 km. Terms are OR'd: an unscoped t/m pulls messages from the whole network"
               persistent-hint
             />
 
