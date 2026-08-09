@@ -5,6 +5,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 // live SignalR connection, packet buffer, and waterfall history) mounted while
 // the user navigates elsewhere.
 defineOptions({ name: 'RadioView' })
+import { useRouter } from 'vue-router'
 import {
   getModemStatus,
   setModemTxLevel,
@@ -14,17 +15,19 @@ import {
   decodeSpectrumPayload,
   ModemStates,
   modemStateLabels,
+  PttMethods,
   type ModemLevelDto,
   type ModemSpectrumDto,
   type ModemStatusDto,
   type TestToneKind,
 } from '@/api/modemApi'
 import { usePacketHubStore } from '@/stores/packetHub'
+import { useRadiosStore } from '@/stores/radiosStore'
 import { useToastStore } from '@/stores/toastStore'
 import { getStatus, type StatusDto } from '@/api/statusApi'
 import { getSettings, getPacketsSince } from '@/api/stationsApi'
-import { getRadios } from '@/api/radiosApi'
-import type { RadioDto } from '@/types/radio'
+import { getRadios, beaconNow } from '@/api/radiosApi'
+import type { RadioDto, LastBeaconDto } from '@/types/radio'
 import type { SettingsDto } from '@/types/station'
 import {
   PACKET_TYPE_LABELS,
@@ -35,13 +38,17 @@ import {
   type PacketBroadcastDto,
 } from '@/types/packet'
 import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
+import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
+import BeaconHistoryModal from '@/components/BeaconHistoryModal.vue'
 import { timeAgo, formatUtc } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
 
 const MAX_FEED = 100
+const router = useRouter()
 const { now } = useTick(5000)
 const hub = usePacketHubStore()
+const radiosStore = useRadiosStore()
 const toastStore = useToastStore()
 
 const status = ref<StatusDto | null>(null)
@@ -118,6 +125,41 @@ async function doRestartModem() {
   }
 }
 
+// ── Beacon now ────────────────────────────────────────────────────────────────
+const beaconing = reactive<Record<string, boolean>>({})
+
+async function doBeaconNow(m: ModemStatusDto) {
+  beaconing[m.radioId] = true
+  try {
+    await beaconNow(m.radioId)
+    toastStore.toast(`Beacon sent for ${m.fullCallsign}.`, 'success')
+    void radiosStore.fetchLastBeacon(m.radioId)
+  } catch {
+    toastStore.toast(
+      `Beacon failed for ${m.fullCallsign} — check that TX is enabled and home position is set.`,
+      'error',
+    )
+  } finally {
+    beaconing[m.radioId] = false
+  }
+}
+
+// ── Beacon history modal ──────────────────────────────────────────────────────
+const historyOpen = ref(false)
+const historyRadio = ref<{ id: string; name: string } | null>(null)
+
+function openHistory(m: ModemStatusDto) {
+  historyRadio.value = { id: m.radioId, name: m.radioName }
+  historyOpen.value = true
+}
+
+// ── Packet inspection ─────────────────────────────────────────────────────────
+const inspectedPacketId = ref<number | null>(null)
+
+function goToStation(callsign: string) {
+  router.push(`/stations/${encodeURIComponent(callsign)}`)
+}
+
 // ── Shared hub handlers (named so they can be unregistered on unmount) ───────
 function onHubModemLevel(batch: ModemLevelDto[]) {
   for (const level of batch) levels.value[level.radioId] = level
@@ -150,7 +192,7 @@ const radiosWithoutModem = computed(() =>
 function stateColor(m: ModemStatusDto): string {
   switch (m.state) {
     case ModemStates.Running:
-      return 'green'
+      return 'success'
     case ModemStates.Error:
       return 'error'
     default:
@@ -162,6 +204,14 @@ function radioFor(m: ModemStatusDto): RadioDto | undefined {
   return radios.value.find((r) => r.id === m.radioId)
 }
 
+/** One compact identity line, mock-style: "W3UWU · ch 0 · 144.390 MHz FM". */
+function identityLabel(m: ModemStatusDto): string {
+  const parts = [m.fullCallsign, `ch ${m.channel}`]
+  const freq = frequencyLabel(m)
+  if (freq) parts.push(freq)
+  return parts.join(' · ')
+}
+
 /** Rigctld live frequency wins; manual radio frequency is the fallback. */
 function frequencyLabel(m: ModemStatusDto): string | null {
   if (m.rigFrequencyHz) return `${(m.rigFrequencyHz / 1_000_000).toFixed(4)} MHz`
@@ -171,6 +221,34 @@ function frequencyLabel(m: ModemStatusDto): string | null {
     return `${radio.frequencyMhz.toFixed(3)} MHz${mode}`
   }
   return null
+}
+
+const PTT_LABELS: Record<number, string> = {
+  [PttMethods.None]: 'VOX / none',
+  [PttMethods.SerialRtsDtr]: 'Serial RTS/DTR',
+  [PttMethods.Cm108]: 'CM108 HID',
+  [PttMethods.Gpio]: 'GPIO',
+  [PttMethods.Rigctld]: 'rigctld',
+}
+
+function pttLabel(m: ModemStatusDto): string | null {
+  const radio = radioFor(m)
+  if (!radio || !radio.modem.txEnabled) return null
+  const label = PTT_LABELS[radio.modem.pttMethod] ?? null
+  if (radio.modem.pttMethod === PttMethods.SerialRtsDtr && radio.modem.pttSerialPort) {
+    return `${label} · ${radio.modem.pttSerialPort.replace('/dev/', '')}`
+  }
+  return label
+}
+
+function lastBeaconFor(m: ModemStatusDto): LastBeaconDto | undefined {
+  return radiosStore.getLastBeaconForRadio(m.radioId)
+}
+
+function lastBeaconLabel(m: ModemStatusDto): string {
+  const b = lastBeaconFor(m)
+  if (!b?.beaconedAt) return 'never'
+  return `${timeAgo(b.beaconedAt, now.value)}${b.heard ? ' · heard ✓' : ''}`
 }
 
 function levelFor(m: ModemStatusDto): ModemLevelDto {
@@ -187,7 +265,7 @@ function levelFor(m: ModemStatusDto): ModemLevelDto {
 
 function levelColor(level: number): string {
   if (level > 0.9) return 'error'
-  if (level > 0.05) return 'green'
+  if (level > 0.05) return 'success'
   return 'grey'
 }
 
@@ -214,6 +292,11 @@ const staleLabel = computed(() => {
   return `data from ${timeAgo(new Date(lastRefreshAt.value).toISOString(), now.value)}`
 })
 
+const updatedLabel = computed(() => {
+  if (lastRefreshAt.value === null) return ''
+  return `updated ${timeAgo(new Date(lastRefreshAt.value).toISOString(), now.value)}`
+})
+
 async function refresh() {
   try {
     const [s, m] = await Promise.all([getStatus(), getModemStatus()])
@@ -225,6 +308,73 @@ async function refresh() {
     refreshFailed.value = true
   }
 }
+
+// RF stack entries as name + chip + caption, mock-style.
+interface RfStackEntry {
+  name: string
+  chip: string
+  color: string
+  note: string
+}
+
+const rfStack = computed<RfStackEntry[]>(() => {
+  const s = status.value
+  const cfg = settings.value
+  const entries: RfStackEntry[] = []
+
+  entries.push({
+    name: 'External TNC (KISS)',
+    chip: s?.direwolfConnected ? 'connected' : cfg?.direwolfEnabled ? 'disconnected' : 'off',
+    color: s?.direwolfConnected ? 'success' : cfg?.direwolfEnabled ? 'warning' : 'grey',
+    note: cfg?.direwolfEnabled
+      ? `${cfg.direwolfHost ?? 'localhost'}:${cfg.direwolfPort ?? 8001}`
+      : 'native modem carries RF',
+  })
+
+  entries.push({
+    name: 'APRS-IS',
+    chip: (s?.aprsIsState ?? '…').toLowerCase(),
+    color:
+      s?.aprsIsState === 'Connected'
+        ? 'success'
+        : s?.aprsIsState === 'Disabled'
+          ? 'grey'
+          : 'warning',
+    note: s?.aprsIsServerName ?? 'enable in Settings → APRS-IS',
+  })
+
+  entries.push({
+    name: 'Digipeater',
+    chip: cfg?.digipeaterEnabled ? 'on' : 'off',
+    color: cfg?.digipeaterEnabled ? 'success' : 'grey',
+    note: cfg?.digipeaterEnabled
+      ? `${(s?.digipeatedFrames ?? 0).toLocaleString()} repeated`
+      : 'not repeating',
+  })
+
+  entries.push({
+    name: 'KISS Server',
+    chip: cfg?.kissServerEnabled ? 'on' : 'off',
+    color: cfg?.kissServerEnabled ? 'success' : 'grey',
+    note: cfg?.kissServerEnabled
+      ? `port ${cfg.kissServerPort} · ${s?.kissServerClients ?? 0} client${(s?.kissServerClients ?? 0) === 1 ? '' : 's'}`
+      : `port ${cfg?.kissServerPort ?? 8010} closed`,
+  })
+
+  const gating = cfg?.rfToIsGatingEnabled || cfg?.isToRfGatingEnabled
+  const gateParts: string[] = []
+  if (cfg?.rfToIsGatingEnabled)
+    gateParts.push(`RF→IS (${(s?.rfToIsGatedLines ?? 0).toLocaleString()} gated)`)
+  if (cfg?.isToRfGatingEnabled) gateParts.push('IS→RF')
+  entries.push({
+    name: 'iGate',
+    chip: gating ? 'on' : 'off',
+    color: gating ? 'success' : 'grey',
+    note: gating ? gateParts.join(' · ') : 'not gating',
+  })
+
+  return entries
+})
 
 onMounted(async () => {
   await refresh()
@@ -240,6 +390,10 @@ onMounted(async () => {
   } catch {
     radiosLoadFailed.value = true
   }
+  // Last-beacon info per radio — kept live afterwards by the shared hub events
+  // the radios store subscribes to.
+  radiosStore.radios = radios.value
+  await radiosStore.fetchAllLastBeacons()
   try {
     // Seed the feed so the page isn't blank until the next live packet arrives.
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
@@ -283,158 +437,200 @@ onUnmounted(() => {
       <!-- ── RF stack column ── -->
       <div class="stack-column">
         <!-- One card per radio with a modem instance -->
-        <v-card v-for="m in modemStatuses" :key="m.radioId" variant="outlined" class="mb-4 pa-4">
-          <div class="d-flex align-center mb-2 flex-wrap ga-1">
+        <v-card v-for="m in modemStatuses" :key="m.radioId" variant="outlined" class="mb-4">
+          <div class="d-flex align-center flex-wrap ga-2 px-4 pt-3 pb-2">
             <span class="text-subtitle-1 font-weight-medium">{{ m.radioName }}</span>
-            <span class="text-caption text-medium-emphasis">{{ m.fullCallsign }}</span>
-            <span class="text-caption text-medium-emphasis">· ch {{ m.channel }}</span>
-            <v-chip :color="stateColor(m)" size="x-small" variant="tonal" class="ml-1">
+            <v-chip size="x-small" variant="tonal" class="identity-chip">
+              {{ identityLabel(m) }}
+            </v-chip>
+            <v-chip :color="stateColor(m)" size="x-small" variant="tonal">
               {{ modemStateLabels[m.state] ?? 'Unknown' }}
             </v-chip>
             <v-spacer />
-            <span v-if="m.captureDevice" class="text-caption text-medium-emphasis">
-              {{ m.captureDevice }}
-            </span>
+            <span class="text-caption text-medium-emphasis">{{ updatedLabel }}</span>
           </div>
+          <v-divider />
 
-          <template v-if="m.state === ModemStates.Running">
-            <div class="d-flex align-center ga-3 mb-3">
-              <v-chip
-                :color="levelFor(m).carrierDetected ? 'green' : 'grey'"
-                size="small"
-                variant="tonal"
-              >
-                <v-icon start size="14">mdi-arrow-down-bold</v-icon>RX
-              </v-chip>
-              <v-chip
-                v-if="m.txEnabled"
-                :color="levelFor(m).transmitting ? 'red' : 'grey'"
-                size="small"
-                variant="tonal"
-              >
-                <v-icon start size="14">mdi-arrow-up-bold</v-icon>TX
-              </v-chip>
-              <span v-if="frequencyLabel(m)" class="text-body-2 font-weight-medium">
-                {{ frequencyLabel(m) }}
-              </span>
-            </div>
-
-            <div class="d-flex align-center ga-2 mb-2 flex-nowrap">
-              <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
-                >RX</span
-              >
-              <v-progress-linear
-                :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
-                :color="levelColor(levelFor(m).audioLevel)"
-                height="14"
-                rounded
-              />
-              <span
-                class="text-caption text-medium-emphasis flex-shrink-0"
-                style="width: 48px; text-align: right; white-space: nowrap"
-              >
-                {{ (levelFor(m).audioLevel * 100).toFixed(0) }}%
-              </span>
-            </div>
-
-            <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-3 flex-nowrap">
-              <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
-                >TX gain</span
-              >
-              <v-slider
-                :model-value="txGain[m.radioId] ?? 80"
-                :min="1"
-                :max="100"
-                :step="1"
-                color="primary"
-                density="compact"
-                hide-details
-                thumb-label
-                @update:model-value="(v: number) => onTxGainInput(m.radioId, v)"
-              />
-              <span
-                class="text-caption text-medium-emphasis flex-shrink-0"
-                style="width: 48px; text-align: right; white-space: nowrap"
-              >
-                {{ Math.round(txGain[m.radioId] ?? 80) }}%
-              </span>
-            </div>
-
-            <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-3 flex-wrap">
-              <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
-                >Test</span
-              >
-              <v-btn-group density="compact" variant="outlined" divided>
+          <div class="pa-4 pt-3">
+            <v-alert
+              v-if="m.state === ModemStates.Error && m.errorMessage"
+              type="error"
+              density="compact"
+              class="mb-3"
+            >
+              <div class="d-flex align-center ga-3 flex-wrap">
+                <span>{{ m.errorMessage }}</span>
                 <v-btn
-                  size="x-small"
-                  :loading="toneSending[m.radioId]"
-                  @click="doTestTone(m.radioId, TestToneKinds.Mark)"
+                  size="small"
+                  variant="tonal"
+                  color="error"
+                  prepend-icon="mdi-restart"
+                  :loading="modemRestarting"
+                  @click="doRestartModem"
                 >
-                  Mark
+                  Restart modem
                 </v-btn>
-                <v-btn
-                  size="x-small"
-                  :disabled="toneSending[m.radioId]"
-                  @click="doTestTone(m.radioId, TestToneKinds.Space)"
-                >
-                  Space
-                </v-btn>
-                <v-btn
-                  size="x-small"
-                  :disabled="toneSending[m.radioId]"
-                  @click="doTestTone(m.radioId, TestToneKinds.Alternating)"
-                >
-                  Alt
-                </v-btn>
-              </v-btn-group>
-              <span class="text-caption text-medium-emphasis">keys TX ~2s</span>
-            </div>
+              </div>
+            </v-alert>
 
-            <WaterfallCanvas
-              :ref="(el) => setWaterfallRef(m.radioId, el)"
-              :height="100"
-              class="mb-2"
-            />
+            <template v-if="m.state === ModemStates.Running">
+              <div class="modem-body">
+                <!-- Left: meters + waterfall -->
+                <div class="modem-meters">
+                  <div class="d-flex align-center ga-2 mb-2 flex-nowrap">
+                    <v-chip
+                      :color="levelFor(m).carrierDetected ? 'success' : 'grey'"
+                      size="x-small"
+                      variant="tonal"
+                      class="flex-shrink-0"
+                    >
+                      <v-icon start size="12">mdi-arrow-down-bold</v-icon>RX
+                    </v-chip>
+                    <v-progress-linear
+                      :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
+                      :color="levelColor(levelFor(m).audioLevel)"
+                      height="12"
+                      rounded
+                    />
+                    <span class="text-caption text-medium-emphasis meter-pct">
+                      {{ (levelFor(m).audioLevel * 100).toFixed(0) }}%
+                    </span>
+                  </div>
 
-            <div class="d-flex align-center ga-2 flex-wrap">
-              <span class="text-caption text-medium-emphasis">
-                {{ m.decodedFrames.toLocaleString() }} decoded ·
-                {{ m.invalidFrames.toLocaleString() }} bad CRC<template v-if="m.txEnabled">
-                  · {{ m.transmittedFrames.toLocaleString() }} sent</template
-                >
-              </span>
-              <v-spacer />
+                  <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-1 flex-nowrap">
+                    <v-chip
+                      :color="levelFor(m).transmitting ? 'error' : 'grey'"
+                      size="x-small"
+                      variant="tonal"
+                      class="flex-shrink-0"
+                    >
+                      <v-icon start size="12">mdi-arrow-up-bold</v-icon>TX
+                    </v-chip>
+                    <v-slider
+                      :model-value="txGain[m.radioId] ?? 80"
+                      :min="1"
+                      :max="100"
+                      :step="1"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      thumb-label
+                      @update:model-value="(v: number) => onTxGainInput(m.radioId, v)"
+                    />
+                    <span class="text-caption text-medium-emphasis meter-pct">
+                      {{ Math.round(txGain[m.radioId] ?? 80) }}%
+                    </span>
+                  </div>
+
+                  <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-2 flex-wrap">
+                    <span class="text-caption text-medium-emphasis">Test tones</span>
+                    <v-btn-group density="compact" variant="outlined" divided>
+                      <v-btn
+                        size="x-small"
+                        :loading="toneSending[m.radioId]"
+                        @click="doTestTone(m.radioId, TestToneKinds.Mark)"
+                      >
+                        Mark
+                      </v-btn>
+                      <v-btn
+                        size="x-small"
+                        :disabled="toneSending[m.radioId]"
+                        @click="doTestTone(m.radioId, TestToneKinds.Space)"
+                      >
+                        Space
+                      </v-btn>
+                      <v-btn
+                        size="x-small"
+                        :disabled="toneSending[m.radioId]"
+                        @click="doTestTone(m.radioId, TestToneKinds.Alternating)"
+                      >
+                        Alt
+                      </v-btn>
+                    </v-btn-group>
+                    <span class="text-caption text-medium-emphasis">keys TX ~2s</span>
+                  </div>
+
+                  <WaterfallCanvas
+                    :ref="(el) => setWaterfallRef(m.radioId, el)"
+                    :height="100"
+                    class="mt-1"
+                  />
+                </div>
+
+                <!-- Right: stats -->
+                <dl class="modem-kv">
+                  <dt>Decoded</dt>
+                  <dd>{{ m.decodedFrames.toLocaleString() }}</dd>
+                  <dt>Bad CRC</dt>
+                  <dd>{{ m.invalidFrames.toLocaleString() }}</dd>
+                  <template v-if="m.txEnabled">
+                    <dt>Transmitted</dt>
+                    <dd>{{ m.transmittedFrames.toLocaleString() }}</dd>
+                  </template>
+                  <dt>Carrier</dt>
+                  <dd>
+                    <v-chip
+                      :color="levelFor(m).carrierDetected ? 'success' : 'grey'"
+                      size="x-small"
+                      variant="tonal"
+                    >
+                      {{ levelFor(m).carrierDetected ? 'detected' : 'quiet' }}
+                    </v-chip>
+                  </dd>
+                  <template v-if="pttLabel(m)">
+                    <dt>PTT</dt>
+                    <dd class="text-caption">{{ pttLabel(m) }}</dd>
+                  </template>
+                  <template v-if="m.captureDevice">
+                    <dt>Capture</dt>
+                    <dd class="text-caption text-truncate" :title="m.captureDevice">
+                      {{ m.captureDevice }}
+                    </dd>
+                  </template>
+                  <dt>Last beacon</dt>
+                  <dd class="text-caption">{{ lastBeaconLabel(m) }}</dd>
+                </dl>
+              </div>
+            </template>
+
+            <!-- Action row -->
+            <div class="d-flex align-center ga-2 flex-wrap mt-3">
               <v-btn
-                size="x-small"
-                variant="text"
+                size="small"
+                variant="tonal"
+                color="primary"
+                prepend-icon="mdi-access-point"
+                :loading="beaconing[m.radioId]"
+                :disabled="!m.txEnabled"
+                :title="
+                  m.txEnabled
+                    ? 'Transmit a position beacon now'
+                    : 'TX is not enabled for this radio'
+                "
+                @click="doBeaconNow(m)"
+              >
+                Beacon now
+              </v-btn>
+              <v-btn
+                size="small"
+                variant="outlined"
                 prepend-icon="mdi-restart"
                 :loading="modemRestarting"
                 title="Tear down and re-open the modem audio devices"
                 @click="doRestartModem"
               >
-                Restart
-              </v-btn>
-            </div>
-          </template>
-          <v-alert
-            v-else-if="m.state === ModemStates.Error && m.errorMessage"
-            type="error"
-            density="compact"
-          >
-            <div class="d-flex align-center ga-3 flex-wrap">
-              <span>{{ m.errorMessage }}</span>
-              <v-btn
-                size="small"
-                variant="tonal"
-                color="error"
-                prepend-icon="mdi-restart"
-                :loading="modemRestarting"
-                @click="doRestartModem"
-              >
                 Restart modem
               </v-btn>
+              <v-btn
+                size="small"
+                variant="outlined"
+                prepend-icon="mdi-history"
+                @click="openHistory(m)"
+              >
+                History
+              </v-btn>
             </div>
-          </v-alert>
+          </div>
         </v-card>
 
         <v-card v-if="modemStatuses.length === 0" variant="outlined" class="mb-4 pa-4">
@@ -451,55 +647,23 @@ onUnmounted(() => {
         </v-card>
 
         <!-- Other RF stack services -->
-        <v-card variant="outlined" class="mb-4 pa-4">
-          <div class="text-subtitle-1 font-weight-medium mb-2">RF Stack</div>
-          <div class="stack-grid">
-            <span class="text-body-2">External TNC (KISS)</span>
-            <v-chip
-              :color="status?.direwolfConnected ? 'green' : 'grey'"
-              size="x-small"
-              variant="tonal"
-            >
-              {{ status?.direwolfConnected ? 'Connected' : 'Disconnected' }}
-            </v-chip>
-
-            <span class="text-body-2">Digipeater</span>
-            <span class="text-caption text-medium-emphasis">
-              <template v-if="settings?.digipeaterEnabled">
-                On · {{ status?.digipeatedFrames?.toLocaleString() ?? 0 }} repeated
-              </template>
-              <template v-else>Off</template>
-            </span>
-
-            <span class="text-body-2">KISS Server</span>
-            <span class="text-caption text-medium-emphasis">
-              <template v-if="settings?.kissServerEnabled">
-                Port {{ settings.kissServerPort }} · {{ status?.kissServerClients ?? 0 }} client{{
-                  (status?.kissServerClients ?? 0) === 1 ? '' : 's'
-                }}
-              </template>
-              <template v-else>Off</template>
-            </span>
-
-            <span class="text-body-2">APRS-IS</span>
-            <span class="text-caption text-medium-emphasis">
-              {{ status?.aprsIsState ?? '…' }}
-              <template v-if="status?.aprsIsServerName"> · {{ status.aprsIsServerName }}</template>
-            </span>
-
-            <span class="text-body-2">iGate</span>
-            <span class="text-caption text-medium-emphasis">
-              <template v-if="settings?.rfToIsGatingEnabled || settings?.isToRfGatingEnabled">
-                <template v-if="settings?.rfToIsGatingEnabled">
-                  RF→IS ({{ status?.rfToIsGatedLines?.toLocaleString() ?? 0 }} gated)
-                </template>
-                <template v-if="settings?.rfToIsGatingEnabled && settings?.isToRfGatingEnabled">
-                  ·
-                </template>
-                <template v-if="settings?.isToRfGatingEnabled">IS→RF</template>
-              </template>
-              <template v-else>Off</template>
-            </span>
+        <v-card variant="outlined" class="mb-4">
+          <div class="d-flex align-center px-4 pt-3 pb-2">
+            <span class="text-subtitle-1 font-weight-medium">RF Stack</span>
+            <v-spacer />
+            <span class="text-caption text-medium-emphasis">{{ updatedLabel }}</span>
+          </div>
+          <v-divider />
+          <div class="rf-stack pa-3">
+            <div v-for="entry in rfStack" :key="entry.name" class="rf-item">
+              <div class="d-flex align-center justify-space-between ga-2">
+                <span class="text-body-2 font-weight-medium">{{ entry.name }}</span>
+                <v-chip :color="entry.color" size="x-small" variant="tonal">{{
+                  entry.chip
+                }}</v-chip>
+              </div>
+              <span class="text-caption text-medium-emphasis">{{ entry.note }}</span>
+            </div>
           </div>
         </v-card>
 
@@ -511,7 +675,7 @@ onUnmounted(() => {
             :key="radio.id"
             class="d-flex align-center ga-2 mb-1 flex-wrap"
           >
-            <v-chip :color="radio.isActive ? 'green' : 'grey'" size="x-small" variant="tonal">
+            <v-chip :color="radio.isActive ? 'success' : 'grey'" size="x-small" variant="tonal">
               {{ radio.fullCallsign }}
             </v-chip>
             <span class="text-body-2">{{ radio.name }}</span>
@@ -525,13 +689,26 @@ onUnmounted(() => {
 
       <!-- ── Live packet feed ── -->
       <v-card variant="outlined" class="feed-column pa-0">
-        <div class="pa-3 pb-2 text-subtitle-1 font-weight-medium">Incoming Packets</div>
+        <div class="d-flex align-center ga-2 pa-3 pb-2">
+          <span class="text-subtitle-1 font-weight-medium">Incoming Packets</span>
+          <v-chip size="x-small" variant="tonal" color="primary">live</v-chip>
+          <v-spacer />
+          <span class="text-caption text-medium-emphasis">click a row to inspect</span>
+        </div>
         <v-divider />
         <div class="feed-scroll">
           <div v-if="packets.length === 0" class="text-caption text-medium-emphasis pa-4">
             Waiting for packets…
           </div>
-          <div v-for="p in packets" :key="p.id" class="feed-row">
+          <div
+            v-for="p in packets"
+            :key="p.id"
+            class="feed-row"
+            role="button"
+            tabindex="0"
+            @click="inspectedPacketId = p.id"
+            @keydown.enter="inspectedPacketId = p.id"
+          >
             <span
               class="text-caption text-medium-emphasis feed-time"
               :title="formatUtc(p.receivedAt)"
@@ -540,13 +717,33 @@ onUnmounted(() => {
             <v-chip size="x-small" variant="tonal" :color="sourceLabel(p) === 'RF' ? 'rf' : 'is'">
               {{ sourceLabel(p) }}
             </v-chip>
-            <span class="text-body-2 font-weight-medium">{{ p.callsign }}</span>
+            <a
+              class="callsign-link text-body-2 font-weight-medium"
+              @click.stop.prevent="goToStation(p.callsign)"
+            >
+              {{ p.callsign }}
+            </a>
             <v-chip size="x-small" label :color="typeColor(p)">{{ typeLabel(p) }}</v-chip>
-            <span class="text-caption text-medium-emphasis feed-summary">{{ p.summary }}</span>
+            <span class="text-caption text-medium-emphasis feed-summary" :title="p.summary">{{
+              p.summary
+            }}</span>
           </div>
         </div>
       </v-card>
     </div>
+
+    <PacketInspectionDialog
+      :packet-id="inspectedPacketId"
+      @close="inspectedPacketId = null"
+      @select-station="goToStation"
+    />
+
+    <BeaconHistoryModal
+      v-if="historyRadio"
+      v-model="historyOpen"
+      :radio-id="historyRadio.id"
+      :radio-name="historyRadio.name"
+    />
   </div>
 </template>
 
@@ -564,8 +761,76 @@ onUnmounted(() => {
 }
 
 .stack-column {
-  flex: 0 1 420px;
+  flex: 0 1 460px;
   min-width: 320px;
+}
+
+.identity-chip {
+  font-variant-numeric: tabular-nums;
+}
+
+.modem-body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.modem-meters {
+  flex: 1 1 240px;
+  min-width: 220px;
+}
+
+.meter-pct {
+  flex-shrink: 0;
+  width: 40px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.modem-kv {
+  flex: 0 1 170px;
+  min-width: 150px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: center;
+  margin: 0;
+}
+
+.modem-kv dt {
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.modem-kv dd {
+  margin: 0;
+  text-align: right;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.rf-stack {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 560px) {
+  .rf-stack {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rf-item {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .feed-column {
@@ -586,7 +851,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 4px 12px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+  cursor: pointer;
+}
+
+.feed-row:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
 }
 
 .feed-time {
@@ -600,10 +870,13 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.stack-grid {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 16px;
-  align-items: center;
+.callsign-link {
+  color: rgba(var(--v-theme-primary), 1);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.callsign-link:hover {
+  text-decoration: underline;
 }
 </style>

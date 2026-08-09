@@ -2896,6 +2896,12 @@ defineExpose({ TILE_PROVIDERS })
   z-index: 1000;
 }
 
+/* Leaflet's zoom control shares the top-left corner with the sidebar toggle —
+   push it down so the two never stack. */
+:deep(.leaflet-top.leaflet-left .leaflet-control-zoom) {
+  margin-top: 52px;
+}
+
 /* The grouped layer panel — anchored under the sidebar toggle, never overlaps
    other controls regardless of viewport width. */
 .layer-panel {
@@ -2995,11 +3001,11 @@ defineExpose({ TILE_PROVIDERS })
   z-index: 1000;
 }
 
-/* Anchored top-right beside the pop-out button — clear of the layer panel. */
+/* Anchored top-right below the pop-out button — clear of the layer panel. */
 .range-rings-container {
   position: absolute;
-  top: 10px;
-  right: 56px;
+  top: 56px;
+  right: 10px;
   z-index: 1000;
 }
 

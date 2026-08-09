@@ -663,7 +663,15 @@ function syncHomeMarker() {
   if (stationHomeMarker) {
     stationHomeMarker.setLatLng([pos.lat, pos.lon])
   } else {
-    stationHomeMarker = L.marker([pos.lat, pos.lon]).addTo(stationHomeMap)
+    // Same home pin the map uses — Leaflet's default marker PNGs aren't
+    // bundled by Vite and render as a broken-image box.
+    const icon = L.divIcon({
+      html: `<div style="background:#1976D2;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.5);"><span class='mdi mdi-home' style='color:white;font-size:18px;line-height:1;'></span></div>`,
+      className: '',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+    })
+    stationHomeMarker = L.marker([pos.lat, pos.lon], { icon }).addTo(stationHomeMap)
   }
   stationHomeMap.panTo([pos.lat, pos.lon])
 }

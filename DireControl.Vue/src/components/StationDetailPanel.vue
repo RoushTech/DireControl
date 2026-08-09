@@ -58,6 +58,11 @@ const props = defineProps<{
   refreshKey: number
   /** Show an "open full page" link — set by the map, off on /stations/:callsign itself. */
   showPageLink?: boolean
+  /**
+   * Page mode (/stations/:callsign): the page renders its own header, so the
+   * panel's is hidden and the icon rail becomes a horizontal tab row.
+   */
+  pageVariant?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -696,9 +701,13 @@ watch(tab, (newTab) => {
 </script>
 
 <template>
-  <div v-if="callsign" class="detail-panel-content">
-    <!-- Header -->
-    <div class="panel-header">
+  <div
+    v-if="callsign"
+    class="detail-panel-content"
+    :class="{ 'detail-panel-content--page': props.pageVariant }"
+  >
+    <!-- Header (hidden in page mode — the page provides its own) -->
+    <div v-if="!props.pageVariant" class="panel-header">
       <div class="d-flex align-center ga-2">
         <div :style="symbolStyle" class="symbol-icon flex-shrink-0" />
         <div>
@@ -733,7 +742,7 @@ watch(tab, (newTab) => {
         <v-btn icon="mdi-close" variant="text" size="small" @click="emit('close')" />
       </div>
     </div>
-    <v-divider />
+    <v-divider v-if="!props.pageVariant" />
 
     <div class="panel-main">
       <!-- Vertical tab sidebar -->
@@ -1336,5 +1345,42 @@ watch(tab, (newTab) => {
 
 .heard-via-dot--digi {
   background: #f9a825;
+}
+
+/* ── Page mode (/stations/:callsign): horizontal tabs, mock-style ── */
+.detail-panel-content--page .panel-main {
+  flex-direction: column;
+}
+
+.detail-panel-content--page .tab-sidebar {
+  flex-direction: row;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-right: none;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  flex-shrink: 0;
+}
+
+.detail-panel-content--page .tab-btn {
+  width: auto;
+  min-height: 44px;
+  padding: 6px 18px;
+  border-right: none;
+  border-bottom: 3px solid transparent;
+}
+
+.detail-panel-content--page .tab-btn--active {
+  border-right-color: transparent;
+  border-bottom-color: rgb(var(--v-theme-primary));
+}
+
+.detail-panel-content--page .tab-btn-inner {
+  flex-direction: row;
+  gap: 7px;
+}
+
+.detail-panel-content--page .tab-label {
+  font-size: 0.72rem;
 }
 </style>
