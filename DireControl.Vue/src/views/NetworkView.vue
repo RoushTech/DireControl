@@ -26,7 +26,7 @@ const radios = ref<RadioDto[]>([])
 /** Which digipeaters actually repeat our beacons, from recent beacon history. */
 interface RepeaterStat {
   count: number
-  totalSeconds: number
+  seconds: number[]
 }
 const repeaterStats = ref<Map<string, RepeaterStat>>(new Map())
 
@@ -34,11 +34,14 @@ const beaconRadios = computed(() => radios.value.filter((r) => r.beaconCount > 0
 
 const topRepeaters = computed(() =>
   [...repeaterStats.value.entries()]
-    .map(([callsign, s]) => ({
-      callsign,
-      count: s.count,
-      avgSeconds: s.totalSeconds / s.count,
-    }))
+    .map(([callsign, s]) => {
+      const sorted = [...s.seconds].sort((a, b) => a - b)
+      return {
+        callsign,
+        count: s.count,
+        medianSeconds: sorted[Math.floor(sorted.length / 2)] ?? 0,
+      }
+    })
     .sort((a, b) => b.count - a.count)
     .slice(0, 5),
 )
@@ -74,9 +77,9 @@ async function load() {
         const history = await getBeaconHistory(radio.id, 200)
         for (const beacon of history) {
           for (const c of beacon.confirmations) {
-            const entry = stats.get(c.digipeater) ?? { count: 0, totalSeconds: 0 }
+            const entry = stats.get(c.digipeater) ?? { count: 0, seconds: [] }
             entry.count++
-            entry.totalSeconds += c.secondsAfterBeacon
+            entry.seconds.push(c.secondsAfterBeacon)
             stats.set(c.digipeater, entry)
           }
         }
@@ -217,11 +220,11 @@ onMounted(load)
                 beacons confirmed heard
               </div>
               <div v-if="topRepeaters.length > 0" class="text-caption text-medium-emphasis mt-1">
-                Most often first repeated by
+                Most often first-repeated by
                 <a class="callsign-link" @click.prevent="goToStation(topRepeaters[0]!.callsign)">
                   {{ topRepeaters[0]!.callsign }}
                 </a>
-                (avg {{ topRepeaters[0]!.avgSeconds.toFixed(1) }}s)
+                (median {{ topRepeaters[0]!.medianSeconds.toFixed(1) }}s)
               </div>
             </div>
           </div>
@@ -275,6 +278,15 @@ onMounted(load)
                 heard {{ timeAgo(s.lastSeen, now) }}
               </v-list-item-subtitle>
               <template #append>
+                <v-chip
+                  color="success"
+                  size="x-small"
+                  variant="tonal"
+                  class="mr-1"
+                  title="Alerts when this station comes back on the air"
+                >
+                  alerting
+                </v-chip>
                 <v-btn
                   icon="mdi-star-off"
                   size="x-small"

@@ -437,6 +437,20 @@ function heardViaLabel(p: PacketDto): string {
           {{ copyFeedback ? 'Copied ✓' : 'Copy Raw Packet' }}
         </v-btn>
       </v-card-actions>
+
+      <!-- Mock footer: jump to the sender's station page -->
+      <v-card-actions v-if="!mobile && packet" class="px-4 pb-3 pt-0">
+        <v-spacer />
+        <v-btn
+          color="primary"
+          variant="tonal"
+          size="small"
+          prepend-icon="mdi-account-details"
+          @click="emit('selectStation', packet.stationCallsign)"
+        >
+          Open station page
+        </v-btn>
+      </v-card-actions>
     </v-card>
   </v-dialog>
 </template>

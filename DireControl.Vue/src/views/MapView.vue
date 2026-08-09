@@ -2229,13 +2229,6 @@ defineExpose({ TILE_PROVIDERS })
         Home position not yet known — range rings will appear once your station is heard
       </v-alert>
 
-      <TileProviderSwitcher
-        :providers="TILE_PROVIDERS"
-        :selected="selectedProvider"
-        :api-keys="apiKeys"
-        @update:selected="setTileProvider"
-      />
-
       <!-- Sidebar toggle (desktop only) -->
       <v-btn
         v-if="!mobile"
@@ -2522,16 +2515,33 @@ defineExpose({ TILE_PROVIDERS })
         </div>
       </div>
 
-      <!-- Pop-out button -->
-      <v-btn
-        class="popout-btn"
-        color="grey-darken-1"
-        size="small"
-        variant="elevated"
-        icon="mdi-open-in-new"
-        :title="'Open map in new window'"
-        @click="openPopOut"
-      />
+      <!-- Top-right control stack: one column so these can never overlap,
+           regardless of map width or the detail panel opening. -->
+      <div class="map-controls-tr">
+        <div class="d-flex ga-2 justify-end">
+          <TileProviderSwitcher
+            :providers="TILE_PROVIDERS"
+            :selected="selectedProvider"
+            :api-keys="apiKeys"
+            @update:selected="setTileProvider"
+          />
+          <v-btn
+            color="grey-darken-1"
+            size="small"
+            variant="elevated"
+            icon="mdi-open-in-new"
+            :title="'Open map in new window'"
+            @click="openPopOut"
+          />
+        </div>
+        <div v-if="!mobile" class="d-flex justify-end">
+          <RangeRingsPanel
+            v-model:show-rings="showRings"
+            v-model:distances="ringDistances"
+            v-model:expanded="ringPanelOpen"
+          />
+        </div>
+      </div>
 
       <!-- Mobile: layer menu button (⋮) -->
       <v-menu
@@ -2726,15 +2736,6 @@ defineExpose({ TILE_PROVIDERS })
       >
         Stations
       </v-btn>
-
-      <!-- Range rings panel (desktop only) -->
-      <div v-if="!mobile" class="range-rings-container">
-        <RangeRingsPanel
-          v-model:show-rings="showRings"
-          v-model:distances="ringDistances"
-          v-model:expanded="ringPanelOpen"
-        />
-      </div>
     </div>
 
     <!-- Right detail panel (desktop only) -->
@@ -2994,19 +2995,25 @@ defineExpose({ TILE_PROVIDERS })
   padding: 4px 8px 6px 4px;
 }
 
-.popout-btn {
+/* One stacked column for every top-right control — overlap-proof. */
+.map-controls-tr {
   position: absolute;
   top: 10px;
   right: 10px;
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
 }
 
-/* Anchored top-right below the pop-out button — clear of the layer panel. */
-.range-rings-container {
-  position: absolute;
-  top: 56px;
-  right: 10px;
-  z-index: 1000;
+.map-controls-tr > * {
+  pointer-events: auto;
+}
+
+.map-controls-tr :deep(.tile-switcher) {
+  position: static;
 }
 
 /* Mobile controls */

@@ -80,8 +80,9 @@ function openInspectDialog(id: number) {
 }
 
 function onDialogSelectStation(callsign: string) {
+  // The dialog's button reads "Open station page" — honor it.
   selectionStore.selectStation(callsign)
-  router.push('/')
+  router.push(`/stations/${encodeURIComponent(callsign)}`)
 }
 
 const seedFailed = ref(false)
@@ -251,11 +252,12 @@ function openPopOut() {
       </div>
       <v-btn size="small" color="primary" variant="tonal" @click="seedFromApi">Retry</v-btn>
     </div>
-    <div
-      v-else-if="store.displayedPackets.length === 0"
-      class="text-center text-medium-emphasis py-8"
-    >
-      No packets heard in the last hour — waiting for traffic…
+    <div v-else-if="store.displayedPackets.length === 0" class="text-center py-8">
+      <v-icon size="36" class="text-medium-emphasis mb-2">mdi-radio-tower</v-icon>
+      <div class="text-body-1 font-weight-medium mb-1">No packets heard yet</div>
+      <div class="text-caption text-medium-emphasis">
+        The sound modem is listening — packets appear here as they decode.
+      </div>
     </div>
     <div
       v-else-if="store.filteredPackets.length === 0"
@@ -430,6 +432,9 @@ function openPopOut() {
   flex: 1;
   min-width: 0;
   max-width: 100%;
+  /* Packet payloads read better in mono (mock style) */
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.8rem;
 }
 
 .callsign-link {

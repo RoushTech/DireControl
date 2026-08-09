@@ -31,7 +31,6 @@ import type { RadioDto, LastBeaconDto } from '@/types/radio'
 import type { SettingsDto } from '@/types/station'
 import {
   PACKET_TYPE_LABELS,
-  PACKET_TYPE_COLORS,
   parsedTypeFromString,
   packetDtoToBroadcast,
   PacketSource,
@@ -189,6 +188,12 @@ const radiosWithoutModem = computed(() =>
   radios.value.filter((r) => !modemStatuses.value.some((m) => m.radioId === r.id)),
 )
 
+/** Mock wording: a running modem is "Receiving". */
+function stateLabel(m: ModemStatusDto): string {
+  if (m.state === ModemStates.Running) return 'Receiving'
+  return modemStateLabels[m.state] ?? 'Unknown'
+}
+
 function stateColor(m: ModemStatusDto): string {
   switch (m.state) {
     case ModemStates.Running:
@@ -273,10 +278,6 @@ function typeLabel(p: PacketBroadcastDto): string {
   return PACKET_TYPE_LABELS[parsedTypeFromString(p.parsedType)] ?? 'Unknown'
 }
 
-function typeColor(p: PacketBroadcastDto): string {
-  return PACKET_TYPE_COLORS[parsedTypeFromString(p.parsedType)] ?? 'grey'
-}
-
 function sourceLabel(p: PacketBroadcastDto): string {
   return p.source === PacketSource.AprsIs ? 'IS' : 'RF'
 }
@@ -321,6 +322,19 @@ const rfStack = computed<RfStackEntry[]>(() => {
   const s = status.value
   const cfg = settings.value
   const entries: RfStackEntry[] = []
+
+  const running = modemStatuses.value.filter((m) => m.state === ModemStates.Running)
+  const decoded = modemStatuses.value.reduce((sum, m) => sum + m.decodedFrames, 0)
+  const transmitted = modemStatuses.value.reduce((sum, m) => sum + m.transmittedFrames, 0)
+  entries.push({
+    name: 'Sound modem',
+    chip: running.length > 0 ? 'running' : modemStatuses.value.length > 0 ? 'stopped' : 'off',
+    color: running.length > 0 ? 'success' : modemStatuses.value.length > 0 ? 'error' : 'grey',
+    note:
+      modemStatuses.value.length > 0
+        ? `${decoded.toLocaleString()} decoded · ${transmitted.toLocaleString()} TX`
+        : 'no audio feed configured',
+  })
 
   entries.push({
     name: 'External TNC (KISS)',
@@ -444,7 +458,7 @@ onUnmounted(() => {
               {{ identityLabel(m) }}
             </v-chip>
             <v-chip :color="stateColor(m)" size="x-small" variant="tonal">
-              {{ modemStateLabels[m.state] ?? 'Unknown' }}
+              {{ stateLabel(m) }}
             </v-chip>
             <v-spacer />
             <span class="text-caption text-medium-emphasis">{{ updatedLabel }}</span>
@@ -481,7 +495,7 @@ onUnmounted(() => {
                   <div class="d-flex align-center justify-space-between mb-1">
                     <span class="text-caption text-medium-emphasis">Audio level</span>
                     <span class="text-caption text-medium-emphasis meter-pct">
-                      {{ (levelFor(m).audioLevel * 100).toFixed(0) }}%
+                      {{ levelFor(m).audioLevel.toFixed(2) }}
                     </span>
                   </div>
                   <v-progress-linear
@@ -544,7 +558,7 @@ onUnmounted(() => {
 
                 <!-- Right: stats -->
                 <dl class="modem-kv">
-                  <dt>Decoded</dt>
+                  <dt>Decoded frames</dt>
                   <dd>{{ m.decodedFrames.toLocaleString() }}</dd>
                   <dt>Bad CRC</dt>
                   <dd>{{ m.invalidFrames.toLocaleString() }}</dd>
@@ -694,22 +708,23 @@ onUnmounted(() => {
             @click="inspectedPacketId = p.id"
             @keydown.enter="inspectedPacketId = p.id"
           >
-            <!-- Mock order: time · callsign · type · summary, source badge right -->
+            <!-- Mock format: time | "CALLSIGN · Type · summary" | source badge -->
             <span
               class="text-caption text-medium-emphasis feed-time"
               :title="formatUtc(p.receivedAt)"
               >{{ timeAgo(p.receivedAt, now) }}</span
             >
-            <a
-              class="callsign-link text-body-2 font-weight-medium"
-              @click.stop.prevent="goToStation(p.callsign)"
-            >
-              {{ p.callsign }}
-            </a>
-            <v-chip size="x-small" label :color="typeColor(p)">{{ typeLabel(p) }}</v-chip>
-            <span class="text-caption text-medium-emphasis feed-summary" :title="p.summary">{{
-              p.summary
-            }}</span>
+            <span class="feed-summary text-body-2" :title="`${typeLabel(p)} · ${p.summary}`">
+              <a
+                class="callsign-link font-weight-medium"
+                @click.stop.prevent="goToStation(p.callsign)"
+              >
+                {{ p.callsign }}
+              </a>
+              <span class="text-medium-emphasis">
+                · {{ typeLabel(p) }}<template v-if="p.summary"> · {{ p.summary }}</template>
+              </span>
+            </span>
             <v-chip
               size="x-small"
               variant="tonal"

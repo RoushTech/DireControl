@@ -123,12 +123,16 @@ function txChip(radio: RadioDto): { label: string; color: string } {
   <div v-if="radiosStore.activeRadios.length > 0" class="own-station-panel">
     <div v-for="radio in radiosStore.activeRadios" :key="radio.id" class="own-station-card">
       <!-- Header: status dot · name · callsign · live TX chip -->
-      <div class="d-flex align-center ga-2 mb-1">
-        <v-icon :color="dotColor(radio)" size="10">mdi-circle</v-icon>
-        <span class="text-caption font-weight-bold">{{ radio.name }}</span>
+      <div class="own-head mb-1">
+        <v-icon :color="dotColor(radio)" size="10" class="flex-shrink-0">mdi-circle</v-icon>
+        <span class="text-caption font-weight-bold flex-shrink-0">{{ radio.name }}</span>
         <span class="text-caption text-medium-emphasis own-callsign">{{ radio.fullCallsign }}</span>
-        <v-spacer />
-        <v-chip :color="txChip(radio).color" size="x-small" variant="tonal">
+        <v-chip
+          :color="txChip(radio).color"
+          size="x-small"
+          variant="tonal"
+          class="own-tx-chip flex-shrink-0 ml-auto"
+        >
           {{ txChip(radio).label }}
         </v-chip>
         <v-btn
@@ -136,6 +140,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
           size="x-small"
           variant="text"
           density="comfortable"
+          class="flex-shrink-0"
           title="Beacon history"
           @click="openHistory(radio.id)"
         />
@@ -217,8 +222,27 @@ function txChip(radio: RadioDto): { label: string; color: string } {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
+.own-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* The callsign is the only element allowed to shrink — chips and buttons keep
+   their intrinsic size so labels never get crushed. */
 .own-callsign {
   font-variant-numeric: tabular-nums;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.own-tx-chip {
+  max-width: none;
 }
 
 .own-row {
