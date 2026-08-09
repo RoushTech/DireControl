@@ -188,6 +188,14 @@ public sealed class UpdateRfServicesRequest
     public int IsToRfRecentHeardMinutes { get; init; } = 30;
 }
 
+public sealed class UpdateExternalTncRequest
+{
+    public bool DirewolfEnabled { get; init; }
+    public string DirewolfHost { get; init; } = "localhost";
+    public int DirewolfPort { get; init; } = 8001;
+    public int DirewolfReconnectDelaySeconds { get; init; } = 5;
+}
+
 public sealed class UpdateAprsIsSettingsRequest
 {
     public bool AprsIsEnabled { get; init; }
@@ -583,6 +591,19 @@ public sealed class UpdateRadioRequest
     public double? FrequencyMhz { get; init; }
     public string? Mode { get; init; }
     public RadioModemConfigDto? Modem { get; init; }
+}
+
+/// <summary>Live TX audio-level (gain) adjustment for a single radio.</summary>
+public sealed class SetTxLevelRequest
+{
+    public int TxAudioLevelPct { get; init; }
+}
+
+/// <summary>A TX calibration test tone to transmit on a single radio.</summary>
+public sealed class TestToneRequest
+{
+    public TestToneKind Kind { get; init; } = TestToneKind.Mark;
+    public int DurationMs { get; init; } = 2000;
 }
 
 public sealed class DigiConfirmationDto

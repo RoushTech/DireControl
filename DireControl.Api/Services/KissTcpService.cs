@@ -1,6 +1,8 @@
 using AprsSharp.KissTnc;
 using AprsSharp.Shared;
-using Microsoft.Extensions.Options;
+using DireControl.Data;
+using DireControl.Data.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace DireControl.Api.Services;
 
@@ -8,59 +10,90 @@ namespace DireControl.Api.Services;
 /// Long-running service that maintains a KISS TCP connection to an external
 /// TNC (Direwolf or hardware) via AprsSharp.KissTnc, receives AX.25 UI frames,
 /// and hands them to the shared <see cref="RfFrameIngestService"/>.
-/// Reconnects automatically.  Disabled entirely when
-/// <see cref="DirewolfOptions.Enabled"/> is false (native sound modem only).
+/// Reconnects automatically.  Enabled and configured from the DB-backed
+/// <see cref="UserSetting"/> (External TNC settings), and re-reads them whenever
+/// <see cref="KissReconnectTrigger"/> fires.
 /// </summary>
 public sealed class KissTcpService(
-    IOptions<DirewolfOptions> options,
+    IServiceScopeFactory scopeFactory,
     RfFrameIngestService ingestService,
     KissConnectionHolder connectionHolder,
+    KissReconnectTrigger reconnectTrigger,
     ILogger<KissTcpService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Value.Enabled)
-        {
-            logger.LogInformation("KISS TCP backend disabled (Direwolf:Enabled = false).");
-            return;
-        }
-
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Per-iteration linked token so a settings change (KissReconnectTrigger)
+            // tears down the current connection and re-reads configuration.
+            using var iterCts = CancellationTokenSource.CreateLinkedTokenSource(
+                stoppingToken, reconnectTrigger.Token);
+            var ct = iterCts.Token;
+
+            var settings = await LoadSettingsAsync(stoppingToken);
+
             try
             {
-                await ConnectAndReadAsync(stoppingToken);
+                if (!settings.DirewolfEnabled)
+                {
+                    logger.LogInformation(
+                        "External TNC (KISS TCP) disabled — using the native sound modem only.");
+                    // Sleep until a settings change wakes us to re-evaluate.
+                    await Task.Delay(Timeout.Infinite, ct);
+                    continue;
+                }
+
+                await ConnectAndReadAsync(settings, ct);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
+            catch (OperationCanceledException)
+            {
+                // Settings changed — loop and re-read immediately.
+                continue;
+            }
             catch (Exception ex)
             {
                 logger.LogWarning(
                     ex,
-                    "Direwolf connection lost. Reconnecting in {Delay}s…",
-                    options.Value.ReconnectDelaySeconds);
+                    "External TNC connection lost. Reconnecting in {Delay}s…",
+                    settings.DirewolfReconnectDelaySeconds);
 
-                await Task.Delay(
-                    TimeSpan.FromSeconds(options.Value.ReconnectDelaySeconds),
-                    stoppingToken);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(settings.DirewolfReconnectDelaySeconds), ct);
+                }
+                catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+                {
+                    // Settings changed during the backoff — re-read now.
+                }
             }
         }
 
         logger.LogInformation("KissTcpService stopped.");
     }
 
-    private async Task ConnectAndReadAsync(CancellationToken ct)
+    private async Task<UserSetting> LoadSettingsAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        return await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct)
+            ?? new UserSetting { Id = 1 };
+    }
+
+    private async Task ConnectAndReadAsync(UserSetting settings, CancellationToken ct)
     {
         using var tcpConnection = new TcpConnection();
 
         logger.LogInformation(
-            "Connecting to Direwolf at {Host}:{Port}…",
-            options.Value.Host, options.Value.Port);
+            "Connecting to external TNC at {Host}:{Port}…",
+            settings.DirewolfHost, settings.DirewolfPort);
 
-        tcpConnection.Connect(options.Value.Host, options.Value.Port);
-        logger.LogInformation("Connected to Direwolf.");
+        tcpConnection.Connect(settings.DirewolfHost, settings.DirewolfPort);
+        logger.LogInformation("Connected to external TNC.");
 
         const byte tncPort = 0;
         using var tnc = new TcpTnc(tcpConnection, tncPort);
@@ -81,7 +114,7 @@ public sealed class KissTcpService(
                 await Task.Delay(500, ct);
 
             if (!ct.IsCancellationRequested)
-                throw new EndOfStreamException("Direwolf closed the connection.");
+                throw new EndOfStreamException("External TNC closed the connection.");
         }
         finally
         {

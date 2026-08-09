@@ -23,7 +23,6 @@ services
     .AddSingleton(runtimeLoggingSource)
     .AddSingleton<LogLevelService>()
     .Configure<DireControlOptions>(config.GetSection(DireControlOptions.Section))
-    .Configure<DirewolfOptions>(config.GetSection(DirewolfOptions.Section))
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
     .AddOpenApi()
     .AddDbContext<DireControlContext>(options =>
@@ -115,6 +114,7 @@ services
     .AddSingleton<ILoggerProvider, SignalRLoggerProvider>()
     .AddSingleton<KissConnectionHolder>()
     .AddSingleton<AprsIsReconnectTrigger>()
+    .AddSingleton<KissReconnectTrigger>()
     .AddSingleton<IAprsIsStatusService, AprsIsStatusService>()
     .AddSingleton<BeaconService>()
     .AddSingleton<MessageSendingService>()

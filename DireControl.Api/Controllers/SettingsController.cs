@@ -15,9 +15,9 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/settings")]
 public class SettingsController(
     IOptions<DireControlOptions> options,
-    IOptions<DirewolfOptions> direwolfOptions,
     AprsIsReconnectTrigger reconnectTrigger,
     ModemRestartTrigger modemRestartTrigger,
+    KissReconnectTrigger kissReconnectTrigger,
     DireControlContext db) : ControllerBase
 {
     private static readonly Regex PathRegex =
@@ -52,9 +52,9 @@ public class SettingsController(
             OurCallsign = opt.OurCallsign,
             HomePosition = homePosition,
             StationExpiryTimeoutMinutes = opt.StationExpiryTimeoutMinutes,
-            DirewolfHost = direwolfOptions.Value.Host,
-            DirewolfPort = direwolfOptions.Value.Port,
-            DirewolfReconnectDelaySeconds = direwolfOptions.Value.ReconnectDelaySeconds,
+            DirewolfHost = userSetting.DirewolfHost,
+            DirewolfPort = userSetting.DirewolfPort,
+            DirewolfReconnectDelaySeconds = userSetting.DirewolfReconnectDelaySeconds,
             MaxRetryAttempts = opt.MaxRetryAttempts,
             InitialRetryDelaySeconds = opt.InitialRetryDelaySeconds,
             OutboundPath = userSetting.OutboundPath,
@@ -65,7 +65,7 @@ public class SettingsController(
             AprsIsPasscodeComputed = computedPasscode,
             AprsIsFilter = userSetting.AprsIsFilter,
             DeduplicationWindowSeconds = userSetting.DeduplicationWindowSeconds,
-            DirewolfEnabled = direwolfOptions.Value.Enabled,
+            DirewolfEnabled = userSetting.DirewolfEnabled,
             DigipeaterEnabled = userSetting.DigipeaterEnabled,
             DigipeaterMaxWideN = userSetting.DigipeaterMaxWideN,
             DigipeaterFillInOnly = userSetting.DigipeaterFillInOnly,
@@ -118,6 +118,44 @@ public class SettingsController(
         // The KISS server re-reads its settings on the modem restart trigger;
         // digipeater and iGate read settings per packet.
         modemRestartTrigger.Trigger();
+
+        return NoContent();
+    }
+
+    [HttpPut("external-tnc")]
+    public async Task<ActionResult> UpdateExternalTnc(
+        [FromBody] UpdateExternalTncRequest request,
+        CancellationToken ct)
+    {
+        if (request.DirewolfEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(request.DirewolfHost))
+                return BadRequest("External TNC hostname is required.");
+            if (request.DirewolfPort is < 1 or > 65535)
+                return BadRequest("External TNC port must be between 1 and 65535.");
+        }
+
+        if (request.DirewolfReconnectDelaySeconds is < 1 or > 300)
+            return BadRequest("Reconnect delay must be between 1 and 300 seconds.");
+
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        setting.DirewolfEnabled = request.DirewolfEnabled;
+        setting.DirewolfHost = string.IsNullOrWhiteSpace(request.DirewolfHost)
+            ? "localhost"
+            : request.DirewolfHost.Trim();
+        setting.DirewolfPort = request.DirewolfPort;
+        setting.DirewolfReconnectDelaySeconds = request.DirewolfReconnectDelaySeconds;
+
+        await db.SaveChangesAsync(ct);
+
+        // Drop and re-establish (or stop) the external-TNC connection with the new settings.
+        kissReconnectTrigger.Trigger();
 
         return NoContent();
     }

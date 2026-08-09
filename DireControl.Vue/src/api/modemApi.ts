@@ -60,6 +60,18 @@ export async function updateRfServices(payload: RfServicesPayload): Promise<void
   await http.put('/api/v0/settings/rf-services', payload)
 }
 
+export interface ExternalTncPayload {
+  direwolfEnabled: boolean
+  direwolfHost: string
+  direwolfPort: number
+  direwolfReconnectDelaySeconds: number
+}
+
+/** Updates the external KISS/TCP TNC (Direwolf) client settings. */
+export async function updateExternalTnc(payload: ExternalTncPayload): Promise<void> {
+  await http.put('/api/v0/settings/external-tnc', payload)
+}
+
 export interface ModemDeviceDto {
   name: string
   description: string
@@ -108,4 +120,25 @@ export async function getModemDevices(): Promise<ModemDevicesDto> {
 
 export async function restartModem(): Promise<void> {
   await http.post('/api/v0/modem/restart')
+}
+
+/** Live TX audio-level (gain) adjustment — persists and applies without a restart. */
+export async function setModemTxLevel(radioId: string, txAudioLevelPct: number): Promise<void> {
+  await http.put(`/api/v0/modem/${radioId}/tx-level`, { txAudioLevelPct })
+}
+
+export const TestToneKinds = {
+  Mark: 1,
+  Space: 2,
+  Alternating: 3,
+} as const
+export type TestToneKind = (typeof TestToneKinds)[keyof typeof TestToneKinds]
+
+/** Transmits a TX calibration test tone on the radio's modem for `durationMs`. */
+export async function sendTestTone(
+  radioId: string,
+  kind: TestToneKind,
+  durationMs = 2000,
+): Promise<void> {
+  await http.post(`/api/v0/modem/${radioId}/test-tone`, { kind, durationMs })
 }

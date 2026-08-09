@@ -2,7 +2,14 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
 import { HubConnectionBuilder, HubConnectionState } from '@microsoft/signalr'
 import { getRadios, getLastBeacon } from '@/api/radiosApi'
+import type { ModemLevelDto } from '@/api/modemApi'
 import type { RadioDto, LastBeaconDto, OwnBeaconBroadcastDto, DigiConfirmationBroadcastDto, BeaconConfirmedHeardDto } from '@/types/radio'
+
+/** Live RX/TX activity for a radio's modem, updated from the modemLevel stream. */
+export interface RadioActivity {
+  carrierDetected: boolean
+  transmitting: boolean
+}
 
 export const useRadiosStore = defineStore('radios', () => {
   const radios = ref<RadioDto[]>([])
@@ -10,6 +17,8 @@ export const useRadiosStore = defineStore('radios', () => {
   // Vue 3 property-assignment triggers are always tracked for plain reactive objects.
   const lastBeacons = reactive<Record<string, LastBeaconDto | undefined>>({})
   const currentBeaconIds = ref<Map<string, number>>(new Map())
+  // Live modem RX/TX activity keyed by radioId, fed by the modemLevel stream.
+  const activity = reactive<Record<string, RadioActivity | undefined>>({})
   const loading = ref(false)
   let connectionStarted = false
 
@@ -122,6 +131,15 @@ export const useRadiosStore = defineStore('radios', () => {
       onBeaconConfirmedHeard(dto)
     })
 
+    connection.on('modemLevel', (batch: ModemLevelDto[]) => {
+      for (const level of batch) {
+        activity[level.radioId] = {
+          carrierDetected: level.carrierDetected,
+          transmitting: level.transmitting,
+        }
+      }
+    })
+
     async function start() {
       try {
         await connection.start()
@@ -143,9 +161,14 @@ export const useRadiosStore = defineStore('radios', () => {
     return lastBeacons[radioId]
   }
 
+  function getActivityForRadio(radioId: string): RadioActivity | undefined {
+    return activity[radioId]
+  }
+
   return {
     radios,
     lastBeacons,
+    activity,
     loading,
     activeRadios,
     fetchRadios,
@@ -155,5 +178,6 @@ export const useRadiosStore = defineStore('radios', () => {
     onDigiConfirmation,
     startSignalR,
     getLastBeaconForRadio,
+    getActivityForRadio,
   }
 })

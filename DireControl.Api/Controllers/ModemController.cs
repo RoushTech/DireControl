@@ -1,7 +1,10 @@
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
+using DireControl.Data;
+using DireControl.Enums;
 using DireControl.Modem.Audio;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace DireControl.Api.Controllers;
 
@@ -9,7 +12,8 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/modem")]
 public class ModemController(
     SoundModemService modemService,
-    ModemRestartTrigger restartTrigger) : ControllerBase
+    ModemRestartTrigger restartTrigger,
+    DireControlContext db) : ControllerBase
 {
     /// <summary>Live status of every radio's modem instance.</summary>
     [HttpGet("status")]
@@ -79,6 +83,48 @@ public class ModemController(
     {
         restartTrigger.Trigger();
         return NoContent();
+    }
+
+    /// <summary>
+    /// Adjusts a radio's TX audio level (gain) live — persists the new value and
+    /// applies it to the running modem immediately, with no restart or audio gap.
+    /// </summary>
+    [HttpPut("{radioId}/tx-level")]
+    public async Task<IActionResult> SetTxLevel(
+        string radioId,
+        [FromBody] SetTxLevelRequest request,
+        CancellationToken ct)
+    {
+        if (request.TxAudioLevelPct is < 1 or > 100)
+            return BadRequest("TX audio level must be between 1 and 100 percent.");
+
+        var radio = await db.Radios.FirstOrDefaultAsync(r => r.Id == radioId, ct);
+        if (radio is null)
+            return NotFound();
+
+        radio.TxAudioLevelPct = request.TxAudioLevelPct;
+        await db.SaveChangesAsync(ct);
+
+        modemService.SetTxAudioLevel(radioId, request.TxAudioLevelPct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Transmits a TX calibration test tone on the radio's running modem (keys
+    /// PTT, plays the tone at the current TX level, unkeys).  For setting
+    /// deviation while watching the gain slider.
+    /// </summary>
+    [HttpPost("{radioId}/test-tone")]
+    public IActionResult SendTestTone(string radioId, [FromBody] TestToneRequest request)
+    {
+        if (request.Kind == TestToneKind.Unknown)
+            return BadRequest("Choose a test-tone kind.");
+
+        return modemService.TryEnqueueTestTone(radioId, request.Kind, request.DurationMs)
+            ? Accepted()
+            : Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                detail: "No running TX-capable modem for this radio. Enable the modem and TX first.");
     }
 
     private static List<string> ListSerialPorts()

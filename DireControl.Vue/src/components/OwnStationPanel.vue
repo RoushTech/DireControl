@@ -4,6 +4,7 @@ import { useRadiosStore } from '@/stores/radiosStore'
 import BeaconHistoryModal from './BeaconHistoryModal.vue'
 import { useTick } from '@/composables/useTick'
 import { beaconNow } from '@/api/radiosApi'
+import type { RadioDto } from '@/types/radio'
 
 const radiosStore = useRadiosStore()
 
@@ -51,14 +52,35 @@ function formatSecondsAgo(secs: number | null): string {
   return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m ago`
 }
 
-function dotColor(radioId: string, expectedIntervalSeconds: number): string {
-  const lb = radiosStore.getLastBeaconForRadio(radioId)
-  const secs = secondsAgo(radioId)
+// When auto-beaconing is on, "overdue" is judged against the auto-beacon
+// interval; otherwise it falls back to the expected (monitoring) interval.
+function effectiveInterval(radio: RadioDto): number {
+  return radio.autoBeaconEnabled ? radio.autoBeaconIntervalSeconds : radio.expectedIntervalSeconds
+}
+
+function dotColor(radio: RadioDto): string {
+  const lb = radiosStore.getLastBeaconForRadio(radio.id)
+  const secs = secondsAgo(radio.id)
   if (secs === null) return 'grey'
   if (lb && !lb.heard) return 'yellow'
-  if (secs <= expectedIntervalSeconds) return 'green'
-  if (secs <= expectedIntervalSeconds * 1.5) return 'amber'
+  const interval = effectiveInterval(radio)
+  if (secs <= interval) return 'green'
+  if (secs <= interval * 1.5) return 'amber'
   return 'red'
+}
+
+function activityRx(radioId: string): boolean {
+  return radiosStore.getActivityForRadio(radioId)?.carrierDetected ?? false
+}
+
+function activityTx(radioId: string): boolean {
+  return radiosStore.getActivityForRadio(radioId)?.transmitting ?? false
+}
+
+function formatInterval(secs: number): string {
+  if (secs >= 3600 && secs % 3600 === 0) return `${secs / 3600}h`
+  if (secs >= 60 && secs % 60 === 0) return `${secs / 60}m`
+  return `${secs}s`
 }
 
 function recentConfirmations(radioId: string) {
@@ -76,7 +98,7 @@ function recentConfirmations(radioId: string) {
       @click="openHistory(radio.id)"
     >
       <div class="d-flex align-center ga-2">
-        <v-icon :color="dotColor(radio.id, radio.expectedIntervalSeconds)" size="10">
+        <v-icon :color="dotColor(radio)" size="10">
           mdi-circle
         </v-icon>
         <span class="text-caption font-weight-bold">{{ radio.fullCallsign }}</span>
@@ -89,6 +111,18 @@ function recentConfirmations(radioId: string) {
           class="text-yellow font-weight-medium"
         >
           — awaiting confirmation
+        </span>
+      </div>
+      <div class="d-flex align-center ga-2 mt-1 text-caption text-medium-emphasis">
+        <span :class="activityRx(radio.id) ? 'text-success font-weight-bold' : ''">
+          <v-icon size="9">mdi-arrow-down-bold</v-icon>RX
+        </span>
+        <span :class="activityTx(radio.id) ? 'text-error font-weight-bold' : ''">
+          <v-icon size="9">mdi-arrow-up-bold</v-icon>TX
+        </span>
+        <span>· {{ radio.beaconCount }} beacons</span>
+        <span v-if="radio.autoBeaconEnabled">
+          · auto {{ formatInterval(radio.autoBeaconIntervalSeconds) }}
         </span>
       </div>
       <div v-if="recentConfirmations(radio.id).length > 0" class="d-flex flex-wrap ga-1 mt-1">

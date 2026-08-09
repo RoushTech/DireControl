@@ -27,7 +27,13 @@ import {
   updateWeatherApiKeys,
   RadarProvider,
 } from '@/api/stationsApi'
-import { getModemDevices, updateRfServices, PttMethods, type ModemDevicesDto } from '@/api/modemApi'
+import {
+  getModemDevices,
+  updateRfServices,
+  updateExternalTnc,
+  PttMethods,
+  type ModemDevicesDto,
+} from '@/api/modemApi'
 import { getWeatherStatus } from '@/api/weatherApi'
 import {
   getMaintenanceStatus,
@@ -184,6 +190,46 @@ function loadRfServicesSettings(s: SettingsDto) {
   isToRfGatingEnabled.value = s.isToRfGatingEnabled
   isToRfPath.value = s.isToRfPath
   isToRfRecentHeardMinutes.value = s.isToRfRecentHeardMinutes
+}
+
+// ─── External TNC (KISS TCP client, e.g. Direwolf) ───────────────────────────
+const direwolfEnabled = ref(false)
+const direwolfHost = ref('localhost')
+const direwolfPort = ref(8001)
+const direwolfReconnectDelaySeconds = ref(5)
+const externalTncSaving = ref(false)
+const externalTncSaveError = ref('')
+const externalTncSaveSuccess = ref(false)
+
+function loadExternalTncSettings(s: SettingsDto) {
+  direwolfEnabled.value = s.direwolfEnabled
+  direwolfHost.value = s.direwolfHost
+  direwolfPort.value = s.direwolfPort
+  direwolfReconnectDelaySeconds.value = s.direwolfReconnectDelaySeconds
+}
+
+async function saveExternalTnc() {
+  externalTncSaving.value = true
+  externalTncSaveError.value = ''
+  externalTncSaveSuccess.value = false
+  try {
+    await updateExternalTnc({
+      direwolfEnabled: direwolfEnabled.value,
+      direwolfHost: direwolfHost.value.trim(),
+      direwolfPort: direwolfPort.value,
+      direwolfReconnectDelaySeconds: direwolfReconnectDelaySeconds.value,
+    })
+    externalTncSaveSuccess.value = true
+    setTimeout(() => {
+      externalTncSaveSuccess.value = false
+    }, 3000)
+  } catch (e: unknown) {
+    const detail = (e as { response?: { data?: unknown } })?.response?.data
+    externalTncSaveError.value =
+      typeof detail === 'string' && detail ? detail : 'Failed to save external TNC settings.'
+  } finally {
+    externalTncSaving.value = false
+  }
 }
 
 async function saveRfServices() {
@@ -610,6 +656,7 @@ onMounted(async () => {
     aprsIsFilter.value = s.aprsIsFilter
     deduplicationWindowSeconds.value = s.deduplicationWindowSeconds
     loadRfServicesSettings(s)
+    loadExternalTncSettings(s)
   } catch {
     /* ignore */
   }
@@ -1158,6 +1205,69 @@ async function confirmDelete() {
             </div>
             <v-alert v-if="rfServicesSaveError" type="error" density="compact" class="mt-3">
               {{ rfServicesSaveError }}
+            </v-alert>
+          </v-card>
+
+          <!-- ================================================================ -->
+          <!-- External TNC (KISS TCP client, e.g. Direwolf) -->
+          <!-- ================================================================ -->
+          <div class="section-header d-flex align-center mb-2">
+            <span class="text-h6">External TNC</span>
+          </div>
+
+          <v-card variant="outlined" class="mb-6 pa-4">
+            <v-switch
+              v-model="direwolfEnabled"
+              label="Connect to an external KISS TNC (e.g. Direwolf) over TCP"
+              hide-details
+              density="compact"
+            />
+            <div class="text-caption text-medium-emphasis mb-2">
+              Leave off when using the native sound modem — otherwise DireControl keeps trying to
+              reach a TNC that isn't there.
+            </div>
+            <div v-if="direwolfEnabled" class="d-flex ga-4 align-center flex-wrap mt-1">
+              <v-text-field
+                v-model="direwolfHost"
+                label="Host"
+                density="compact"
+                placeholder="localhost"
+                style="max-width: 220px"
+              />
+              <v-text-field
+                v-model.number="direwolfPort"
+                label="Port"
+                density="compact"
+                type="number"
+                style="max-width: 140px"
+              />
+              <v-text-field
+                v-model.number="direwolfReconnectDelaySeconds"
+                label="Reconnect delay (s)"
+                density="compact"
+                type="number"
+                style="max-width: 180px"
+              />
+            </div>
+
+            <div class="d-flex align-center ga-3 mt-4">
+              <v-btn
+                size="small"
+                color="primary"
+                prepend-icon="mdi-content-save"
+                :loading="externalTncSaving"
+                @click="saveExternalTnc"
+              >
+                Save External TNC
+              </v-btn>
+              <v-fade-transition>
+                <span v-if="externalTncSaveSuccess" class="text-caption text-success">
+                  <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+                </span>
+              </v-fade-transition>
+            </div>
+            <v-alert v-if="externalTncSaveError" type="error" density="compact" class="mt-3">
+              {{ externalTncSaveError }}
             </v-alert>
           </v-card>
         </div>

@@ -98,6 +98,24 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>How recently a station must have been heard on RF to receive IS→RF traffic.</summary>
     public int IsToRfRecentHeardMinutes { get; set; } = 30;
 
+    // ─── External TNC (KISS TCP client, e.g. Direwolf) ───────────────────────
+
+    /// <summary>
+    /// Whether DireControl maintains a KISS/TCP client connection to an external
+    /// TNC such as Direwolf.  Off by default — most stations use the native sound
+    /// modem.  Enable only when a separate TNC is providing the RF link.
+    /// </summary>
+    public bool DirewolfEnabled { get; set; } = false;
+
+    /// <summary>Hostname of the external KISS TNC.</summary>
+    public string DirewolfHost { get; set; } = "localhost";
+
+    /// <summary>TCP port of the external KISS TNC (8001 is the Direwolf convention).</summary>
+    public int DirewolfPort { get; set; } = 8001;
+
+    /// <summary>Seconds to wait before retrying a dropped external-TNC connection.</summary>
+    public int DirewolfReconnectDelaySeconds { get; set; } = 5;
+
     // ─── Weather overlay API keys ─────────────────────────────────────────────
 
     /// <summary>OpenWeatherMap API key used for the wind tile overlay.</summary>

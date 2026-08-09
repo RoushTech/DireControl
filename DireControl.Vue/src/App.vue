@@ -436,7 +436,11 @@ async function syncServerClock() {
     </v-banner>
 
     <v-main class="fill-height">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <keep-alive include="RadioView">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </v-main>
 
     <!-- Toast notifications for alerts -->

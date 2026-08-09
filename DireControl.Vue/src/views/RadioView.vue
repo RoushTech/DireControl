@@ -1,14 +1,23 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+
+// Named so <keep-alive include="RadioView"> in App.vue keeps this view (and its
+// live SignalR connection, packet buffer, and waterfall history) mounted while
+// the user navigates elsewhere.
+defineOptions({ name: 'RadioView' })
 import { HubConnectionBuilder, type HubConnection } from '@microsoft/signalr'
 import {
   getModemStatus,
+  setModemTxLevel,
+  sendTestTone,
+  TestToneKinds,
   decodeSpectrumPayload,
   ModemStates,
   modemStateLabels,
   type ModemLevelDto,
   type ModemSpectrumDto,
   type ModemStatusDto,
+  type TestToneKind,
 } from '@/api/modemApi'
 import { getStatus, type StatusDto } from '@/api/statusApi'
 import { getSettings, getPacketsSince } from '@/api/stationsApi'
@@ -35,6 +44,44 @@ const packets = ref<PacketBroadcastDto[]>([])
 
 // Live meters per radio — updated at 10 Hz over SignalR, keyed by radio id.
 const levels = ref<Record<string, ModemLevelDto>>({})
+
+// TX audio level (gain) per radio, adjustable live. Seeded from each radio's
+// persisted config; writes are debounced so dragging the slider doesn't flood
+// the API, and applied live by the backend with no modem restart.
+const txGain = reactive<Record<string, number>>({})
+const txGainTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+
+function seedTxGain() {
+  for (const r of radios.value) txGain[r.id] = r.modem.txAudioLevelPct
+}
+
+function onTxGainInput(radioId: string, value: number) {
+  txGain[radioId] = value
+  clearTimeout(txGainTimers[radioId])
+  txGainTimers[radioId] = setTimeout(() => {
+    setModemTxLevel(radioId, Math.round(value)).catch(() => {
+      /* transient — the next adjustment retries */
+    })
+  }, 200)
+}
+
+// Which radio is currently sending a test tone (disables its buttons briefly).
+const toneSending = reactive<Record<string, boolean>>({})
+const TEST_TONE_MS = 2000
+
+async function doTestTone(radioId: string, kind: TestToneKind) {
+  toneSending[radioId] = true
+  try {
+    await sendTestTone(radioId, kind, TEST_TONE_MS)
+  } catch {
+    /* surfaced by modem status / logs */
+  } finally {
+    // Re-enable after roughly the tone duration so the buttons reflect PTT.
+    setTimeout(() => {
+      toneSending[radioId] = false
+    }, TEST_TONE_MS)
+  }
+}
 
 type WaterfallInstance = InstanceType<typeof WaterfallCanvas>
 const waterfalls = new Map<string, WaterfallInstance>()
@@ -131,6 +178,7 @@ onMounted(async () => {
   }
   try {
     radios.value = await getRadios()
+    seedTxGain()
   } catch {
     /* ignore */
   }
@@ -182,6 +230,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer)
+  for (const t of Object.values(txGainTimers)) clearTimeout(t)
   connection?.stop()
   connection = null
 })
@@ -231,9 +280,9 @@ onUnmounted(() => {
               </span>
             </div>
 
-            <div class="d-flex align-center ga-2 mb-3 flex-nowrap">
+            <div class="d-flex align-center ga-2 mb-2 flex-nowrap">
               <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
-                >Audio</span
+                >RX</span
               >
               <v-progress-linear
                 :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
@@ -247,6 +296,59 @@ onUnmounted(() => {
               >
                 {{ (levelFor(m).audioLevel * 100).toFixed(0) }}%
               </span>
+            </div>
+
+            <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-3 flex-nowrap">
+              <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
+                >TX gain</span
+              >
+              <v-slider
+                :model-value="txGain[m.radioId] ?? 80"
+                :min="1"
+                :max="100"
+                :step="1"
+                color="primary"
+                density="compact"
+                hide-details
+                thumb-label
+                @update:model-value="(v: number) => onTxGainInput(m.radioId, v)"
+              />
+              <span
+                class="text-caption text-medium-emphasis flex-shrink-0"
+                style="width: 48px; text-align: right; white-space: nowrap"
+              >
+                {{ Math.round(txGain[m.radioId] ?? 80) }}%
+              </span>
+            </div>
+
+            <div v-if="m.txEnabled" class="d-flex align-center ga-2 mb-3 flex-wrap">
+              <span class="text-caption text-medium-emphasis flex-shrink-0" style="width: 44px"
+                >Test</span
+              >
+              <v-btn-group density="compact" variant="outlined" divided>
+                <v-btn
+                  size="x-small"
+                  :loading="toneSending[m.radioId]"
+                  @click="doTestTone(m.radioId, TestToneKinds.Mark)"
+                >
+                  Mark
+                </v-btn>
+                <v-btn
+                  size="x-small"
+                  :disabled="toneSending[m.radioId]"
+                  @click="doTestTone(m.radioId, TestToneKinds.Space)"
+                >
+                  Space
+                </v-btn>
+                <v-btn
+                  size="x-small"
+                  :disabled="toneSending[m.radioId]"
+                  @click="doTestTone(m.radioId, TestToneKinds.Alternating)"
+                >
+                  Alt
+                </v-btn>
+              </v-btn-group>
+              <span class="text-caption text-medium-emphasis">keys TX ~2s</span>
             </div>
 
             <WaterfallCanvas

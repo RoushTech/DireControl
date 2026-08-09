@@ -50,6 +50,39 @@ public sealed class AfskModulator(int sampleRate, float baud = 1200f, float mark
     }
 
     /// <summary>
+    /// Renders a TX calibration test tone: cycles through <paramref name="frequencies"/>,
+    /// holding each for <paramref name="segmentMs"/>, phase-continuous (no clicks
+    /// at segment boundaries), until <paramref name="durationMs"/> of audio at
+    /// ±<paramref name="amplitude"/> is produced.  A single frequency yields a
+    /// steady tone; two yields an alternating warble.
+    /// </summary>
+    public float[] GenerateTestTone(
+        IReadOnlyList<double> frequencies,
+        int durationMs,
+        double segmentMs,
+        float amplitude = 0.8f)
+    {
+        if (frequencies.Count == 0 || durationMs <= 0)
+            return [];
+
+        var totalSamples = (int)(sampleRate * (durationMs / 1000.0));
+        var samplesPerSegment = Math.Max(1, (int)(sampleRate * (segmentMs / 1000.0)));
+        var samples = new float[totalSamples];
+
+        var phase = 0.0;
+        for (var i = 0; i < totalSamples; i++)
+        {
+            var freq = frequencies[(i / samplesPerSegment) % frequencies.Count];
+            samples[i] = (float)(Math.Sin(phase) * amplitude);
+            phase += 2 * Math.PI * freq / sampleRate;
+            if (phase > 2 * Math.PI)
+                phase -= 2 * Math.PI;
+        }
+
+        return samples;
+    }
+
+    /// <summary>
     /// Number of flags needed to fill <paramref name="milliseconds"/> of air
     /// time (one flag = 8 bits), at least one.
     /// </summary>

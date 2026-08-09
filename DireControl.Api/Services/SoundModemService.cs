@@ -54,6 +54,9 @@ public sealed class SoundModemService(
     private const int RetryDelaySeconds = 10;
     private const int TxQueueCapacity = 64;
 
+    /// <summary>A queued TX calibration test tone.</summary>
+    private sealed record ToneRequest(TestToneKind Kind, int DurationMs);
+
     /// <summary>Per-radio runtime state.</summary>
     private sealed class ModemInstance(Radio radio)
     {
@@ -68,9 +71,19 @@ public sealed class SoundModemService(
         };
         public volatile AfskReceiver? Receiver;
         public Channel<byte[]>? TxChannel;
+        public Channel<ToneRequest>? ToneChannel;
         public volatile bool Transmitting;
         public long TransmittedFrames;
         public long RigFrequencyHz = -1;
+
+        // TX audio level (gain), adjustable live from the UI without a modem
+        // restart. Read on the transmit thread, written from a controller thread.
+        private int _txAudioLevelPct = Math.Clamp(radio.TxAudioLevelPct, 1, 100);
+        public int TxAudioLevelPct
+        {
+            get => Volatile.Read(ref _txAudioLevelPct);
+            set => Volatile.Write(ref _txAudioLevelPct, Math.Clamp(value, 1, 100));
+        }
 
         public ModemStatusSnapshot LiveStatus()
         {
@@ -131,6 +144,33 @@ public sealed class SoundModemService(
             .Where(x => x.Bins is not null)
             .Select(x => (x.Id, x.Bins!))
             .ToList();
+
+    /// <summary>
+    /// Applies a new TX audio level (gain) to the running modem for
+    /// <paramref name="radioId"/> immediately, without a restart.  Returns
+    /// <see langword="false"/> when no running instance exists for the radio
+    /// (the persisted value still takes effect on the next modem start).
+    /// </summary>
+    public bool SetTxAudioLevel(string radioId, int pct)
+    {
+        var instance = _instances.FirstOrDefault(i => i.Radio.Id == radioId);
+        if (instance is null)
+            return false;
+        instance.TxAudioLevelPct = pct;
+        return true;
+    }
+
+    /// <summary>
+    /// Queues a TX calibration test tone for <paramref name="radioId"/>.  Returns
+    /// <see langword="false"/> when the radio has no running TX-capable modem.
+    /// The duration is clamped to a safe range so PTT is never held indefinitely.
+    /// </summary>
+    public bool TryEnqueueTestTone(string radioId, TestToneKind kind, int durationMs)
+    {
+        var tone = _instances.FirstOrDefault(i => i.Radio.Id == radioId)?.ToneChannel;
+        return tone is not null
+            && tone.Writer.TryWrite(new ToneRequest(kind, Math.Clamp(durationMs, 200, 10_000)));
+    }
 
     /// <summary>
     /// Queues an AX.25 frame for transmission on the radio whose KISS channel
@@ -266,10 +306,16 @@ public sealed class SoundModemService(
 
         IPttController? ptt = null;
         Channel<byte[]>? txChannel = null;
+        Channel<ToneRequest>? toneChannel = null;
         if (radio.TxEnabled)
         {
             ptt = CreatePttController(radio);
             txChannel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(TxQueueCapacity)
+            {
+                SingleReader = true,
+                FullMode = BoundedChannelFullMode.DropOldest,
+            });
+            toneChannel = Channel.CreateBounded<ToneRequest>(new BoundedChannelOptions(4)
             {
                 SingleReader = true,
                 FullMode = BoundedChannelFullMode.DropOldest,
@@ -281,6 +327,7 @@ public sealed class SoundModemService(
 
         instance.Receiver = receiver;
         instance.TxChannel = txChannel;
+        instance.ToneChannel = toneChannel;
 
         // Either loop faulting (device unplugged, PTT failure) must tear down
         // this instance's session so the retry loop reopens everything.
@@ -299,7 +346,7 @@ public sealed class SoundModemService(
 
             var txTask = txChannel is null
                 ? Task.Delay(Timeout.Infinite, sct)
-                : TransmitLoopAsync(instance, receiver, ptt, txChannel, sct);
+                : TransmitLoopAsync(instance, receiver, ptt, txChannel, toneChannel!, sct);
 
             var first = await Task.WhenAny(captureTask, txTask);
             sessionCts.Cancel();
@@ -313,6 +360,7 @@ public sealed class SoundModemService(
         finally
         {
             instance.TxChannel = null;
+            instance.ToneChannel = null;
             instance.Receiver = null;
             instance.Transmitting = false;
             ptt?.Dispose();
@@ -350,6 +398,7 @@ public sealed class SoundModemService(
         AfskReceiver receiver,
         IPttController? ptt,
         Channel<byte[]> txChannel,
+        Channel<ToneRequest> toneChannel,
         CancellationToken ct)
     {
         var radio = instance.Radio;
@@ -357,14 +406,26 @@ public sealed class SoundModemService(
             ? "default"
             : radio.ModemPlaybackDevice;
         var modulator = new AfskModulator(SampleRate);
-        var amplitude = Math.Clamp(radio.TxAudioLevelPct, 1, 100) / 100f;
         var leadFlags = modulator.FlagsForMilliseconds(radio.TxDelayMs);
         var tailFlags = modulator.FlagsForMilliseconds(radio.TxTailMs);
         var slotTimeMs = Math.Max(10, radio.TxSlotTimeMs);
         var persistence = Math.Clamp(radio.TxPersistence, 0, 255);
 
-        while (await txChannel.Reader.WaitToReadAsync(ct))
+        while (!ct.IsCancellationRequested)
         {
+            // Wake on either a queued frame or a test-tone request.
+            var frameReady = txChannel.Reader.WaitToReadAsync(ct).AsTask();
+            var toneReady = toneChannel.Reader.WaitToReadAsync(ct).AsTask();
+            await Task.WhenAny(frameReady, toneReady);
+
+            // A test tone is a deliberate operator action for calibration —
+            // transmit it immediately, bypassing CSMA.
+            if (toneChannel.Reader.TryRead(out var tone))
+            {
+                await SendTestToneAsync(instance, ptt, playbackDevice, modulator, tone, ct);
+                continue;
+            }
+
             // p-persistence CSMA: wait for a clear channel, then transmit with
             // probability (P+1)/256 per slot, re-checking carrier each slot.
             while (true)
@@ -376,13 +437,15 @@ public sealed class SoundModemService(
                 await Task.Delay(slotTimeMs, ct);
             }
 
-            // Send everything queued in one keyup.
+            // Send everything queued in one keyup (including any that arrived
+            // while we waited out CSMA).
             var frames = new List<byte[]>();
             while (txChannel.Reader.TryRead(out var frame))
                 frames.Add(frame);
             if (frames.Count == 0)
                 continue;
 
+            var amplitude = instance.TxAudioLevelPct / 100f;
             var audio = modulator.GenerateTransmission(frames, leadFlags, tailFlags, amplitude);
 
             instance.Transmitting = true;
@@ -420,6 +483,56 @@ public sealed class SoundModemService(
             if (ptt is RigctldPtt rig)
                 Interlocked.Exchange(ref instance.RigFrequencyHz, rig.TryGetFrequencyHz() ?? -1);
         }
+    }
+
+    /// <summary>
+    /// Keys PTT and plays a TX calibration test tone through the radio's playback
+    /// device at the current TX audio level, then unkeys.  Uses the same PTT and
+    /// playback path as a normal transmission so there is no device contention.
+    /// </summary>
+    private async Task SendTestToneAsync(
+        ModemInstance instance,
+        IPttController? ptt,
+        string playbackDevice,
+        AfskModulator modulator,
+        ToneRequest tone,
+        CancellationToken ct)
+    {
+        var amplitude = instance.TxAudioLevelPct / 100f;
+        var (frequencies, segmentMs) = tone.Kind switch
+        {
+            TestToneKind.Space => (new double[] { 2200 }, (double)tone.DurationMs),
+            TestToneKind.Alternating => (new double[] { 1200, 2200 }, 100.0),
+            _ => (new double[] { 1200 }, (double)tone.DurationMs), // Mark (and default)
+        };
+        var audio = modulator.GenerateTestTone(frequencies, tone.DurationMs, segmentMs, amplitude);
+        if (audio.Length == 0)
+            return;
+
+        instance.Transmitting = true;
+        try
+        {
+            ptt?.SetPtt(true);
+            using var playback = new AlsaPlaybackDevice(playbackDevice, SampleRate);
+            playback.Write(audio);
+            playback.Drain();
+        }
+        finally
+        {
+            try { ptt?.SetPtt(false); }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to unkey PTT after test tone for {Radio}.", instance.Radio.FullCallsign);
+            }
+            instance.Transmitting = false;
+        }
+
+        // Cancellation requested mid-tone should still surface to the loop.
+        ct.ThrowIfCancellationRequested();
+
+        logger.LogInformation(
+            "{Radio} sent {Ms} ms {Kind} test tone.",
+            instance.Radio.FullCallsign, tone.DurationMs, tone.Kind);
     }
 
     /// <summary>
