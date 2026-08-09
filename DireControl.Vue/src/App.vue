@@ -675,6 +675,13 @@ body,
   background: rgba(var(--v-theme-surface-variant), 0.5);
 }
 
+/* Button labels never touch their borders — x-small text buttons get real
+   horizontal padding app-wide. */
+.v-btn--size-x-small:not(.v-btn--icon) {
+  padding-inline: 10px;
+  min-width: 0;
+}
+
 /* Desktop nav: shown on wide screens, hidden on mobile */
 .desktop-nav {
   display: flex;

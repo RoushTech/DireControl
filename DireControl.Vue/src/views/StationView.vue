@@ -6,16 +6,24 @@ import { usePacketHubStore } from '@/stores/packetHub'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useUiStore } from '@/stores/uiStore'
 import { useToastStore } from '@/stores/toastStore'
-import { getStation, getStationPackets, toggleWatch } from '@/api/stationsApi'
-import { StationType, type StationDto } from '@/types/station'
+import {
+  getSettings,
+  getStation,
+  getStationPackets,
+  getStationSignal,
+  getStationStats,
+  toggleWatch,
+} from '@/api/stationsApi'
+import { HeardVia, StationType, type StationDto, type StationStatisticDto } from '@/types/station'
 import {
   PacketSource,
   type PacketBroadcastDto,
   type PacketDto,
   type ResolvedPathEntry,
+  type SignalPointDto,
 } from '@/types/packet'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
-import { timeAgo, formatUtc } from '@/utils/time'
+import { timeAgo, formatUtc, compassDir } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
 
 const route = useRoute()
@@ -48,14 +56,128 @@ const symbolStyle = computed(() => {
   return getSymbolStyle(table, code)
 })
 
+// ─── Info-tab data (mock two-column layout) ──────────────────────────────────
+const stats = ref<StationStatisticDto | null>(null)
+const signalPoints = ref<SignalPointDto[]>([])
+const home = ref<{ lat: number; lon: number } | null>(null)
+
+async function loadInfoData() {
+  try {
+    stats.value = await getStationStats(callsign.value)
+  } catch {
+    stats.value = null
+  }
+  try {
+    signalPoints.value = await getStationSignal(callsign.value, 24)
+  } catch {
+    signalPoints.value = []
+  }
+}
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const rad = Math.PI / 180
+  const dLat = (lat2 - lat1) * rad
+  const dLon = (lon2 - lon1) * rad
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2
+  return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const rad = Math.PI / 180
+  const y = Math.sin((lon2 - lon1) * rad) * Math.cos(lat2 * rad)
+  const x =
+    Math.cos(lat1 * rad) * Math.sin(lat2 * rad) -
+    Math.sin(lat1 * rad) * Math.cos(lat2 * rad) * Math.cos((lon2 - lon1) * rad)
+  return (Math.atan2(y, x) / rad + 360) % 360
+}
+
+/** "19.4 mi NW of home" — needs both a home position and a station fix. */
+const distanceLabel = computed(() => {
+  const s = station.value
+  const h = home.value
+  if (!s || !h || s.lastLat == null || s.lastLon == null) return null
+  const mi = haversineMiles(h.lat, h.lon, s.lastLat, s.lastLon)
+  const dir = compassDir(bearingDeg(h.lat, h.lon, s.lastLat, s.lastLon))
+  return `${mi.toFixed(1)} mi ${dir} of home`
+})
+
+// Mock meta: "Mobile · heard 2m ago via WE4MB-3 · 19.4 mi NW of home · 1 hop"
 const metaLabel = computed(() => {
   const s = station.value
   if (!s) return ''
   const parts = [STATION_TYPE_LABELS[s.stationType] ?? 'Unknown']
-  parts.push(`heard ${timeAgo(s.lastSeen, now.value)}`)
-  if (s.gridSquare) parts.push(`grid ${s.gridSquare}`)
+  let heard = `heard ${timeAgo(s.lastSeen, now.value)}`
+  const p = latestPacket.value
+  const firstDigi = p && p.hopCount > 0 ? p.resolvedPath[1]?.callsign : null
+  if (firstDigi) heard += ` via ${firstDigi}`
+  parts.push(heard)
+  if (distanceLabel.value) parts.push(distanceLabel.value)
+  if (p && p.source !== PacketSource.AprsIs)
+    parts.push(p.hopCount === 0 ? 'direct' : `${p.hopCount} hop${p.hopCount === 1 ? '' : 's'}`)
   return parts.join(' · ')
 })
+
+const avgHops = computed(() => {
+  const pts = signalPoints.value
+  if (pts.length === 0) return null
+  return pts.reduce((sum, p) => sum + p.hopCount, 0) / pts.length
+})
+
+const avgAudio = computed(() => {
+  const pts = signalPoints.value.filter((p) => p.audioLevel != null)
+  if (pts.length === 0) return null
+  return pts.reduce((sum, p) => sum + (p.audioLevel ?? 0), 0) / pts.length
+})
+
+const firstHeardLabel = computed(() => {
+  if (!station.value) return '—'
+  const d = new Date(station.value.firstSeen)
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  if (d.getFullYear() !== new Date(now.value).getFullYear()) opts.year = '2-digit'
+  return d.toLocaleDateString([], opts)
+})
+
+// Mock stat tiles: packets heard · avg hops · audio level · first heard
+const statTiles = computed(() => [
+  { value: stats.value?.packetsAllTime.toLocaleString() ?? '—', label: 'packets heard' },
+  { value: avgHops.value != null ? avgHops.value.toFixed(1) : '—', label: 'avg hops' },
+  { value: avgAudio.value != null ? avgAudio.value.toFixed(2) : '—', label: 'audio level' },
+  { value: firstHeardLabel.value, label: 'first heard' },
+])
+
+// Mock activity spark — packetsPerHour is oldest→newest, 24 buckets.
+const sparkBars = computed(() => {
+  const hours = stats.value?.packetsPerHour ?? []
+  const max = Math.max(1, ...hours)
+  return hours.map((count) => ({ count, pct: Math.max(2, (count / max) * 100) }))
+})
+
+const HEARD_VIA_LABELS: Record<HeardVia, string> = {
+  [HeardVia.Unknown]: 'Unknown',
+  [HeardVia.Direct]: 'Direct',
+  [HeardVia.Digi]: 'Via digipeater',
+  [HeardVia.DirectAndDigi]: 'Direct & digi',
+  [HeardVia.Internet]: 'APRS-IS',
+  [HeardVia.IgateRf]: 'IGate (RF)',
+  [HeardVia.IgateRfDigi]: 'IGate RF + digi',
+}
+
+const heardViaLabel = computed(() =>
+  station.value ? (HEARD_VIA_LABELS[station.value.heardVia] ?? 'Unknown') : null,
+)
+
+const courseLabel = computed(() => {
+  const s = station.value
+  if (!s || s.lastHeading == null) return null
+  const heading = `${Math.round(s.lastHeading)}°`
+  return s.lastSpeed != null ? `${heading} @ ${Math.round(s.lastSpeed)} mph` : heading
+})
+
+/** QRZ link uses the base callsign — QRZ has no SSID pages. */
+const qrzUrl = computed(
+  () => `https://www.qrz.com/db/${encodeURIComponent(callsign.value.split('-')[0] ?? '')}`,
+)
 
 async function loadStation() {
   try {
@@ -142,6 +264,7 @@ function onHubPacketReceived(packet: PacketBroadcastDto) {
     refreshKey.value++
     void loadStation()
     void loadLatestPacket()
+    void loadInfoData()
   }
 }
 
@@ -170,14 +293,21 @@ watch(
   () => {
     void loadStation()
     void loadLatestPacket()
+    void loadInfoData()
   },
   { immediate: false },
 )
 
-onMounted(() => {
+onMounted(async () => {
   void loadStation()
   void loadLatestPacket()
+  void loadInfoData()
   hub.on('packetReceived', onHubPacketReceived)
+  try {
+    home.value = (await getSettings()).homePosition
+  } catch {
+    home.value = null
+  }
 })
 
 onUnmounted(() => {
@@ -263,44 +393,131 @@ onUnmounted(() => {
     </div>
     <v-divider />
 
-    <!-- Tabbed content — the detail panel in page mode (page owns the tabs) -->
+    <!-- Tabbed content. Info is the mock's two-column layout, built here;
+         the other tabs render the detail panel in page mode. -->
     <div class="station-page-body">
-      <!-- Mock headline: the latest packet's resolved RF path, hop by hop -->
-      <v-card v-if="pageTab === 'info' && pathHops.length > 0" variant="outlined" class="mb-3">
-        <div class="d-flex align-center ga-2 px-4 pt-3 pb-2">
-          <span class="text-subtitle-2 font-weight-medium">Last packet — how it reached us</span>
-          <v-chip size="x-small" variant="tonal" :color="latestPacketSource.color">
-            {{ latestPacketSource.label }}
-          </v-chip>
-          <v-spacer />
-          <span
-            v-if="latestPacket"
-            class="text-caption text-medium-emphasis"
-            :title="formatUtc(latestPacket.receivedAt)"
-          >
-            {{ timeAgo(latestPacket.receivedAt, now) }}
-          </span>
-        </div>
-        <div class="px-4 pb-3">
-          <div class="path-viz">
-            <template v-for="(hop, i) in pathHops" :key="`${hop.callsign}-${i}`">
-              <v-icon v-if="i > 0" size="16" class="path-arrow">mdi-arrow-right</v-icon>
-              <div class="hop" :class="hopClass(hop, i)">
-                <div class="hop-role">{{ hopRole(hop, i) }}</div>
-                <div class="hop-callsign">{{ hop.callsign }}</div>
-                <div v-if="hop.latitude != null && hop.longitude != null" class="hop-coord">
-                  {{ hop.latitude.toFixed(4) }}, {{ hop.longitude.toFixed(4) }}
-                </div>
-                <div v-else class="hop-coord">position unknown</div>
+      <div v-if="pageTab === 'info'" class="info-grid">
+        <div class="info-col">
+          <!-- Mock headline: the latest packet's resolved RF path, hop by hop -->
+          <v-card v-if="pathHops.length > 0" variant="outlined">
+            <div class="d-flex align-center ga-2 card-head">
+              <span class="card-title">Last packet — how it reached us</span>
+              <v-chip size="x-small" variant="tonal" :color="latestPacketSource.color">
+                {{ latestPacketSource.label }}
+              </v-chip>
+              <v-spacer />
+              <span
+                v-if="latestPacket"
+                class="text-caption text-medium-emphasis"
+                :title="formatUtc(latestPacket.receivedAt)"
+              >
+                {{ timeAgo(latestPacket.receivedAt, now) }}
+              </span>
+            </div>
+            <div class="px-4 pb-3">
+              <div class="path-viz">
+                <template v-for="(hop, i) in pathHops" :key="`${hop.callsign}-${i}`">
+                  <v-icon v-if="i > 0" size="16" class="path-arrow">mdi-arrow-right</v-icon>
+                  <div class="hop" :class="hopClass(hop, i)">
+                    <div class="hop-role">{{ hopRole(hop, i) }}</div>
+                    <div class="hop-callsign">{{ hop.callsign }}</div>
+                    <div v-if="hop.latitude != null && hop.longitude != null" class="hop-coord">
+                      {{ hop.latitude.toFixed(4) }}, {{ hop.longitude.toFixed(4) }}
+                    </div>
+                    <div v-else class="hop-coord">position unknown</div>
+                  </div>
+                </template>
               </div>
-            </template>
-          </div>
-          <div v-if="latestPacket" class="raw-line" :title="latestPacket.rawPacket">
-            {{ latestPacket.rawPacket }}
-          </div>
+              <div v-if="latestPacket" class="raw-line" :title="latestPacket.rawPacket">
+                {{ latestPacket.rawPacket }}
+              </div>
+            </div>
+          </v-card>
+
+          <!-- Mock: hourly packet spark -->
+          <v-card variant="outlined">
+            <div class="d-flex align-center card-head">
+              <span class="card-title">Activity — last 24h</span>
+              <v-spacer />
+              <span v-if="stats" class="text-caption text-medium-emphasis">
+                {{ stats.packetsToday.toLocaleString() }} today
+              </span>
+            </div>
+            <div class="px-4 pb-3 pt-3">
+              <div class="spark" aria-hidden="true">
+                <i
+                  v-for="(bar, i) in sparkBars"
+                  :key="i"
+                  :style="{ height: `${bar.pct}%` }"
+                  :title="`${bar.count} packets`"
+                />
+              </div>
+              <div class="spark-axis"><span>−24h</span><span>−12h</span><span>now</span></div>
+            </div>
+          </v-card>
         </div>
-      </v-card>
+
+        <div class="info-col">
+          <!-- Mock: stat tiles -->
+          <v-card variant="outlined" class="pa-3">
+            <div class="stat-grid">
+              <div v-for="tile in statTiles" :key="tile.label" class="stat-tile">
+                <div class="stat-value">{{ tile.value }}</div>
+                <div class="stat-label">{{ tile.label }}</div>
+              </div>
+            </div>
+          </v-card>
+
+          <!-- Mock: details kv -->
+          <v-card variant="outlined">
+            <div class="d-flex align-center card-head">
+              <span class="card-title">Details</span>
+            </div>
+            <dl class="details-kv px-4 pb-3 pt-1">
+              <dt>Symbol</dt>
+              <dd>
+                <span class="details-symbol" :style="symbolStyle" />
+                <span class="ml-1">{{
+                  STATION_TYPE_LABELS[station?.stationType ?? StationType.Unknown]
+                }}</span>
+              </dd>
+              <template v-if="station?.gridSquare">
+                <dt>Grid</dt>
+                <dd class="mono">{{ station.gridSquare }}</dd>
+              </template>
+              <template v-if="heardViaLabel">
+                <dt>Heard via</dt>
+                <dd>{{ heardViaLabel }}</dd>
+              </template>
+              <template v-if="courseLabel">
+                <dt>Last course</dt>
+                <dd class="mono">{{ courseLabel }}</dd>
+              </template>
+              <template v-if="station?.lastAltitude != null">
+                <dt>Altitude</dt>
+                <dd class="mono">{{ Math.round(station.lastAltitude).toLocaleString() }} ft</dd>
+              </template>
+              <template v-if="station?.lastFrequencyMhz">
+                <dt>Frequency</dt>
+                <dd class="mono">
+                  {{ station.lastFrequencyMhz }}{{ station.lastMode ? ` ${station.lastMode}` : '' }}
+                </dd>
+              </template>
+              <template v-if="station?.status">
+                <dt>Status</dt>
+                <dd>{{ station.status }}</dd>
+              </template>
+              <dt>QRZ</dt>
+              <dd>
+                <a :href="qrzUrl" target="_blank" rel="noopener" class="qrz-link">look up ↗</a>
+              </dd>
+            </dl>
+          </v-card>
+        </div>
+      </div>
+
       <StationDetailPanel
+        v-if="pageTab !== 'info'"
         v-model:tab="pageTab"
         :callsign="callsign"
         :refresh-key="refreshKey"
@@ -392,6 +609,123 @@ onUnmounted(() => {
 .station-page-body :deep(.detail-panel-content) {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 12px;
+}
+
+/* ── Info tab: mock two-column grid ── */
+.info-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 800px) {
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.info-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.card-head {
+  padding: 12px 16px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 72px;
+}
+
+.spark i {
+  flex: 1;
+  min-width: 0;
+  border-radius: 2px 2px 0 0;
+  background: rgba(var(--v-theme-primary), 0.55);
+}
+
+.spark-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  margin-top: 3px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.stat-tile {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+
+.stat-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 11.5px;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+.details-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  align-items: center;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.details-kv dt {
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  white-space: nowrap;
+}
+
+.details-kv dd {
+  margin: 0;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.details-kv .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.details-symbol {
+  display: inline-block;
+  vertical-align: middle;
+  image-rendering: pixelated;
+}
+
+.qrz-link {
+  color: rgb(var(--v-theme-primary));
+  text-decoration: none;
+}
+
+.qrz-link:hover {
+  text-decoration: underline;
 }
 
 /* ── Resolved-path hop chain ── */

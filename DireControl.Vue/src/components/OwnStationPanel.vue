@@ -144,7 +144,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
         <span class="own-label">Last beacon</span>
         <span class="own-value" :class="{ 'text-warning': awaitingConfirmation(radio) }">
           {{ lastBeaconLabel(radio) }}
-          <template v-if="awaitingConfirmation(radio)"> · awaiting confirmation</template>
+          <template v-if="awaitingConfirmation(radio)"> · unconfirmed</template>
         </span>
       </div>
       <div v-if="firstConfirmation(radio.id)" class="own-row">

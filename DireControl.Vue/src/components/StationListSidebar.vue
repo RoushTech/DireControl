@@ -49,38 +49,32 @@ const stationTypeLabel: Record<StationType, string> = {
   [StationType.Fixed]: 'Fixed',
   [StationType.Mobile]: 'Mobile',
   [StationType.Weather]: 'Weather',
-  [StationType.Digipeater]: 'Digi',
+  [StationType.Digipeater]: 'Digipeater',
   [StationType.IGate]: 'IGate',
-  [StationType.Gateway]: 'GW',
+  [StationType.Gateway]: 'Gateway',
   [StationType.Unknown]: 'Unknown',
 }
 
-const stationTypeColor: Record<StationType, string> = {
-  [StationType.Fixed]: 'blue',
-  [StationType.Mobile]: 'green',
-  [StationType.Weather]: 'teal',
-  [StationType.Digipeater]: 'orange',
-  [StationType.IGate]: 'purple',
-  [StationType.Gateway]: 'deep-purple',
-  [StationType.Unknown]: 'grey',
-}
-
 const heardViaLabel: Partial<Record<HeardVia, string>> = {
-  [HeardVia.Direct]: 'Direct',
-  [HeardVia.Digi]: 'Digi',
-  [HeardVia.DirectAndDigi]: 'D+D',
-  [HeardVia.IgateRf]: 'iGate',
-  [HeardVia.IgateRfDigi]: 'iGate+D',
-  [HeardVia.Internet]: 'Internet',
+  [HeardVia.Direct]: 'direct',
+  [HeardVia.Digi]: 'via digi',
+  [HeardVia.DirectAndDigi]: 'direct + digi',
+  [HeardVia.IgateRf]: 'via iGate',
+  [HeardVia.IgateRfDigi]: 'via iGate + digi',
+  [HeardVia.Internet]: 'APRS-IS',
 }
 
-const heardViaColor: Partial<Record<HeardVia, string>> = {
-  [HeardVia.Direct]: 'green',
-  [HeardVia.Digi]: 'amber-darken-2',
-  [HeardVia.DirectAndDigi]: 'teal',
-  [HeardVia.IgateRf]: 'blue',
-  [HeardVia.IgateRfDigi]: 'purple',
-  [HeardVia.Internet]: 'grey',
+// Mock rows: one muted subtitle line ("Mobile · via digi"), not a chip salad.
+function rowSubtitle(s: StationDto): string {
+  const parts = [stationTypeLabel[s.stationType] ?? 'Unknown']
+  const via = heardViaLabel[s.heardVia]
+  if (via) parts.push(via)
+  return parts.join(' · ')
+}
+
+/** Bare short age for the right edge: "2m", not "2m ago". */
+function shortAgo(iso: string): string {
+  return timeAgo(iso, now.value).replace(/ ago$/, '')
 }
 
 function symbolStyle(s: StationDto) {
@@ -251,39 +245,27 @@ const virtualItems = computed<VirtualItem[]>(() => {
             class="station-icon flex-shrink-0"
             :class="{ 'stale-icon': item.stale }"
           />
+          <!-- Mock row: symbol · callsign / muted subtitle ····· age -->
           <div class="station-info">
-            <div class="d-flex align-center ga-1">
-              <span
-                class="text-body-2 font-weight-medium"
-                :class="{ 'text-medium-emphasis': item.stale }"
-                >{{ item.station.callsign }}</span
-              >
-              <v-chip
-                :color="item.stale ? 'grey' : stationTypeColor[item.station.stationType]"
-                size="x-small"
-                label
-              >
-                {{ stationTypeLabel[item.station.stationType] }}
-              </v-chip>
-              <v-chip
-                v-if="!item.stale && heardViaLabel[item.station.heardVia]"
-                :color="heardViaColor[item.station.heardVia]"
-                size="x-small"
-                label
-              >
-                {{ heardViaLabel[item.station.heardVia] }}
-              </v-chip>
-            </div>
+            <span class="station-row-callsign" :class="{ 'text-medium-emphasis': item.stale }">{{
+              item.station.callsign
+            }}</span>
             <div
-              class="d-flex align-center ga-2 text-caption"
+              class="text-caption station-row-sub"
               :class="item.stale ? 'text-disabled' : 'text-medium-emphasis'"
             >
-              <span>{{ timeAgo(item.station.lastSeen, now) }}</span>
-              <span v-if="!item.stale && packetCounts[item.station.callsign]">
-                <v-icon size="10">mdi-radio-tower</v-icon> {{ packetCounts[item.station.callsign] }}
-              </span>
+              {{ rowSubtitle(item.station) }}
+              <template v-if="!item.stale && packetCounts[item.station.callsign]">
+                · {{ packetCounts[item.station.callsign] }} pkts
+              </template>
             </div>
           </div>
+          <span
+            class="station-row-ago text-caption"
+            :class="item.stale ? 'text-disabled' : 'text-medium-emphasis'"
+          >
+            {{ shortAgo(item.station.lastSeen) }}
+          </span>
         </div>
       </template>
     </v-virtual-scroll>
@@ -346,6 +328,33 @@ const virtualItems = computed<VirtualItem[]>(() => {
   opacity: 0.6;
 }
 
+.station-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.station-row-callsign {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: rgb(var(--v-theme-primary));
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.station-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.station-row-ago {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .stale-icon {
   filter: grayscale(80%);
 }
@@ -356,10 +365,5 @@ const virtualItems = computed<VirtualItem[]>(() => {
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
   display: flex;
   align-items: center;
-}
-
-.station-info {
-  flex: 1;
-  min-width: 0;
 }
 </style>

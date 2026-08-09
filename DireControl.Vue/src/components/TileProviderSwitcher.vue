@@ -68,7 +68,7 @@ function onSelect(v: unknown) {
       density="compact"
       variant="solo"
       hide-details
-      bg-color="rgba(30, 30, 30, 0.85)"
+      bg-color="surface"
       style="min-width: 190px; max-width: 220px"
       @update:model-value="onSelect"
     >

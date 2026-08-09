@@ -1285,6 +1285,7 @@ async function confirmDelete() {
                     density="compact"
                     variant="outlined"
                     hide-details
+                    class="flex-grow-0"
                     @change="syncHomeMarker"
                   />
                   <v-text-field
@@ -1293,6 +1294,7 @@ async function confirmDelete() {
                     density="compact"
                     variant="outlined"
                     hide-details
+                    class="flex-grow-0"
                     @change="syncHomeMarker"
                   />
                 </div>
@@ -2549,29 +2551,33 @@ async function confirmDelete() {
                       </div>
                       <div class="d-flex align-center ga-2 flex-wrap">
                         <span class="text-caption text-medium-emphasis">Test tones</span>
-                        <v-btn-group density="compact" variant="outlined" divided>
-                          <v-btn
-                            size="x-small"
-                            :loading="toneSending"
-                            @click="doTestTone(TestToneKinds.Mark)"
-                          >
-                            Mark
-                          </v-btn>
-                          <v-btn
-                            size="x-small"
-                            :disabled="toneSending"
-                            @click="doTestTone(TestToneKinds.Space)"
-                          >
-                            Space
-                          </v-btn>
-                          <v-btn
-                            size="x-small"
-                            :disabled="toneSending"
-                            @click="doTestTone(TestToneKinds.Alternating)"
-                          >
-                            Alt
-                          </v-btn>
-                        </v-btn-group>
+                        <v-btn
+                          size="small"
+                          variant="outlined"
+                          class="px-4"
+                          :loading="toneSending"
+                          @click="doTestTone(TestToneKinds.Mark)"
+                        >
+                          Mark
+                        </v-btn>
+                        <v-btn
+                          size="small"
+                          variant="outlined"
+                          class="px-4"
+                          :disabled="toneSending"
+                          @click="doTestTone(TestToneKinds.Space)"
+                        >
+                          Space
+                        </v-btn>
+                        <v-btn
+                          size="small"
+                          variant="outlined"
+                          class="px-4"
+                          :disabled="toneSending"
+                          @click="doTestTone(TestToneKinds.Alternating)"
+                        >
+                          Alt
+                        </v-btn>
                         <span class="text-caption text-medium-emphasis">
                           keys TX ~2s · gain applies live while you drag
                         </span>
@@ -3046,7 +3052,9 @@ async function confirmDelete() {
 .radio-form-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0 12px;
+  /* Real row gap — persistent hints hang below the input and collide with the
+     next row's label without it. */
+  gap: 10px 12px;
   align-items: start;
 }
 

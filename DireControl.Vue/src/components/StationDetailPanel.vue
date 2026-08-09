@@ -971,7 +971,7 @@ watch(tab, (newTab) => {
           <div
             class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
           >
-            OPERATOR LOOKUP
+            Operator lookup
           </div>
 
           <template v-if="lookupData">
@@ -1179,7 +1179,7 @@ watch(tab, (newTab) => {
               <div
                 class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
               >
-                AUDIO LEVEL OVER TIME
+                Audio level over time
               </div>
               <div class="signal-chart-wrap px-3 pb-1">
                 <Line :data="audioChartData" :options="audioChartOptions" />
@@ -1190,7 +1190,7 @@ watch(tab, (newTab) => {
             <div
               class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
             >
-              HEARD VIA
+              Heard via
             </div>
             <div class="px-3 pb-2">
               <div v-for="bar in heardViaBars" :key="bar.label" class="heard-bar-row">
@@ -1227,7 +1227,7 @@ watch(tab, (newTab) => {
               <div
                 class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
               >
-                DECODE QUALITY
+                Decode quality
               </div>
               <div class="signal-chart-wrap px-3 pb-3">
                 <Line :data="signalChartData" :options="signalChartOptions" />
@@ -1237,7 +1237,7 @@ watch(tab, (newTab) => {
               <div
                 class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
               >
-                FREQUENCY OFFSET
+                Frequency offset
               </div>
               <div class="signal-chart-wrap px-3 pb-3">
                 <Line :data="offsetChartData" :options="signalChartOptions" />
@@ -1262,7 +1262,7 @@ watch(tab, (newTab) => {
             <div
               class="wx-section-label px-3 pt-2 pb-1 text-caption text-medium-emphasis font-weight-medium"
             >
-              CURRENT CONDITIONS
+              Current conditions
             </div>
 
             <div class="info-section">
@@ -1334,7 +1334,7 @@ watch(tab, (newTab) => {
             <div
               class="wx-section-label px-3 pt-3 pb-1 text-caption text-medium-emphasis font-weight-medium"
             >
-              HISTORY
+              History
             </div>
             <div class="d-flex justify-center px-3 pb-2">
               <v-btn-toggle
@@ -1544,9 +1544,10 @@ watch(tab, (newTab) => {
   background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
+/* Sentence-case section labels — the mock reserves all-caps for the map's
+   layer groups only. */
 .wx-section-label {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 600;
 }
 
 .wx-chart-wrap {

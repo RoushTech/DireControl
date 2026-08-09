@@ -371,311 +371,354 @@ function replyTo(message: InboxMessageDto) {
 
 <template>
   <div class="messages-view">
-    <!-- Header row -->
-    <v-row no-gutters align="center" class="mb-3">
-      <v-col>
-        <div class="d-flex align-center gap-2">
-          <span class="text-h6">Messages</span>
-          <v-chip v-if="store.unreadCount > 0" color="error" size="small" class="ml-2">
+    <!-- Header (mock: 17px/650 title; Compose lives in the card's tab row) -->
+    <div class="d-flex align-center ga-2 mb-3 flex-shrink-0">
+      <span class="page-title">Messages</span>
+      <v-chip
+        v-if="connectionStatus !== 'connected'"
+        :color="connectionStatus === 'connecting' ? 'warning' : 'error'"
+        size="x-small"
+        variant="tonal"
+      >
+        {{ connectionStatus }}
+      </v-chip>
+    </div>
+
+    <!-- One card: tab row (with counts + Compose) over the table, mock-style -->
+    <v-card variant="outlined" class="messages-card">
+      <div class="msg-tabs" role="tablist">
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'inbox' }"
+          role="tab"
+          :aria-selected="activeTab === 'inbox'"
+          @click="activeTab = 'inbox'"
+        >
+          Inbox
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ inboundMessages.length.toLocaleString() }}
+          </v-chip>
+          <v-chip v-if="store.unreadCount > 0" size="x-small" color="error" class="ml-1">
             {{ store.unreadCount }} unread
           </v-chip>
-          <v-chip
-            v-if="connectionStatus !== 'connected'"
-            :color="connectionStatus === 'connecting' ? 'warning' : 'error'"
-            size="x-small"
-            class="ml-2"
-          >
-            {{ connectionStatus }}
+        </button>
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'outbox' }"
+          role="tab"
+          :aria-selected="activeTab === 'outbox'"
+          @click="activeTab = 'outbox'"
+        >
+          Outbox
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ outboxMessages.length.toLocaleString() }}
           </v-chip>
-        </div>
-      </v-col>
-      <v-col cols="auto">
-        <v-btn color="primary" prepend-icon="mdi-pencil" size="small" @click="openCompose()">
+        </button>
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'all' }"
+          role="tab"
+          :aria-selected="activeTab === 'all'"
+          @click="activeTab = 'all'"
+        >
+          All
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ allTotalCount.toLocaleString() }}
+          </v-chip>
+        </button>
+        <v-spacer />
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-pencil"
+          size="small"
+          class="align-self-center mr-2"
+          @click="openCompose()"
+        >
           Compose
           <v-tooltip activator="parent" location="bottom">Press M</v-tooltip>
         </v-btn>
-      </v-col>
-    </v-row>
+      </div>
+      <v-divider />
 
-    <!-- Tabs -->
-    <v-tabs v-model="activeTab" density="compact" class="mb-2">
-      <v-tab value="inbox">
-        Inbox
-        <v-badge
-          v-if="store.unreadCount > 0"
-          :content="store.unreadCount"
-          color="error"
-          inline
-          class="ml-2"
-        />
-      </v-tab>
-      <v-tab value="outbox">Outbox</v-tab>
-      <v-tab value="all">All Messages</v-tab>
-    </v-tabs>
-
-    <v-window v-model="activeTab" class="flex-grow-1 overflow-auto">
-      <!-- ── Inbox Tab ───────────────────────────────────────────────────────── -->
-      <v-window-item value="inbox">
-        <v-table density="compact" hover>
-          <thead>
-            <tr>
-              <th>
-                <button class="sort-th" @click="toggleInboxSort('from')">
-                  From <v-icon size="12">{{ inboxSortIcon('from') }}</v-icon>
-                </button>
-              </th>
-              <th>Message</th>
-              <th>
-                <button class="sort-th" @click="toggleInboxSort('receivedAt')">
-                  Time <v-icon size="12">{{ inboxSortIcon('receivedAt') }}</v-icon>
-                </button>
-              </th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="msg in inboundMessages"
-              :key="msg.id"
-              :class="{ 'font-weight-bold': !msg.isRead }"
-              style="cursor: pointer"
-              @click="onRowClick(msg)"
-            >
-              <td>
-                <a
-                  href="#"
-                  class="text-decoration-none"
-                  @click.stop.prevent="goToStation(msg.fromCallsign)"
-                  >{{ msg.fromCallsign }}</a
-                >
-              </td>
-              <td
-                class="msg-body"
-                :class="{ 'msg-body--open': isExpanded(msg.id) }"
-                :title="isExpanded(msg.id) ? undefined : msg.body"
-              >
-                {{ msg.body }}
-              </td>
-              <td class="text-no-wrap">
-                <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt, now) }}</span>
-              </td>
-              <td>
-                <v-chip v-if="!msg.isRead" color="primary" size="x-small" class="mr-1">
-                  Unread
-                </v-chip>
-              </td>
-              <td>
-                <v-btn icon="mdi-reply" size="x-small" variant="text" @click.stop="replyTo(msg)" />
-              </td>
-            </tr>
-            <tr v-if="inboundMessages.length === 0">
-              <td colspan="5" class="text-center py-8">
-                <v-icon size="36" class="text-medium-emphasis mb-2">mdi-email-outline</v-icon>
-                <div class="text-body-2 font-weight-medium mb-1">No messages yet</div>
-                <div class="text-caption text-medium-emphasis mb-3">
-                  Anything addressed to {{ ourCallsign || 'your station' }} lands here.
-                </div>
-                <v-btn
-                  size="small"
-                  color="primary"
-                  variant="tonal"
-                  prepend-icon="mdi-email-edit-outline"
-                  @click="openCompose()"
-                >
-                  Compose your first message
-                </v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </v-window-item>
-
-      <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
-      <v-window-item value="outbox">
-        <v-table density="compact">
-          <thead>
-            <tr>
-              <th>To</th>
-              <th>Message</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="msg in outboxMessages" :key="msg.id">
-              <td class="text-no-wrap">{{ msg.toCallsign }}</td>
-              <td
-                class="msg-body msg-body--narrow"
-                :class="{ 'msg-body--open': isExpanded(`out-${msg.id}`) }"
-                :title="isExpanded(`out-${msg.id}`) ? undefined : msg.body"
-                style="cursor: pointer"
-                @click="toggleExpand(`out-${msg.id}`)"
-              >
-                {{ msg.body }}
-              </td>
-              <td>
-                <!-- Stacked: chip on top, detail lines under it — no more one-line cram -->
-                <div class="d-flex flex-column align-start ga-1 py-1">
-                  <v-chip :color="retryBadge(msg).color" size="x-small">
-                    {{ retryBadge(msg).text }}
-                  </v-chip>
-                  <span
-                    v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
-                    class="text-caption text-medium-emphasis"
-                  >
-                    next retry in {{ secondsUntilRetry(msg) }}s
-                  </span>
-                  <span
-                    v-if="msg.lastSentAt"
-                    class="text-caption text-medium-emphasis"
-                    :title="formatUtc(msg.lastSentAt)"
-                  >
-                    sent {{ timeAgo(msg.lastSentAt, now) }}
-                  </span>
-                </div>
-              </td>
-              <td class="text-no-wrap">
-                <v-btn
-                  v-if="msg.retryState !== RetryState.Acknowledged"
-                  size="x-small"
-                  variant="tonal"
-                  color="primary"
-                  class="mr-1"
-                  :loading="actionLoading[msg.id] === 'retry'"
-                  :disabled="!!actionLoading[msg.id]"
-                  @click="doRetryNow(msg)"
-                >
-                  {{ actionLoading[msg.id] === 'retry' ? 'Sending…' : 'Retry Now' }}
-                </v-btn>
-                <v-btn
-                  v-if="msg.retryState !== RetryState.Acknowledged"
-                  size="x-small"
-                  variant="tonal"
-                  class="mr-1"
-                  :loading="actionLoading[msg.id] === 'reset'"
-                  :disabled="!!actionLoading[msg.id]"
-                  @click="openResetDialog(msg)"
-                >
-                  Reset
-                </v-btn>
-                <v-btn
-                  v-if="msg.retryState === RetryState.Retrying"
-                  size="x-small"
-                  variant="tonal"
-                  color="error"
-                  :loading="actionLoading[msg.id] === 'cancel'"
-                  :disabled="!!actionLoading[msg.id]"
-                  @click="doCancel(msg)"
-                >
-                  Cancel
-                </v-btn>
-              </td>
-            </tr>
-            <tr v-if="outboxMessages.length === 0">
-              <td colspan="4" class="text-center text-medium-emphasis py-6">
-                No outbound messages.
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </v-window-item>
-
-      <!-- ── All Messages Tab ───────────────────────────────────────────────── -->
-      <v-window-item value="all">
-        <!-- Filters -->
-        <v-row dense class="mb-2 mt-1">
-          <v-col cols="4">
-            <v-text-field
-              v-model="filterSender"
-              label="Filter by sender"
-              density="compact"
-              variant="outlined"
-              clearable
-              hide-details
-            />
-          </v-col>
-          <v-col cols="4">
-            <v-text-field
-              v-model="filterAddressee"
-              label="Filter by addressee"
-              density="compact"
-              variant="outlined"
-              clearable
-              hide-details
-            />
-          </v-col>
-          <v-col cols="4">
-            <v-text-field
-              v-model="filterText"
-              label="Filter by text"
-              density="compact"
-              variant="outlined"
-              clearable
-              hide-details
-            />
-          </v-col>
-        </v-row>
-
-        <v-table density="compact" hover>
-          <thead>
-            <tr>
-              <th>From</th>
-              <th>To</th>
-              <th>Message</th>
-              <th>Time</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="allLoading">
-              <td colspan="4" class="text-center text-medium-emphasis py-6">Loading…</td>
-            </tr>
-            <template v-else>
+      <v-window v-model="activeTab">
+        <!-- ── Inbox Tab ───────────────────────────────────────────────────────── -->
+        <v-window-item value="inbox">
+          <v-table density="compact" hover>
+            <thead>
+              <tr>
+                <th>
+                  <button class="sort-th" @click="toggleInboxSort('from')">
+                    From <v-icon size="12">{{ inboxSortIcon('from') }}</v-icon>
+                  </button>
+                </th>
+                <th>Message</th>
+                <th>
+                  <button class="sort-th" @click="toggleInboxSort('receivedAt')">
+                    Received <v-icon size="12">{{ inboxSortIcon('receivedAt') }}</v-icon>
+                  </button>
+                </th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
               <tr
-                v-for="msg in allItems"
-                :key="msg.packetId"
-                :class="{
-                  'msg-row-own':
-                    msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
-                }"
+                v-for="msg in inboundMessages"
+                :key="msg.id"
+                :class="{ 'msg-row-unread': !msg.isRead }"
+                style="cursor: pointer"
+                @click="onRowClick(msg)"
               >
-                <td>{{ msg.fromCallsign }}</td>
-                <td>{{ msg.toCallsign || '—' }}</td>
+                <td>
+                  <a
+                    href="#"
+                    class="callsign-link text-decoration-none"
+                    @click.stop.prevent="goToStation(msg.fromCallsign)"
+                    >{{ msg.fromCallsign }}</a
+                  >
+                </td>
                 <td
                   class="msg-body"
-                  :class="{ 'msg-body--open': isExpanded(`all-${msg.packetId}`) }"
-                  :title="isExpanded(`all-${msg.packetId}`) ? undefined : msg.body"
-                  style="cursor: pointer"
-                  @click="toggleExpand(`all-${msg.packetId}`)"
+                  :class="{ 'msg-body--open': isExpanded(msg.id) }"
+                  :title="isExpanded(msg.id) ? undefined : msg.body"
                 >
                   {{ msg.body }}
                 </td>
-                <td class="text-no-wrap">
+                <td class="text-no-wrap mono-time">
                   <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt, now) }}</span>
                 </td>
-              </tr>
-              <tr v-if="allItems.length === 0">
-                <td colspan="4" class="text-center text-medium-emphasis py-6">
-                  No messages match the filter.
+                <td>
+                  <v-chip v-if="!msg.isRead" color="primary" size="x-small" variant="tonal">
+                    unread
+                  </v-chip>
+                  <v-chip v-else size="x-small" variant="tonal" class="msg-chip-read">read</v-chip>
+                </td>
+                <td>
+                  <v-btn
+                    icon="mdi-reply"
+                    size="x-small"
+                    variant="text"
+                    @click.stop="replyTo(msg)"
+                  />
                 </td>
               </tr>
-            </template>
-          </tbody>
-        </v-table>
+              <tr v-if="inboundMessages.length === 0">
+                <td colspan="5" class="text-center py-8">
+                  <v-icon size="36" class="text-medium-emphasis mb-2">mdi-email-outline</v-icon>
+                  <div class="text-body-2 font-weight-medium mb-1">No messages yet</div>
+                  <div class="text-caption text-medium-emphasis mb-3">
+                    Anything addressed to {{ ourCallsign || 'your station' }} lands here.
+                  </div>
+                  <v-btn
+                    size="small"
+                    color="primary"
+                    variant="tonal"
+                    prepend-icon="mdi-email-edit-outline"
+                    @click="openCompose()"
+                  >
+                    Compose your first message
+                  </v-btn>
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-window-item>
 
-        <div class="d-flex align-center justify-space-between mt-2">
-          <span class="text-caption text-medium-emphasis"> {{ allTotalCount }} total </span>
-          <v-pagination
-            v-if="allTotalPages > 1"
-            v-model="allPage"
-            :length="allTotalPages"
-            :total-visible="7"
-            density="compact"
-            @update:model-value="fetchAllMessages"
-          />
-        </div>
-      </v-window-item>
-    </v-window>
+        <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
+        <v-window-item value="outbox">
+          <v-table density="compact">
+            <thead>
+              <tr>
+                <th>To</th>
+                <th>Message</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="msg in outboxMessages" :key="msg.id">
+                <td class="text-no-wrap">
+                  <a
+                    href="#"
+                    class="callsign-link text-decoration-none"
+                    @click.stop.prevent="goToStation(msg.toCallsign)"
+                    >{{ msg.toCallsign }}</a
+                  >
+                </td>
+                <td
+                  class="msg-body msg-body--narrow"
+                  :class="{ 'msg-body--open': isExpanded(`out-${msg.id}`) }"
+                  :title="isExpanded(`out-${msg.id}`) ? undefined : msg.body"
+                  style="cursor: pointer"
+                  @click="toggleExpand(`out-${msg.id}`)"
+                >
+                  {{ msg.body }}
+                </td>
+                <td>
+                  <!-- Stacked: chip on top, detail lines under it — no more one-line cram -->
+                  <div class="d-flex flex-column align-start ga-1 py-1">
+                    <v-chip :color="retryBadge(msg).color" size="x-small">
+                      {{ retryBadge(msg).text }}
+                    </v-chip>
+                    <span
+                      v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
+                      class="text-caption text-medium-emphasis"
+                    >
+                      next retry in {{ secondsUntilRetry(msg) }}s
+                    </span>
+                    <span
+                      v-if="msg.lastSentAt"
+                      class="text-caption text-medium-emphasis"
+                      :title="formatUtc(msg.lastSentAt)"
+                    >
+                      sent {{ timeAgo(msg.lastSentAt, now) }}
+                    </span>
+                  </div>
+                </td>
+                <td class="text-no-wrap">
+                  <v-btn
+                    v-if="msg.retryState !== RetryState.Acknowledged"
+                    size="x-small"
+                    variant="tonal"
+                    color="primary"
+                    class="mr-1"
+                    :loading="actionLoading[msg.id] === 'retry'"
+                    :disabled="!!actionLoading[msg.id]"
+                    @click="doRetryNow(msg)"
+                  >
+                    {{ actionLoading[msg.id] === 'retry' ? 'Sending…' : 'Retry Now' }}
+                  </v-btn>
+                  <v-btn
+                    v-if="msg.retryState !== RetryState.Acknowledged"
+                    size="x-small"
+                    variant="tonal"
+                    class="mr-1"
+                    :loading="actionLoading[msg.id] === 'reset'"
+                    :disabled="!!actionLoading[msg.id]"
+                    @click="openResetDialog(msg)"
+                  >
+                    Reset
+                  </v-btn>
+                  <v-btn
+                    v-if="msg.retryState === RetryState.Retrying"
+                    size="x-small"
+                    variant="tonal"
+                    color="error"
+                    :loading="actionLoading[msg.id] === 'cancel'"
+                    :disabled="!!actionLoading[msg.id]"
+                    @click="doCancel(msg)"
+                  >
+                    Cancel
+                  </v-btn>
+                </td>
+              </tr>
+              <tr v-if="outboxMessages.length === 0">
+                <td colspan="4" class="text-center text-medium-emphasis py-6">
+                  No outbound messages.
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-window-item>
+
+        <!-- ── All Messages Tab ───────────────────────────────────────────────── -->
+        <v-window-item value="all">
+          <!-- Filters -->
+          <v-row dense class="px-3 pt-3">
+            <v-col cols="4">
+              <v-text-field
+                v-model="filterSender"
+                label="Filter by sender"
+                density="compact"
+                variant="outlined"
+                clearable
+                hide-details
+              />
+            </v-col>
+            <v-col cols="4">
+              <v-text-field
+                v-model="filterAddressee"
+                label="Filter by addressee"
+                density="compact"
+                variant="outlined"
+                clearable
+                hide-details
+              />
+            </v-col>
+            <v-col cols="4">
+              <v-text-field
+                v-model="filterText"
+                label="Filter by text"
+                density="compact"
+                variant="outlined"
+                clearable
+                hide-details
+              />
+            </v-col>
+          </v-row>
+
+          <v-table density="compact" hover>
+            <thead>
+              <tr>
+                <th>From</th>
+                <th>To</th>
+                <th>Message</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="allLoading">
+                <td colspan="4" class="text-center text-medium-emphasis py-6">Loading…</td>
+              </tr>
+              <template v-else>
+                <tr
+                  v-for="msg in allItems"
+                  :key="msg.packetId"
+                  :class="{
+                    'msg-row-own':
+                      msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
+                  }"
+                >
+                  <td class="callsign-plain">{{ msg.fromCallsign }}</td>
+                  <td class="callsign-plain">{{ msg.toCallsign || '—' }}</td>
+                  <td
+                    class="msg-body"
+                    :class="{ 'msg-body--open': isExpanded(`all-${msg.packetId}`) }"
+                    :title="isExpanded(`all-${msg.packetId}`) ? undefined : msg.body"
+                    style="cursor: pointer"
+                    @click="toggleExpand(`all-${msg.packetId}`)"
+                  >
+                    {{ msg.body }}
+                  </td>
+                  <td class="text-no-wrap mono-time">
+                    <span :title="formatUtc(msg.receivedAt)">{{
+                      timeAgo(msg.receivedAt, now)
+                    }}</span>
+                  </td>
+                </tr>
+                <tr v-if="allItems.length === 0">
+                  <td colspan="4" class="text-center text-medium-emphasis py-6">
+                    No messages match the filter.
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </v-table>
+
+          <div class="d-flex align-center justify-space-between px-3 py-2">
+            <span class="text-caption text-medium-emphasis"> {{ allTotalCount }} total </span>
+            <v-pagination
+              v-if="allTotalPages > 1"
+              v-model="allPage"
+              :length="allTotalPages"
+              :total-visible="7"
+              density="compact"
+              @update:model-value="fetchAllMessages"
+            />
+          </div>
+        </v-window-item>
+      </v-window>
+    </v-card>
 
     <!-- ── Compose Dialog ─────────────────────────────────────────────────── -->
     <v-dialog v-model="composeOpen" max-width="520" @keydown.esc="composeOpen = false">
@@ -828,9 +871,73 @@ function replyTo(message: InboxMessageDto) {
 </template>
 
 <style scoped>
+.page-title {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.messages-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Mock tab row: underline text tabs with count chips, Compose at the right. */
+.msg-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 10px;
+  overflow-x: auto;
+}
+
+.msg-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.msg-tab:hover {
+  color: rgba(var(--v-theme-on-surface), 0.9);
+}
+
+.msg-tab--active {
+  color: rgb(var(--v-theme-primary));
+  border-bottom-color: rgb(var(--v-theme-primary));
+}
+
 /* Theme-safe "addressed to us" highlight (works in light and dark). */
 .msg-row-own td {
   background: rgba(var(--v-theme-primary), 0.08);
+}
+
+/* Unread rows: bold + theme-token tint (mock's highlight, dark-mode safe). */
+.msg-row-unread td {
+  background: rgba(var(--v-theme-primary), 0.08);
+  font-weight: 600;
+}
+
+.msg-chip-read {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.mono-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.callsign-plain {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
 }
 
 .sort-th {

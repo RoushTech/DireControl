@@ -6,7 +6,7 @@ import { getWatchList, toggleWatch } from '@/api/stationsApi'
 import { getRadios, getBeaconHistory } from '@/api/radiosApi'
 import type { DigipeaterAnalysisEntry, StationDto } from '@/types/station'
 import type { RadioDto } from '@/types/radio'
-import { timeAgo, formatUtc } from '@/utils/time'
+import { timeAgo, formatUtc, formatUtcTime } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
 import { useToastStore } from '@/stores/toastStore'
@@ -53,9 +53,10 @@ function confirmedPercent(radio: RadioDto): number {
   return Math.min(100, (radio.confirmationCount / radio.beaconCount) * 100)
 }
 
+// Mock caption style: the data timestamp, not a ticking relative time.
 const asOfLabel = computed(() => {
   if (loadedAt.value === null) return ''
-  return `as of ${timeAgo(new Date(loadedAt.value).toISOString(), now.value)}`
+  return `as of ${formatUtcTime(new Date(loadedAt.value).toISOString())}`
 })
 
 async function load() {
@@ -123,7 +124,7 @@ onMounted(load)
 <template>
   <div class="network-view pa-4">
     <div class="d-flex align-center ga-3 mb-4 flex-wrap">
-      <span class="text-h5 font-weight-bold">Network</span>
+      <span class="page-title">Network</span>
       <span v-if="asOfLabel" class="text-caption text-medium-emphasis">{{ asOfLabel }}</span>
       <v-spacer />
       <v-btn
@@ -147,7 +148,7 @@ onMounted(load)
     <div class="network-grid">
       <!-- Digipeater leaderboard -->
       <v-card variant="outlined">
-        <v-card-title class="text-subtitle-1 d-flex align-center ga-2">
+        <v-card-title class="card-title d-flex align-center ga-2">
           Digipeaters near you
           <v-chip size="x-small" variant="tonal">{{ digipeaters.length }}</v-chip>
         </v-card-title>
@@ -198,7 +199,7 @@ onMounted(load)
         <!-- Beacon reach per beaconing radio -->
         <v-card v-for="radio in beaconRadios" :key="radio.id" variant="outlined" class="pa-4">
           <div class="d-flex align-center ga-2 mb-3">
-            <span class="text-subtitle-1 font-weight-medium">Beacon reach</span>
+            <span class="card-title">Beacon reach</span>
             <v-chip size="x-small" variant="tonal">{{ radio.name }}</v-chip>
           </div>
           <div class="d-flex align-center ga-4 flex-wrap">
@@ -248,7 +249,7 @@ onMounted(load)
         </v-card>
 
         <v-card v-if="!loading && beaconRadios.length === 0" variant="outlined" class="pa-4">
-          <div class="text-subtitle-1 font-weight-medium mb-1">Beacon reach</div>
+          <div class="card-title mb-1">Beacon reach</div>
           <div class="text-caption text-medium-emphasis">
             No radio has beaconed yet — enable auto-beacon in Settings → Radios.
           </div>
@@ -256,7 +257,7 @@ onMounted(load)
 
         <!-- Watchlist -->
         <v-card variant="outlined">
-          <v-card-title class="text-subtitle-1 d-flex align-center ga-2">
+          <v-card-title class="card-title d-flex align-center ga-2">
             Watchlist
             <v-chip size="x-small" variant="tonal" color="primary">{{ watchlist.length }}</v-chip>
           </v-card-title>
@@ -327,8 +328,22 @@ onMounted(load)
   overflow-x: auto;
 }
 
+/* Mock type scale: page h2 17px/650, card h3 14px/650, mono numeric columns. */
+.page-title {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
 .tabular {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
 }
 
 .callsign-link {

@@ -1,10 +1,10 @@
 export enum StationType {
-  Fixed = 0,
-  Mobile = 1,
-  Weather = 2,
-  Digipeater = 3,
-  IGate = 4,
-  Unknown = 5,
+  Unknown = 0,
+  Fixed = 1,
+  Mobile = 2,
+  Weather = 3,
+  Digipeater = 4,
+  IGate = 5,
   Gateway = 6,
 }
 
