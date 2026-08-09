@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
@@ -155,21 +155,6 @@ const {
 const LAYER_PANEL_COLLAPSED_KEY = 'mapPrefs.layerPanelCollapsed'
 const layerPanelCollapsed = ref(localStorage.getItem(LAYER_PANEL_COLLAPSED_KEY) === 'true')
 watch(layerPanelCollapsed, (v) => localStorage.setItem(LAYER_PANEL_COLLAPSED_KEY, String(v)))
-
-const activeLayerCount = computed(
-  () =>
-    [
-      showTracks.value,
-      showGhostMarkers.value,
-      showStaleStations.value,
-      showOverlays.value,
-      showHeatmap.value,
-      showCoverage.value,
-      showRadar.value,
-      showWind.value,
-      showLightning.value,
-    ].filter(Boolean).length,
-)
 
 /** Back to defaults: tracks + estimated positions on, everything else off. */
 function resetLayers() {
@@ -2245,7 +2230,6 @@ defineExpose({ TILE_PROVIDERS })
         <button class="layer-panel-head" @click="layerPanelCollapsed = !layerPanelCollapsed">
           <v-icon size="18">mdi-layers</v-icon>
           <span class="font-weight-bold text-body-2">Layers</span>
-          <span class="layer-count">{{ activeLayerCount }}</span>
           <v-icon size="14" class="ml-auto">
             {{ layerPanelCollapsed ? 'mdi-chevron-down' : 'mdi-chevron-up' }}
           </v-icon>
@@ -2929,16 +2913,6 @@ defineExpose({ TILE_PROVIDERS })
   color: inherit;
   font: inherit;
   text-align: left;
-}
-
-.layer-count {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  border-radius: 9px;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 17px;
-  padding: 0 6px;
 }
 
 .layer-panel-body {

@@ -55,6 +55,15 @@ export const usePacketHubStore = defineStore('packetHub', () => {
     connection.on('packetReceived', () => {
       lastPacketAt.value = serverNow()
     })
+
+    // ModemStatusBroadcaster pushes these to every client at up to 10 Hz, and
+    // SignalR logs a console warning for each message that has no handler.
+    // Permanent no-ops keep pages that don't consume the streams quiet; real
+    // consumers register their own handlers alongside these.
+    const noop = () => {}
+    connection.on('modemLevel', noop)
+    connection.on('modemSpectrum', noop)
+    connection.on('modemStatusChanged', noop)
     return connection
   }
 

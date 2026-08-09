@@ -14,17 +14,24 @@ const beacons = ref<OwnBeaconHistoryItemDto[]>([])
 const loading = ref(false)
 const expanded = ref<number[]>([])
 
-watch(open, async (val) => {
-  if (val) {
-    loading.value = true
-    expanded.value = []
-    try {
-      beacons.value = await getBeaconHistory(props.radioId, 20)
-    } finally {
-      loading.value = false
+// immediate: the parent may mount this component with the dialog already open
+// (v-if + v-model set in the same tick), so waiting for a false→true change
+// would skip the first fetch.
+watch(
+  open,
+  async (val) => {
+    if (val) {
+      loading.value = true
+      expanded.value = []
+      try {
+        beacons.value = await getBeaconHistory(props.radioId, 20)
+      } finally {
+        loading.value = false
+      }
     }
-  }
-})
+  },
+  { immediate: true },
+)
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], {
