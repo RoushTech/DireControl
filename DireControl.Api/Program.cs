@@ -92,11 +92,21 @@ services
     .AddHostedService(sp => sp.GetRequiredService<SoundModemService>())
     .AddHostedService<ModemStatusBroadcaster>()
     .AddSingleton<IFrameTransmitter, FrameTransmitService>()
+    .AddSingleton<DireControl.Api.Services.Ax25.Ax25SessionManager>()
+    .AddSingleton<PacketServicesRestartTrigger>()
+    .AddSingleton<DireControl.Api.Services.Terminal.TerminalTranscriptRecorder>()
+    .AddSingleton<DireControl.Api.Services.Terminal.TerminalSessionService>()
+    .AddHostedService(sp => sp.GetRequiredService<DireControl.Api.Services.Terminal.TerminalSessionService>())
+    .AddSingleton<DireControl.Api.Services.Pms.IPmsMailStore, DireControl.Api.Services.Pms.PmsMailStore>()
+    .AddSingleton<DireControl.Api.Services.Terminal.IPmsSessionServer, DireControl.Api.Services.Pms.PmsSessionHandler>()
+    .AddHostedService<DireControl.Api.Services.Pms.PmsHostService>()
     .AddSingleton<DigipeaterService>()
     .AddSingleton<AprsIsTxQueue>()
     .AddHostedService<AprsIsTxService>()
     .AddSingleton<KissTcpServerService>()
     .AddHostedService(sp => sp.GetRequiredService<KissTcpServerService>())
+    .AddSingleton<AgwpeTcpServerService>()
+    .AddHostedService(sp => sp.GetRequiredService<AgwpeTcpServerService>())
     .AddSingleton<AprsPacketParsingService>()
     .AddHostedService(sp => sp.GetRequiredService<AprsPacketParsingService>())
     .AddSingleton<PacketReprocessingService>()
@@ -149,6 +159,7 @@ if (app.Environment.IsDevelopment())
 app.MapControllers();
 app.MapHub<PacketHub>(PacketHub.HubPath);
 app.MapHub<LogHub>(LogHub.HubPath);
+app.MapHub<TerminalHub>(TerminalHub.HubPath);
 app.MapFallbackToFile("index.html");
 
 await app.RunAsync();

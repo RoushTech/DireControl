@@ -18,6 +18,7 @@ public class SettingsController(
     AprsIsReconnectTrigger reconnectTrigger,
     ModemRestartTrigger modemRestartTrigger,
     KissReconnectTrigger kissReconnectTrigger,
+    PacketServicesRestartTrigger packetServicesTrigger,
     StationIdentityService stationIdentity,
     DireControlContext db) : ControllerBase
 {
@@ -76,7 +77,85 @@ public class SettingsController(
             IsToRfGatingEnabled = userSetting.IsToRfGatingEnabled,
             IsToRfPath = userSetting.IsToRfPath,
             IsToRfRecentHeardMinutes = userSetting.IsToRfRecentHeardMinutes,
+            ConnectedModeInboundEnabled = userSetting.ConnectedModeInboundEnabled,
+            ConnectedModeMaxSessions = userSetting.ConnectedModeMaxSessions,
+            ConnectedModeDefaultPaclen = userSetting.ConnectedModeDefaultPaclen,
+            ConnectedModeWindowSize = userSetting.ConnectedModeWindowSize,
+            ConnectedModeT1Seconds = userSetting.ConnectedModeT1Seconds,
+            ConnectedModeRetries = userSetting.ConnectedModeRetries,
+            ConnectedModePreferMod128 = userSetting.ConnectedModePreferMod128,
+            PmsEnabled = userSetting.PmsEnabled,
+            PmsSsid = userSetting.PmsSsid,
+            PmsBannerText = userSetting.PmsBannerText,
+            PmsRetentionDays = userSetting.PmsRetentionDays,
+            AgwpeServerEnabled = userSetting.AgwpeServerEnabled,
+            AgwpeServerPort = userSetting.AgwpeServerPort,
+            AgwpeServerBindAddress = userSetting.AgwpeServerBindAddress,
+            TerminalTranscriptRetentionDays = userSetting.TerminalTranscriptRetentionDays,
         });
+    }
+
+    [HttpPut("packet")]
+    public async Task<ActionResult> UpdatePacketSettings(
+        [FromBody] UpdatePacketSettingsRequest request,
+        CancellationToken ct)
+    {
+        if (request.ConnectedModeMaxSessions is < 1 or > 100)
+            return BadRequest("Max sessions must be between 1 and 100.");
+        if (request.ConnectedModeDefaultPaclen is < 16 or > 256)
+            return BadRequest("Paclen must be between 16 and 256.");
+        if (request.ConnectedModeWindowSize is < 1 or > 63)
+            return BadRequest("Window size must be between 1 and 63 (1–7 in modulo-8).");
+        if (request.ConnectedModeT1Seconds is < 1 or > 60)
+            return BadRequest("T1 must be between 1 and 60 seconds.");
+        if (request.ConnectedModeRetries is < 1 or > 30)
+            return BadRequest("Retry limit must be between 1 and 30.");
+        if (request.PmsSsid is < 1 or > 15)
+            return BadRequest("PMS SSID must be between 1 and 15.");
+        if (request.PmsRetentionDays is < 0 or > 3650)
+            return BadRequest("PMS retention must be between 0 and 3650 days.");
+        if (request.AgwpeServerPort is < 1 or > 65535)
+            return BadRequest("AGWPE port must be between 1 and 65535.");
+        if (request.TerminalTranscriptRetentionDays is < 0 or > 3650)
+            return BadRequest("Transcript retention must be between 0 and 3650 days.");
+
+        var bindAddress = string.IsNullOrWhiteSpace(request.AgwpeServerBindAddress)
+            ? "127.0.0.1"
+            : request.AgwpeServerBindAddress.Trim();
+        if (!System.Net.IPAddress.TryParse(bindAddress, out _))
+            return BadRequest("AGWPE bind address must be a valid IP address (127.0.0.1 or 0.0.0.0).");
+
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        setting.ConnectedModeInboundEnabled = request.ConnectedModeInboundEnabled;
+        setting.ConnectedModeMaxSessions = request.ConnectedModeMaxSessions;
+        setting.ConnectedModeDefaultPaclen = request.ConnectedModeDefaultPaclen;
+        setting.ConnectedModeWindowSize = request.ConnectedModeWindowSize;
+        setting.ConnectedModeT1Seconds = request.ConnectedModeT1Seconds;
+        setting.ConnectedModeRetries = request.ConnectedModeRetries;
+        setting.ConnectedModePreferMod128 = request.ConnectedModePreferMod128;
+        setting.PmsEnabled = request.PmsEnabled;
+        setting.PmsSsid = request.PmsSsid;
+        setting.PmsBannerText = string.IsNullOrWhiteSpace(request.PmsBannerText)
+            ? "Welcome to the DireControl mailbox. H for help."
+            : request.PmsBannerText.Trim();
+        setting.PmsRetentionDays = request.PmsRetentionDays;
+        setting.AgwpeServerEnabled = request.AgwpeServerEnabled;
+        setting.AgwpeServerPort = request.AgwpeServerPort;
+        setting.AgwpeServerBindAddress = bindAddress;
+        setting.TerminalTranscriptRetentionDays = request.TerminalTranscriptRetentionDays;
+
+        await db.SaveChangesAsync(ct);
+
+        // The PMS host and AGWPE server re-read their config on this signal.
+        packetServicesTrigger.Trigger();
+
+        return NoContent();
     }
 
     [HttpPut("station")]

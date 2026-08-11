@@ -35,6 +35,12 @@ public sealed record ModemStatusSnapshot
 }
 
 /// <summary>
+/// An outbound frame plus its optional airtime completion — completed after
+/// the keyup that carried it, cancelled if the modem tears down first.
+/// </summary>
+public readonly record struct TxItem(byte[] Frame, TaskCompletionSource<bool>? Completion);
+
+/// <summary>
 /// The native soundcard modem backend, one instance per active radio with
 /// modem audio configured — each radio gets its own capture device, DSP
 /// pipeline, transmit queue, and PTT controller, all identified by the
@@ -53,6 +59,14 @@ public sealed class SoundModemService(
     private const int SampleRate = 48000;
     private const int RetryDelaySeconds = 10;
     private const int TxQueueCapacity = 64;
+    private const int PriorityTxQueueCapacity = 32;
+
+    /// <summary>
+    /// Cap on normal-lane frames per keyup.  Bounds keyup length so a beacon
+    /// or digipeat backlog cannot hold the channel for seconds in front of a
+    /// waiting session ack; the remainder waits for the next CSMA cycle.
+    /// </summary>
+    private const int MaxNormalFramesPerKeyup = 5;
 
     /// <summary>A queued TX calibration test tone.</summary>
     private sealed record ToneRequest(TestToneKind Kind, int DurationMs);
@@ -70,7 +84,8 @@ public sealed class SoundModemService(
             State = ModemState.Disabled,
         };
         public volatile AfskReceiver? Receiver;
-        public Channel<byte[]>? TxChannel;
+        public Channel<TxItem>? TxChannel;
+        public Channel<TxItem>? PriorityTxChannel;
         public Channel<ToneRequest>? ToneChannel;
         public volatile bool Transmitting;
         public long TransmittedFrames;
@@ -178,21 +193,47 @@ public sealed class SoundModemService(
     /// stations never care about channel numbers.  Returns
     /// <see langword="false"/> when no instance can transmit.
     /// </summary>
-    public bool TryEnqueueTransmit(byte[] ax25Frame, int channel = 0)
+    public bool TryEnqueueTransmit(byte[] ax25Frame, int channel = 0) =>
+        TryEnqueueTransmit(ax25Frame, channel, TxPriority.Normal, txCompletion: null, exactChannelOnly: false);
+
+    /// <summary>
+    /// Queues an AX.25 frame with an explicit priority lane.
+    /// <paramref name="txCompletion"/> (if any) completes after the frame's
+    /// keyup finishes — the LAPB layer starts T1 there — and is cancelled when
+    /// the modem tears down before transmitting.  Session traffic passes
+    /// <paramref name="exactChannelOnly"/> because a session is bound to one
+    /// frequency; the any-radio fallback remains for order-tolerant traffic.
+    /// </summary>
+    public bool TryEnqueueTransmit(
+        byte[] ax25Frame,
+        int channel,
+        TxPriority priority,
+        TaskCompletionSource<bool>? txCompletion,
+        bool exactChannelOnly = false)
     {
         var instances = _instances;
+        var item = new TxItem(ax25Frame, txCompletion);
 
-        var exact = instances.FirstOrDefault(i => i.Radio.ChannelNumber == channel)?.TxChannel;
-        if (exact is not null && exact.Writer.TryWrite(ax25Frame))
+        var exact = instances.FirstOrDefault(i => i.Radio.ChannelNumber == channel);
+        if (exact is not null && TryWrite(exact, item, priority))
             return true;
+
+        if (exactChannelOnly)
+            return false;
 
         foreach (var instance in instances)
         {
-            if (instance.TxChannel is { } tx && tx.Writer.TryWrite(ax25Frame))
+            if (instance != exact && TryWrite(instance, item, priority))
                 return true;
         }
 
         return false;
+
+        static bool TryWrite(ModemInstance instance, TxItem item, TxPriority priority)
+        {
+            var channel = priority == TxPriority.Session ? instance.PriorityTxChannel : instance.TxChannel;
+            return channel is not null && channel.Writer.TryWrite(item);
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -305,15 +346,24 @@ public sealed class SoundModemService(
         };
 
         IPttController? ptt = null;
-        Channel<byte[]>? txChannel = null;
+        Channel<TxItem>? txChannel = null;
+        Channel<TxItem>? priorityTxChannel = null;
         Channel<ToneRequest>? toneChannel = null;
         if (radio.TxEnabled)
         {
             ptt = CreatePttController(radio);
-            txChannel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(TxQueueCapacity)
+            txChannel = Channel.CreateBounded<TxItem>(new BoundedChannelOptions(TxQueueCapacity)
             {
                 SingleReader = true,
                 FullMode = BoundedChannelFullMode.DropOldest,
+            });
+            // Session frames must never be silently dropped (their completions
+            // drive LAPB timers): a full lane fails the write instead, and the
+            // session layer handles the failed send.
+            priorityTxChannel = Channel.CreateBounded<TxItem>(new BoundedChannelOptions(PriorityTxQueueCapacity)
+            {
+                SingleReader = true,
+                FullMode = BoundedChannelFullMode.DropWrite,
             });
             toneChannel = Channel.CreateBounded<ToneRequest>(new BoundedChannelOptions(4)
             {
@@ -327,6 +377,7 @@ public sealed class SoundModemService(
 
         instance.Receiver = receiver;
         instance.TxChannel = txChannel;
+        instance.PriorityTxChannel = priorityTxChannel;
         instance.ToneChannel = toneChannel;
 
         // Either loop faulting (device unplugged, PTT failure) must tear down
@@ -346,7 +397,7 @@ public sealed class SoundModemService(
 
             var txTask = txChannel is null
                 ? Task.Delay(Timeout.Infinite, sct)
-                : TransmitLoopAsync(instance, receiver, ptt, txChannel, toneChannel!, sct);
+                : TransmitLoopAsync(instance, receiver, ptt, txChannel, priorityTxChannel!, toneChannel!, sct);
 
             var first = await Task.WhenAny(captureTask, txTask);
             sessionCts.Cancel();
@@ -360,10 +411,24 @@ public sealed class SoundModemService(
         finally
         {
             instance.TxChannel = null;
+            instance.PriorityTxChannel = null;
             instance.ToneChannel = null;
             instance.Receiver = null;
             instance.Transmitting = false;
             ptt?.Dispose();
+
+            // Frames stuck in a dead session's queues will never transmit —
+            // cancel their completions so LAPB timers are not left hanging.
+            CancelPending(txChannel);
+            CancelPending(priorityTxChannel);
+        }
+
+        static void CancelPending(Channel<TxItem>? channel)
+        {
+            if (channel is null)
+                return;
+            while (channel.Reader.TryRead(out var item))
+                item.Completion?.TrySetCanceled();
         }
     }
 
@@ -393,11 +458,29 @@ public sealed class SoundModemService(
 
     // ── Transmit ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Collects the frames for one keyup: the priority (session) lane drains
+    /// completely — it is bounded by the LAPB window so bursts stay short —
+    /// then the normal lane up to <paramref name="maxNormal"/> frames, with
+    /// the remainder left queued for the next CSMA cycle.
+    /// </summary>
+    internal static List<TxItem> DrainForKeyup(
+        ChannelReader<TxItem> priority, ChannelReader<TxItem> normal, int maxNormal)
+    {
+        var items = new List<TxItem>();
+        while (priority.TryRead(out var sessionItem))
+            items.Add(sessionItem);
+        for (var i = 0; i < maxNormal && normal.TryRead(out var item); i++)
+            items.Add(item);
+        return items;
+    }
+
     private async Task TransmitLoopAsync(
         ModemInstance instance,
         AfskReceiver receiver,
         IPttController? ptt,
-        Channel<byte[]> txChannel,
+        Channel<TxItem> txChannel,
+        Channel<TxItem> priorityTxChannel,
         Channel<ToneRequest> toneChannel,
         CancellationToken ct)
     {
@@ -413,10 +496,11 @@ public sealed class SoundModemService(
 
         while (!ct.IsCancellationRequested)
         {
-            // Wake on either a queued frame or a test-tone request.
+            // Wake on a queued frame (either lane) or a test-tone request.
             var frameReady = txChannel.Reader.WaitToReadAsync(ct).AsTask();
+            var priorityReady = priorityTxChannel.Reader.WaitToReadAsync(ct).AsTask();
             var toneReady = toneChannel.Reader.WaitToReadAsync(ct).AsTask();
-            await Task.WhenAny(frameReady, toneReady);
+            await Task.WhenAny(frameReady, priorityReady, toneReady);
 
             // A test tone is a deliberate operator action for calibration —
             // transmit it immediately, bypassing CSMA.
@@ -437,30 +521,42 @@ public sealed class SoundModemService(
                 await Task.Delay(slotTimeMs, ct);
             }
 
-            // Send everything queued in one keyup (including any that arrived
-            // while we waited out CSMA).
-            var frames = new List<byte[]>();
-            while (txChannel.Reader.TryRead(out var frame))
-                frames.Add(frame);
-            if (frames.Count == 0)
+            // One keyup: session lane first, then a bounded slice of the
+            // normal lane (including frames that arrived during CSMA).
+            var items = DrainForKeyup(priorityTxChannel.Reader, txChannel.Reader, MaxNormalFramesPerKeyup);
+            if (items.Count == 0)
                 continue;
 
+            var frames = items.Select(i => i.Frame).ToList();
             var amplitude = instance.TxAudioLevelPct / 100f;
             var audio = modulator.GenerateTransmission(frames, leadFlags, tailFlags, amplitude);
 
             instance.Transmitting = true;
+            var transmitted = false;
             try
             {
                 ptt?.SetPtt(true);
                 using var playback = new AlsaPlaybackDevice(playbackDevice, SampleRate);
                 playback.Write(audio);
                 playback.Drain();
+                transmitted = true;
             }
             finally
             {
                 try { ptt?.SetPtt(false); }
                 catch (Exception ex) { logger.LogError(ex, "Failed to unkey PTT for {Radio}.", radio.FullCallsign); }
                 instance.Transmitting = false;
+
+                // Airtime completions fire only after the audio fully drained
+                // and PTT dropped — this is where LAPB starts T1. A faulted
+                // keyup cancels instead so the frames count as never sent.
+                foreach (var item in items)
+                {
+                    if (transmitted)
+                        item.Completion?.TrySetResult(true);
+                    else
+                        item.Completion?.TrySetCanceled();
+                }
             }
 
             Interlocked.Add(ref instance.TransmittedFrames, frames.Count);

@@ -89,6 +89,9 @@ public sealed class DatabaseMaintenanceService(
         var ownDeleted = await PruneAsync(conn, PacketSource.Own, settings.PacketRetentionOwnDays, ct);
         var totalDeleted = rfDeleted + isDeleted + ownDeleted;
 
+        totalDeleted += await PruneTranscriptsAsync(conn, settings.TerminalTranscriptRetentionDays, ct);
+        totalDeleted += await PruneKilledPmsMailAsync(conn, settings.PmsRetentionDays, ct);
+
         var vacuumed = false;
         string? vacuumError = null;
         if (vacuum && totalDeleted > 0)
@@ -160,6 +163,47 @@ public sealed class DatabaseMaintenanceService(
         }
 
         return total;
+    }
+
+    /// <summary>
+    /// Deletes completed terminal session transcripts older than the retention
+    /// window (0 = keep forever).  Chunks go first so the delete never depends
+    /// on FK-cascade enforcement.
+    /// </summary>
+    private static async Task<int> PruneTranscriptsAsync(DbConnection conn, int retentionDays, CancellationToken ct)
+    {
+        if (retentionDays <= 0)
+            return 0;
+
+        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
+
+        using (var chunks = conn.CreateCommand())
+        {
+            chunks.CommandText =
+                "DELETE FROM TerminalTranscriptChunks WHERE TerminalSessionRecordId IN " +
+                "(SELECT Id FROM TerminalSessionRecords WHERE EndedAt IS NOT NULL AND EndedAt < $cut);";
+            AddParam(chunks, "$cut", cutoff);
+            await chunks.ExecuteNonQueryAsync(ct);
+        }
+
+        using var records = conn.CreateCommand();
+        records.CommandText =
+            "DELETE FROM TerminalSessionRecords WHERE EndedAt IS NOT NULL AND EndedAt < $cut;";
+        AddParam(records, "$cut", cutoff);
+        return await records.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Deletes killed PMS mail past its retention window (0 = keep forever).</summary>
+    private static async Task<int> PruneKilledPmsMailAsync(DbConnection conn, int retentionDays, CancellationToken ct)
+    {
+        if (retentionDays <= 0)
+            return 0;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "DELETE FROM PmsMessages WHERE IsKilled = 1 AND KilledAt IS NOT NULL AND KilledAt < $cut;";
+        AddParam(cmd, "$cut", DateTime.UtcNow.AddDays(-retentionDays));
+        return await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>

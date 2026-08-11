@@ -126,6 +126,21 @@ export interface SettingsDto {
   isToRfGatingEnabled: boolean
   isToRfPath: string
   isToRfRecentHeardMinutes: number
+  connectedModeInboundEnabled: boolean
+  connectedModeMaxSessions: number
+  connectedModeDefaultPaclen: number
+  connectedModeWindowSize: number
+  connectedModeT1Seconds: number
+  connectedModeRetries: number
+  connectedModePreferMod128: boolean
+  pmsEnabled: boolean
+  pmsSsid: number
+  pmsBannerText: string
+  pmsRetentionDays: number
+  agwpeServerEnabled: boolean
+  agwpeServerPort: number
+  agwpeServerBindAddress: string
+  terminalTranscriptRetentionDays: number
 }
 
 export interface CallsignCountDto {

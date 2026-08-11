@@ -25,6 +25,11 @@ const router = createRouter({
       component: () => import('@/views/MessagesView.vue'),
     },
     {
+      path: '/terminal',
+      name: 'terminal',
+      component: () => import('@/views/TerminalView.vue'),
+    },
+    {
       path: '/aprs-icon-test',
       name: 'aprs-icon-test',
       component: () => import('@/views/AprsIconTest.vue'),

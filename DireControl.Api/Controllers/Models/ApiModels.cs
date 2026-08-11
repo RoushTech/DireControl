@@ -132,6 +132,43 @@ public sealed class SettingsDto
     public bool IsToRfGatingEnabled { get; init; }
     public required string IsToRfPath { get; init; }
     public int IsToRfRecentHeardMinutes { get; init; }
+
+    // Connected-mode packet: LAPB defaults, PMS, AGWPE, terminal
+    public bool ConnectedModeInboundEnabled { get; init; }
+    public int ConnectedModeMaxSessions { get; init; }
+    public int ConnectedModeDefaultPaclen { get; init; }
+    public int ConnectedModeWindowSize { get; init; }
+    public int ConnectedModeT1Seconds { get; init; }
+    public int ConnectedModeRetries { get; init; }
+    public bool ConnectedModePreferMod128 { get; init; }
+    public bool PmsEnabled { get; init; }
+    public int PmsSsid { get; init; }
+    public required string PmsBannerText { get; init; }
+    public int PmsRetentionDays { get; init; }
+    public bool AgwpeServerEnabled { get; init; }
+    public int AgwpeServerPort { get; init; }
+    public required string AgwpeServerBindAddress { get; init; }
+    public int TerminalTranscriptRetentionDays { get; init; }
+}
+
+/// <summary>PUT api/v0/settings/packet — connected-mode, PMS, AGWPE, terminal settings.</summary>
+public sealed class UpdatePacketSettingsRequest
+{
+    public bool ConnectedModeInboundEnabled { get; init; }
+    public int ConnectedModeMaxSessions { get; init; } = 10;
+    public int ConnectedModeDefaultPaclen { get; init; } = 128;
+    public int ConnectedModeWindowSize { get; init; } = 4;
+    public int ConnectedModeT1Seconds { get; init; } = 3;
+    public int ConnectedModeRetries { get; init; } = 10;
+    public bool ConnectedModePreferMod128 { get; init; }
+    public bool PmsEnabled { get; init; }
+    public int PmsSsid { get; init; } = 1;
+    public string? PmsBannerText { get; init; }
+    public int PmsRetentionDays { get; init; }
+    public bool AgwpeServerEnabled { get; init; }
+    public int AgwpeServerPort { get; init; } = 8000;
+    public string? AgwpeServerBindAddress { get; init; }
+    public int TerminalTranscriptRetentionDays { get; init; } = 90;
 }
 
 public sealed class ModemDeviceDto

@@ -56,7 +56,7 @@ const shortcuts = [
 
 // ─── Nav groups ──────────────────────────────────────────────────────────────
 const activityRoutes = ['/beacons', '/radio', '/logs']
-const commsRoutes = ['/messages', '/alerts']
+const commsRoutes = ['/messages', '/terminal', '/alerts']
 const insightsRoutes = ['/statistics', '/network']
 
 const activityActive = computed(() => activityRoutes.includes(route.path))
@@ -306,6 +306,12 @@ async function syncServerClock() {
           </template>
         </v-list-item>
         <v-list-item
+          to="/terminal"
+          prepend-icon="mdi-console-network"
+          title="Terminal"
+          @click="mobileDrawerOpen = false"
+        />
+        <v-list-item
           to="/alerts"
           prepend-icon="mdi-bell"
           title="Alerts"
@@ -413,6 +419,7 @@ async function syncServerClock() {
                 />
               </template>
             </v-list-item>
+            <v-list-item to="/terminal" prepend-icon="mdi-console-network" title="Terminal" />
             <v-list-item to="/alerts" prepend-icon="mdi-bell" title="Alerts">
               <template #append>
                 <v-badge

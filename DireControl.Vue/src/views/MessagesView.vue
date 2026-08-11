@@ -3,6 +3,17 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { usePacketHubStore } from '@/stores/packetHub'
 import { getAllMessages } from '@/api/messagesApi'
+import {
+  createPmsMessage,
+  deletePmsMessage,
+  getPmsMessages,
+  killPmsMessage,
+  pmsMessageTypeLabels,
+  PmsMessageTypes,
+  type PmsMessageDto,
+  type PmsMessageType,
+} from '@/api/pmsApi'
+import { apiErrorDetail } from '@/api/axios'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
 import type { AllMessagePacketDto, InboxMessageDto, MessageFailedDto } from '@/types/message'
@@ -38,7 +49,7 @@ function stationTypeName(t: StationType): string {
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
-const activeTab = ref<'inbox' | 'all' | 'outbox'>('inbox')
+const activeTab = ref<'inbox' | 'all' | 'outbox' | 'pms'>('inbox')
 
 // ─── All-messages state ──────────────────────────────────────────────────────
 const filterSender = ref('')
@@ -79,6 +90,121 @@ watch([filterSender, filterAddressee, filterText], () => {
     void fetchAllMessages()
   }, 400)
 })
+
+// ─── PMS mailbox ─────────────────────────────────────────────────────────────
+const pmsItems = ref<PmsMessageDto[]>([])
+const pmsPage = ref(1)
+const pmsPageSize = ref(50)
+const pmsTotalCount = ref(0)
+const pmsLoading = ref(false)
+const pmsIncludeKilled = ref(false)
+const pmsError = ref('')
+let pmsLoadedOnce = false
+
+const pmsTotalPages = computed(() =>
+  Math.max(1, Math.ceil(pmsTotalCount.value / pmsPageSize.value)),
+)
+
+async function fetchPms() {
+  pmsLoading.value = true
+  pmsError.value = ''
+  try {
+    const result = await getPmsMessages({
+      page: pmsPage.value,
+      pageSize: pmsPageSize.value,
+      includeKilled: pmsIncludeKilled.value,
+    })
+    pmsItems.value = result.messages
+    pmsTotalCount.value = result.totalCount
+    pmsLoadedOnce = true
+  } catch (e: unknown) {
+    pmsError.value = apiErrorDetail(e)
+  } finally {
+    pmsLoading.value = false
+  }
+}
+
+// The PMS list loads lazily on first visit to its tab.
+watch(activeTab, (tab) => {
+  if (tab === 'pms' && !pmsLoadedOnce) void fetchPms()
+})
+
+watch(pmsIncludeKilled, () => {
+  pmsPage.value = 1
+  void fetchPms()
+})
+
+function pmsTypeChip(type: PmsMessageType): { label: string; color: string } {
+  switch (type) {
+    case PmsMessageTypes.Private:
+      return { label: 'P', color: 'primary' }
+    case PmsMessageTypes.Bulletin:
+      return { label: 'B', color: 'orange' }
+    default:
+      return { label: '?', color: 'grey' }
+  }
+}
+
+// PMS compose
+const pmsComposeOpen = ref(false)
+const pmsType = ref<PmsMessageType>(PmsMessageTypes.Private)
+const pmsTo = ref('')
+const pmsSubject = ref('')
+const pmsBody = ref('')
+const pmsSending = ref(false)
+const pmsSendError = ref('')
+
+const pmsTypeItems = [
+  { title: pmsMessageTypeLabels[PmsMessageTypes.Private], value: PmsMessageTypes.Private },
+  { title: pmsMessageTypeLabels[PmsMessageTypes.Bulletin], value: PmsMessageTypes.Bulletin },
+]
+
+function openPmsCompose() {
+  pmsType.value = PmsMessageTypes.Private
+  pmsTo.value = ''
+  pmsSubject.value = ''
+  pmsBody.value = ''
+  pmsSendError.value = ''
+  pmsComposeOpen.value = true
+}
+
+async function doPmsSend() {
+  const to = pmsTo.value.trim().toUpperCase()
+  if (!to) return
+  pmsSending.value = true
+  pmsSendError.value = ''
+  try {
+    await createPmsMessage({
+      type: pmsType.value,
+      toCallsign: to,
+      subject: pmsSubject.value.trim() || undefined,
+      body: pmsBody.value.trim() || undefined,
+    })
+    pmsComposeOpen.value = false
+    await fetchPms()
+  } catch (e: unknown) {
+    pmsSendError.value = apiErrorDetail(e)
+  } finally {
+    pmsSending.value = false
+  }
+}
+
+// PMS kill / delete (both confirmed)
+const pmsConfirm = ref<{ action: 'kill' | 'delete'; msg: PmsMessageDto } | null>(null)
+
+async function doPmsConfirm() {
+  const confirm = pmsConfirm.value
+  if (!confirm) return
+  pmsConfirm.value = null
+  pmsError.value = ''
+  try {
+    if (confirm.action === 'kill') await killPmsMessage(confirm.msg.id)
+    else await deletePmsMessage(confirm.msg.id)
+    await fetchPms()
+  } catch (e: unknown) {
+    pmsError.value = apiErrorDetail(e)
+  }
+}
 
 // ─── Inbox / Outbox ──────────────────────────────────────────────────────────
 // Sortable inbox columns (mock: clickable "From ▲" headers).
@@ -426,6 +552,18 @@ function replyTo(message: InboxMessageDto) {
             {{ allTotalCount.toLocaleString() }}
           </v-chip>
         </button>
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'pms' }"
+          role="tab"
+          :aria-selected="activeTab === 'pms'"
+          @click="activeTab = 'pms'"
+        >
+          PMS
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ pmsTotalCount.toLocaleString() }}
+          </v-chip>
+        </button>
         <v-spacer />
         <v-btn
           color="primary"
@@ -717,8 +855,236 @@ function replyTo(message: InboxMessageDto) {
             />
           </div>
         </v-window-item>
+
+        <!-- ── PMS Mailbox Tab ────────────────────────────────────────────────── -->
+        <v-window-item value="pms">
+          <div class="d-flex align-center flex-wrap ga-3 px-3 pt-3">
+            <v-btn
+              color="primary"
+              size="small"
+              prepend-icon="mdi-email-edit-outline"
+              @click="openPmsCompose"
+            >
+              Compose PMS
+            </v-btn>
+            <v-switch
+              v-model="pmsIncludeKilled"
+              label="Include killed"
+              color="primary"
+              density="compact"
+              hide-details
+            />
+            <v-spacer />
+            <v-btn
+              icon="mdi-refresh"
+              size="small"
+              variant="text"
+              :loading="pmsLoading"
+              @click="fetchPms"
+            />
+          </div>
+
+          <v-alert v-if="pmsError" type="error" variant="tonal" density="compact" class="mx-3 mt-2">
+            {{ pmsError }}
+          </v-alert>
+
+          <v-table density="compact" hover>
+            <thead>
+              <tr>
+                <th style="width: 60px">#</th>
+                <th style="width: 60px">Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Subject</th>
+                <th>Date</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="pmsLoading && pmsItems.length === 0">
+                <td colspan="8" class="text-center text-medium-emphasis py-6">Loading…</td>
+              </tr>
+              <template v-else>
+                <tr v-for="msg in pmsItems" :key="msg.id">
+                  <td class="mono-time">{{ msg.id }}</td>
+                  <td>
+                    <v-chip
+                      :color="pmsTypeChip(msg.type).color"
+                      size="x-small"
+                      variant="tonal"
+                      :title="pmsMessageTypeLabels[msg.type]"
+                    >
+                      {{ pmsTypeChip(msg.type).label }}
+                    </v-chip>
+                  </td>
+                  <td class="callsign-plain">{{ msg.fromCallsign }}</td>
+                  <td class="callsign-plain">{{ msg.toCallsign }}</td>
+                  <td
+                    class="msg-body"
+                    :class="{ 'msg-body--open': isExpanded(`pms-${msg.id}`) }"
+                    :title="isExpanded(`pms-${msg.id}`) ? undefined : (msg.body ?? undefined)"
+                    style="cursor: pointer"
+                    @click="toggleExpand(`pms-${msg.id}`)"
+                  >
+                    <span class="font-weight-medium">{{ msg.subject || '(no subject)' }}</span>
+                    <template v-if="isExpanded(`pms-${msg.id}`) && msg.body">
+                      <br />
+                      <span class="text-medium-emphasis">{{ msg.body }}</span>
+                    </template>
+                  </td>
+                  <td class="text-no-wrap mono-time">
+                    <span :title="formatUtc(msg.createdAt)">{{ timeAgo(msg.createdAt, now) }}</span>
+                  </td>
+                  <td>
+                    <div class="d-flex ga-1">
+                      <v-chip v-if="msg.isKilled" color="error" size="x-small" variant="tonal">
+                        killed
+                      </v-chip>
+                      <v-chip
+                        v-else-if="msg.readAt"
+                        size="x-small"
+                        variant="tonal"
+                        class="msg-chip-read"
+                      >
+                        read
+                      </v-chip>
+                      <v-chip v-else color="primary" size="x-small" variant="tonal">unread</v-chip>
+                    </div>
+                  </td>
+                  <td class="text-no-wrap text-right">
+                    <v-btn
+                      v-if="!msg.isKilled"
+                      size="x-small"
+                      variant="tonal"
+                      color="warning"
+                      class="mr-1"
+                      title="Kill (BBS-style soft delete)"
+                      @click="pmsConfirm = { action: 'kill', msg }"
+                    >
+                      Kill
+                    </v-btn>
+                    <v-btn
+                      icon="mdi-delete-outline"
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      title="Delete permanently"
+                      @click="pmsConfirm = { action: 'delete', msg }"
+                    />
+                  </td>
+                </tr>
+                <tr v-if="pmsItems.length === 0">
+                  <td colspan="8" class="text-center py-8">
+                    <v-icon size="36" class="text-medium-emphasis mb-2">
+                      mdi-mailbox-open-outline
+                    </v-icon>
+                    <div class="text-body-2 font-weight-medium mb-1">The mailbox is empty</div>
+                    <div class="text-caption text-medium-emphasis">
+                      Messages left by stations connecting to your PMS land here.
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </v-table>
+
+          <div class="d-flex align-center justify-space-between px-3 py-2">
+            <span class="text-caption text-medium-emphasis">{{ pmsTotalCount }} total</span>
+            <v-pagination
+              v-if="pmsTotalPages > 1"
+              v-model="pmsPage"
+              :length="pmsTotalPages"
+              :total-visible="7"
+              density="compact"
+              @update:model-value="fetchPms"
+            />
+          </div>
+        </v-window-item>
       </v-window>
     </v-card>
+
+    <!-- ── PMS Compose Dialog ─────────────────────────────────────────────── -->
+    <v-dialog v-model="pmsComposeOpen" max-width="520" @keydown.esc="pmsComposeOpen = false">
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2">mdi-mailbox-open-outline</v-icon>
+          Compose PMS Message
+        </v-card-title>
+        <v-card-text>
+          <v-select
+            v-model="pmsType"
+            :items="pmsTypeItems"
+            label="Type"
+            class="mb-3"
+            hide-details
+          />
+          <v-text-field
+            v-model="pmsTo"
+            label="To callsign"
+            placeholder="e.g. W3UWU or ALL for bulletins"
+            class="mb-3"
+            hide-details="auto"
+            :rules="[(v: string) => !!v?.trim() || 'Required']"
+          />
+          <v-text-field v-model="pmsSubject" label="Subject" class="mb-3" hide-details />
+          <v-textarea
+            v-model="pmsBody"
+            label="Body"
+            variant="outlined"
+            density="compact"
+            rows="4"
+            hide-details
+          />
+          <v-alert v-if="pmsSendError" type="error" density="compact" variant="tonal" class="mt-3">
+            {{ pmsSendError }}
+          </v-alert>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="pmsComposeOpen = false">Cancel</v-btn>
+          <v-btn color="primary" :loading="pmsSending" :disabled="!pmsTo.trim()" @click="doPmsSend">
+            Save to mailbox
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ── PMS Kill / Delete Confirmation ─────────────────────────────────── -->
+    <v-dialog
+      :model-value="pmsConfirm !== null"
+      max-width="440"
+      @update:model-value="pmsConfirm = null"
+    >
+      <v-card v-if="pmsConfirm">
+        <v-card-title>
+          {{ pmsConfirm.action === 'kill' ? 'Kill message?' : 'Delete message?' }}
+        </v-card-title>
+        <v-card-text>
+          <template v-if="pmsConfirm.action === 'kill'">
+            Kill message #{{ pmsConfirm.msg.id }} to <strong>{{ pmsConfirm.msg.toCallsign }}</strong
+            >? Killed messages are hidden from connecting stations and purged after the retention
+            period.
+          </template>
+          <template v-else>
+            Permanently delete message #{{ pmsConfirm.msg.id }} to
+            <strong>{{ pmsConfirm.msg.toCallsign }}</strong
+            >? This cannot be undone.
+          </template>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="pmsConfirm = null">Cancel</v-btn>
+          <v-btn
+            :color="pmsConfirm.action === 'kill' ? 'warning' : 'error'"
+            variant="tonal"
+            @click="doPmsConfirm"
+          >
+            {{ pmsConfirm.action === 'kill' ? 'Kill' : 'Delete' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- ── Compose Dialog ─────────────────────────────────────────────────── -->
     <v-dialog v-model="composeOpen" max-width="520" @keydown.esc="composeOpen = false">

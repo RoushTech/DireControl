@@ -121,6 +121,58 @@ public sealed class ModemTxTests
             Assert.That(decoded[i], Is.EqualTo(frames[i]).AsCollection, $"frame {i}");
     }
 
+    // ── Keyup drain policy ───────────────────────────────────────────────────
+
+    private static System.Threading.Channels.Channel<DireControl.Api.Services.TxItem> MakeLane(int capacity = 64) =>
+        System.Threading.Channels.Channel.CreateBounded<DireControl.Api.Services.TxItem>(capacity);
+
+    [Test]
+    public void DrainForKeyup_PriorityLaneGoesFirst_Fully()
+    {
+        var priority = MakeLane();
+        var normal = MakeLane();
+        normal.Writer.TryWrite(new DireControl.Api.Services.TxItem([1], null));
+        priority.Writer.TryWrite(new DireControl.Api.Services.TxItem([2], null));
+        priority.Writer.TryWrite(new DireControl.Api.Services.TxItem([3], null));
+
+        var items = DireControl.Api.Services.SoundModemService.DrainForKeyup(
+            priority.Reader, normal.Reader, maxNormal: 5);
+
+        Assert.That(items.Select(i => i.Frame[0]), Is.EqualTo([2, 3, 1]).AsCollection,
+            "session frames transmit ahead of the normal backlog");
+    }
+
+    [Test]
+    public void DrainForKeyup_NormalLaneCapped_RemainderSurvives()
+    {
+        var priority = MakeLane();
+        var normal = MakeLane();
+        for (byte i = 0; i < 8; i++)
+            normal.Writer.TryWrite(new DireControl.Api.Services.TxItem([i], null));
+
+        var items = DireControl.Api.Services.SoundModemService.DrainForKeyup(
+            priority.Reader, normal.Reader, maxNormal: 5);
+
+        Assert.That(items, Has.Count.EqualTo(5), "keyup length is bounded");
+        Assert.That(normal.Reader.Count, Is.EqualTo(3), "remainder waits for the next CSMA cycle");
+        Assert.That(items.Select(i => i.Frame[0]), Is.EqualTo([0, 1, 2, 3, 4]).AsCollection, "FIFO preserved");
+    }
+
+    [Test]
+    public void DrainForKeyup_PriorityNotSubjectToNormalCap()
+    {
+        var priority = MakeLane();
+        var normal = MakeLane();
+        for (byte i = 0; i < 7; i++)
+            priority.Writer.TryWrite(new DireControl.Api.Services.TxItem([i], null));
+
+        var items = DireControl.Api.Services.SoundModemService.DrainForKeyup(
+            priority.Reader, normal.Reader, maxNormal: 5);
+
+        Assert.That(items, Has.Count.EqualTo(7),
+            "the session lane is already bounded by the LAPB window, not the keyup cap");
+    }
+
     [Test]
     public void GenerateTransmission_TxDelayProducesExpectedAudioLength()
     {

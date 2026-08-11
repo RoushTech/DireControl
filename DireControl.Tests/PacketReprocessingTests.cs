@@ -183,6 +183,13 @@ public sealed class PacketReprocessingTests
     private sealed class NullFrameTransmitter : IFrameTransmitter
     {
         public bool TrySend(byte[] ax25Frame, int channel = 0) => false;
+
+        public bool TrySend(
+            byte[] ax25Frame,
+            int channel,
+            TxPriority priority,
+            TaskCompletionSource<bool>? txCompletion,
+            bool exactChannelOnly = false) => false;
     }
 
     private sealed class ThrowingHubContext : IHubContext<PacketHub>

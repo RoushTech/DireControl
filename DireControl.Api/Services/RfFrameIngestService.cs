@@ -18,6 +18,8 @@ public sealed class RfFrameIngestService(
     IServiceScopeFactory scopeFactory,
     DigipeaterService digipeaterService,
     KissTcpServerService kissServer,
+    AgwpeTcpServerService agwpeServer,
+    Ax25.Ax25SessionManager sessionManager,
     AprsIsTxQueue aprsIsTxQueue,
     Microsoft.AspNetCore.SignalR.IHubContext<Hubs.PacketHub> hubContext,
     IOptions<DireControlOptions> options,
@@ -53,9 +55,18 @@ public sealed class RfFrameIngestService(
             return null;
         }
 
-        // Serve raw AX.25 to connected KISS server clients — they get every
+        // Serve raw AX.25 to connected KISS and AGWPE clients — they get every
         // decodable frame, not just what the APRS pipeline accepts.
         kissServer.Broadcast(ax25Frame, kissChannel);
+        agwpeServer.Broadcast(ax25Frame, kissChannel, isOwnTransmission);
+
+        // Connected-mode (LAPB) tap: sessions and inbound listeners see every
+        // non-UI frame addressed to them. Consumed frames are non-APRS by
+        // definition — stop here, after the KISS broadcast so external stacks
+        // still hear everything. Own-transmission loopbacks never re-enter the
+        // session layer (it would ack its own frames).
+        if (!isOwnTransmission && sessionManager.OfferFrame(ax25Frame, frame, kissChannel))
+            return null;
 
         // WIDEn-N digipeating (never our own transmissions).
         if (!isOwnTransmission)

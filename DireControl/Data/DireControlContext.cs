@@ -19,6 +19,11 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<DigipeaterStatistic> DigipeaterStatistics => Set<DigipeaterStatistic>();
     public DbSet<CoverageGridStatistic> CoverageGridStatistics => Set<CoverageGridStatistic>();
     public DbSet<LogLevelOverride> LogLevelOverrides => Set<LogLevelOverride>();
+    public DbSet<PmsMessage> PmsMessages => Set<PmsMessage>();
+    public DbSet<TerminalSessionRecord> TerminalSessionRecords => Set<TerminalSessionRecord>();
+    public DbSet<TerminalTranscriptChunk> TerminalTranscriptChunks => Set<TerminalTranscriptChunk>();
+    public DbSet<TerminalPreset> TerminalPresets => Set<TerminalPreset>();
+    public DbSet<TerminalMacro> TerminalMacros => Set<TerminalMacro>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

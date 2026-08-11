@@ -36,11 +36,13 @@ public static class Ax25Encoder
 
         var frame = new List<byte>(128);
 
-        // Destination address (never the last address in the frame)
-        frame.AddRange(EncodeAddress(dest, isLast: false));
+        // Destination address (never the last address in the frame). The C
+        // bits mark this a v2 command frame (dest 1 / src 0), matching what
+        // modern TNCs emit for UI frames.
+        frame.AddRange(EncodeAddress(dest, isLast: false, topBit: true));
 
         // Source address (last address only when there is no digipeater path)
-        frame.AddRange(EncodeAddress(src, isLast: pathItems.Length == 0));
+        frame.AddRange(EncodeAddress(src, isLast: pathItems.Length == 0, topBit: false));
 
         // Digipeater path addresses
         for (var i = 0; i < pathItems.Length; i++)
@@ -61,22 +63,33 @@ public static class Ax25Encoder
     public static byte[] Encode(Ax25Frame frame)
     {
         var bytes = new List<byte>(128);
-        bytes.AddRange(EncodeAddress(frame.Destination, isLast: false));
-        bytes.AddRange(EncodeAddress(frame.Source, isLast: frame.Path.Count == 0));
+        bytes.AddRange(EncodeAddress(frame.Destination, isLast: false, topBit: frame.DestCommandBit));
+        bytes.AddRange(EncodeAddress(frame.Source, isLast: frame.Path.Count == 0, topBit: frame.SourceCommandBit));
         for (var i = 0; i < frame.Path.Count; i++)
             bytes.AddRange(EncodeAddress(frame.Path[i], isLast: i == frame.Path.Count - 1));
         bytes.Add(frame.Control);
-        bytes.Add(frame.Pid);
+        if (frame.Control2 is { } control2)
+            bytes.Add(control2);
+        if (frame.Pid is { } pid)
+            bytes.Add(pid);
         bytes.AddRange(frame.Info);
         return [.. bytes];
     }
 
     /// <summary>
-    /// Encodes a single AX.25 address field (7 bytes).  The H bit is emitted
-    /// from <see cref="Ax25Address.HasBeenRepeated"/> so digipeaters can mark
-    /// used path entries when re-encoding.
+    /// Encodes a single AX.25 address field (7 bytes).  The top bit is emitted
+    /// from <see cref="Ax25Address.HasBeenRepeated"/> — correct for digipeater
+    /// path entries, where it is the H bit.
     /// </summary>
-    public static byte[] EncodeAddress(Ax25Address address, bool isLast)
+    public static byte[] EncodeAddress(Ax25Address address, bool isLast) =>
+        EncodeAddress(address, isLast, topBit: address.HasBeenRepeated);
+
+    /// <summary>
+    /// Encodes a single AX.25 address field (7 bytes) with an explicit top
+    /// bit — the C (command/response) bit on destination/source addresses,
+    /// the H (has-been-repeated) bit on digipeater path entries.
+    /// </summary>
+    public static byte[] EncodeAddress(Ax25Address address, bool isLast, bool topBit)
     {
         // Pad or truncate to exactly 6 characters.
         var padded = address.Callsign.ToUpperInvariant().PadRight(6)[..6];
@@ -85,9 +98,9 @@ public static class Ax25Encoder
         for (var i = 0; i < 6; i++)
             bytes[i] = (byte)((padded[i] & 0x7F) << 1);
 
-        // SSID byte: bit 7 = H, bits 6-5 = reserved (11), bits 4-1 = SSID, bit 0 = end
+        // SSID byte: bit 7 = C/H, bits 6-5 = reserved (11), bits 4-1 = SSID, bit 0 = end
         bytes[6] = (byte)(
-            (address.HasBeenRepeated ? 0x80 : 0x00)
+            (topBit ? 0x80 : 0x00)
             | 0x60
             | ((address.Ssid & 0x0F) << 1)
             | (isLast ? 0x01 : 0x00));
