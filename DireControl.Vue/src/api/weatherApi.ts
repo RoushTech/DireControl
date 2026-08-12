@@ -39,3 +39,27 @@ export async function getWeatherStatus(): Promise<WeatherStatus> {
   const { data } = await http.get<WeatherStatus>('/api/weather/status')
   return data
 }
+
+export interface LightningStrike {
+  latitude: number
+  longitude: number
+  ageSeconds: number
+}
+
+export interface LightningStrikes {
+  connected: boolean
+  generatedAt: string
+  strikes: LightningStrike[]
+}
+
+export async function getLightningStrikes(bounds: {
+  minLat: number
+  maxLat: number
+  minLon: number
+  maxLon: number
+}): Promise<LightningStrikes> {
+  const { data } = await http.get<LightningStrikes>('/api/weather/lightning/strikes', {
+    params: bounds,
+  })
+  return data
+}

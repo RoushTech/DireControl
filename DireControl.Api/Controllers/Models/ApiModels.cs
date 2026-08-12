@@ -253,7 +253,6 @@ public sealed class UpdateAprsIsSettingsRequest
 public sealed class UpdateWeatherApiKeysRequest
 {
     public string? OpenWeatherMapApiKey { get; init; }
-    public string? TomorrowIoApiKey { get; init; }
     public RadarProvider? RadarProvider { get; init; }
     public string? RainViewerProApiKey { get; init; }
 }
@@ -295,6 +294,20 @@ public sealed class WeatherLayerStatusDto
     public int? FrameCount { get; init; }
     public DateTime? LastUpdated { get; init; }
     public string? Reason { get; init; }
+}
+
+public sealed class LightningStrikesDto
+{
+    public bool Connected { get; init; }
+    public DateTime GeneratedAt { get; init; }
+    public required List<LightningStrikeDto> Strikes { get; init; }
+}
+
+public sealed class LightningStrikeDto
+{
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    public int AgeSeconds { get; init; }
 }
 
 public sealed class TrackPointDto

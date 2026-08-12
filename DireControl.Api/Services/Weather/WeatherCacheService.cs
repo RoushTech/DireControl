@@ -4,7 +4,6 @@ public sealed class WeatherCacheService(
     RainViewerRadarProvider rainViewerProvider,
     IemRadarProvider iemProvider,
     WindTileCache windTileCache,
-    LightningCache lightningCache,
     ILogger<WeatherCacheService> logger) : BackgroundService
 {
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
@@ -16,9 +15,7 @@ public sealed class WeatherCacheService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            await Task.WhenAll(
-                RefreshRadarProvidersAsync(stoppingToken),
-                RefreshLightningAsync(stoppingToken));
+            await RefreshRadarProvidersAsync(stoppingToken);
 
             windTileCache.EvictStale();
 
@@ -44,22 +41,6 @@ public sealed class WeatherCacheService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to refresh radar providers");
-        }
-    }
-
-    private async Task RefreshLightningAsync(CancellationToken ct)
-    {
-        try
-        {
-            await lightningCache.RefreshAsync(ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // shutting down — ignore
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to refresh lightning cache period");
         }
     }
 }

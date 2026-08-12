@@ -11,7 +11,13 @@ import {
   getPacketPositions,
   type CoverageGridSquareDto,
 } from '@/api/analysisApi'
-import { getWeatherManifest, getWeatherStatus, type WeatherManifest } from '@/api/weatherApi'
+import {
+  getLightningStrikes,
+  getWeatherManifest,
+  getWeatherStatus,
+  type LightningStrike,
+  type WeatherManifest,
+} from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
 import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
 import type { TileProviderConfig } from '@/types/map'
@@ -333,8 +339,11 @@ let radarControlsHideTimer: ReturnType<typeof setTimeout> | null = null
 let windControlsHideTimer: ReturnType<typeof setTimeout> | null = null
 let lightningControlsHideTimer: ReturnType<typeof setTimeout> | null = null
 let windLayer: L.TileLayer | null = null
-let lightningLayer: L.TileLayer | null = null
+let lightningLayerGroup: L.LayerGroup | null = null
+let lightningRenderer: L.Canvas | null = null
 let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
+let lightningStrikes: LightningStrike[] = []
+let lightningFetchedAt = 0
 
 const packetHub = usePacketHubStore()
 
@@ -1041,40 +1050,87 @@ async function toggleWind() {
   }
 }
 
-// ── Lightning (Tomorrow.io) ──
+// ── Lightning (Blitzortung.org) ──
 
-function buildLightningLayer(): L.TileLayer {
-  return L.tileLayer('/api/weather/lightning/tile/{z}/{x}/{y}', {
-    opacity: lightningOpacity.value,
-    zIndex: 12,
-    pane: 'weatherPane',
-    maxNativeZoom: 6,
-    maxZoom: 19,
-  })
+const LIGHTNING_POLL_MS = 15_000
+const LIGHTNING_MAX_AGE_S = 60 * 60
+
+function lightningStrikeStyle(ageSeconds: number): {
+  color: string
+  opacity: number
+  radius: number
+} {
+  const f = Math.min(Math.max(ageSeconds / LIGHTNING_MAX_AGE_S, 0), 1)
+  // Newest strikes bright yellow-white fading toward dim red as they age out.
+  return {
+    color: `hsl(${55 * (1 - f)}, 100%, ${75 - 30 * f}%)`,
+    opacity: (1 - 0.75 * f) * lightningOpacity.value,
+    radius: f < 1 / 6 ? 4 : 3,
+  }
+}
+
+async function refreshLightningStrikes() {
+  if (!map.value || !showLightning.value) return
+  const b = map.value.getBounds()
+  try {
+    const res = await getLightningStrikes({
+      minLat: b.getSouth(),
+      maxLat: b.getNorth(),
+      minLon: b.getWest(),
+      maxLon: b.getEast(),
+    })
+    lightningStrikes = res.strikes
+    lightningFetchedAt = Date.now()
+    renderLightningStrikes()
+  } catch {
+    // keep last-known strikes; next poll retries
+  }
+}
+
+function renderLightningStrikes() {
+  if (!map.value || !lightningLayerGroup || !lightningRenderer) return
+  const extraAgeS = (Date.now() - lightningFetchedAt) / 1000
+  lightningLayerGroup.clearLayers()
+  for (const s of lightningStrikes) {
+    const style = lightningStrikeStyle(s.ageSeconds + extraAgeS)
+    lightningLayerGroup.addLayer(
+      L.circleMarker([s.latitude, s.longitude], {
+        renderer: lightningRenderer,
+        pane: 'weatherPane',
+        radius: style.radius,
+        stroke: false,
+        fillColor: style.color,
+        fillOpacity: style.opacity,
+        interactive: false,
+      }),
+    )
+  }
+}
+
+function onLightningMoveEnd() {
+  void refreshLightningStrikes()
 }
 
 function enableLightning() {
   if (!map.value) return
   disableLightning()
   ensureWeatherPane()
-  lightningLayer = buildLightningLayer().addTo(map.value)
+  lightningRenderer = L.canvas({ pane: 'weatherPane' })
+  lightningLayerGroup = L.layerGroup().addTo(map.value)
   keepLightningControlsVisible()
-  // Refresh every 5 minutes so Leaflet fetches fresh tiles from the backend cache
-  lightningRefreshInterval = setInterval(
-    () => {
-      if (!showLightning.value || !map.value) return
-      lightningLayer?.remove()
-      lightningLayer = buildLightningLayer().addTo(map.value!)
-    },
-    5 * 60 * 1000,
-  )
+  void refreshLightningStrikes()
+  lightningRefreshInterval = setInterval(() => void refreshLightningStrikes(), LIGHTNING_POLL_MS)
+  map.value.on('moveend', onLightningMoveEnd)
 }
 
 function disableLightning() {
-  if (lightningLayer) {
-    lightningLayer.remove()
-    lightningLayer = null
+  map.value?.off('moveend', onLightningMoveEnd)
+  if (lightningLayerGroup) {
+    lightningLayerGroup.remove()
+    lightningLayerGroup = null
   }
+  lightningRenderer = null
+  lightningStrikes = []
   if (lightningRefreshInterval) {
     clearInterval(lightningRefreshInterval)
     lightningRefreshInterval = null
@@ -1967,7 +2023,7 @@ watch(
 // Watch: weather overlay opacity — apply immediately to live layers
 watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
 watch(windOpacity, (v) => windLayer?.setOpacity(v))
-watch(lightningOpacity, (v) => lightningLayer?.setOpacity(v))
+watch(lightningOpacity, () => renderLightningStrikes())
 
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(
@@ -2450,7 +2506,7 @@ defineExpose({ TILE_PROVIDERS })
               :disabled="weatherStatus?.lightning.available ?? false"
               :text="
                 weatherStatus?.lightning.reason ??
-                'Tomorrow.io API key required — configure in Settings.'
+                'Lightning feed (Blitzortung.org) not connected yet.'
               "
               location="right"
             >

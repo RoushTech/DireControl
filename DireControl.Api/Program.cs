@@ -71,13 +71,6 @@ services
             c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
         })
         .Services
-    .AddHttpClient("TomorrowIo")
-        .ConfigureHttpClient(c =>
-        {
-            c.Timeout = TimeSpan.FromSeconds(15);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
-        })
-        .Services
     .AddHttpClient("IEM")
         .ConfigureHttpClient(c =>
         {
@@ -135,7 +128,8 @@ services
     .AddSingleton<RainViewerRadarProvider>()
     .AddSingleton<IemRadarProvider>()
     .AddSingleton<WindTileCache>()
-    .AddSingleton<LightningCache>();
+    .AddSingleton<LightningStrikeBuffer>()
+    .AddHostedService<BlitzortungService>();
 
 var app = builder.Build();
 

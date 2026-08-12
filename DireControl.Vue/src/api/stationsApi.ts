@@ -147,13 +147,11 @@ export type RadarProvider = (typeof RadarProvider)[keyof typeof RadarProvider]
 
 export async function updateWeatherApiKeys(
   openWeatherMapApiKey: string | null,
-  tomorrowIoApiKey: string | null,
   radarProvider: RadarProvider,
   rainViewerProApiKey: string | null,
 ): Promise<void> {
   await http.put('/api/v0/settings/weather-keys', {
     openWeatherMapApiKey,
-    tomorrowIoApiKey,
     radarProvider,
     rainViewerProApiKey,
   })

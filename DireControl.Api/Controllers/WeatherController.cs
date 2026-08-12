@@ -14,7 +14,7 @@ public class WeatherController(
     RainViewerRadarProvider rainViewerProvider,
     IemRadarProvider iemProvider,
     WindTileCache windTileCache,
-    LightningCache lightningCache,
+    LightningStrikeBuffer strikeBuffer,
     DireControlContext db,
     ILogger<WeatherController> logger) : ControllerBase
 {
@@ -131,27 +131,32 @@ public class WeatherController(
         return File(data, "image/png");
     }
 
-    // ── Lightning (Tomorrow.io) ────────────────────────────────────────────
+    // ── Lightning (Blitzortung.org) ────────────────────────────────────────
 
-    [HttpGet("lightning/tile/{z:int}/{x:int}/{y:int}")]
-    public async Task<IActionResult> GetLightningTile(int z, int x, int y, CancellationToken ct)
+    [HttpGet("lightning/strikes")]
+    public ActionResult<LightningStrikesDto> GetLightningStrikes(
+        [FromQuery] double minLat = -90, [FromQuery] double maxLat = 90,
+        [FromQuery] double minLon = -180, [FromQuery] double maxLon = 180,
+        [FromQuery] int maxAgeMinutes = 60)
     {
-        var setting = await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct);
-        if (string.IsNullOrWhiteSpace(setting?.TomorrowIoApiKey))
-            return NoContent();
+        maxAgeMinutes = Math.Clamp(maxAgeMinutes, 1, (int)LightningStrikeBuffer.Retention.TotalMinutes);
+        var now = DateTime.UtcNow;
+        var strikes = strikeBuffer.Query(
+            minLat, maxLat, minLon, maxLon,
+            now - TimeSpan.FromMinutes(maxAgeMinutes),
+            limit: 5000);
 
-        byte[] data;
-        try
+        return Ok(new LightningStrikesDto
         {
-            data = await lightningCache.GetTileAsync(z, x, y, setting.TomorrowIoApiKey, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "Failed to fetch Tomorrow.io lightning tile {Z}/{X}/{Y}", z, x, y);
-            return StatusCode(502, "Failed to fetch lightning tile from upstream.");
-        }
-
-        return File(data, "image/png");
+            Connected = strikeBuffer.IsConnected,
+            GeneratedAt = now,
+            Strikes = strikes.Select(s => new LightningStrikeDto
+            {
+                Latitude = s.Latitude,
+                Longitude = s.Longitude,
+                AgeSeconds = (int)Math.Max(0, (now - s.TimeUtc).TotalSeconds),
+            }).ToList(),
+        });
     }
 
     // ── Status ─────────────────────────────────────────────────────────────
@@ -183,11 +188,11 @@ public class WeatherController(
             Reason = owmConfigured ? null : "API key not configured",
         };
 
-        var tomorrowConfigured = !string.IsNullOrWhiteSpace(setting?.TomorrowIoApiKey);
         var lightningStatus = new WeatherLayerStatusDto
         {
-            Available = tomorrowConfigured,
-            Reason = tomorrowConfigured ? null : "API key not configured",
+            Available = strikeBuffer.IsConnected,
+            LastUpdated = strikeBuffer.LastStrikeUtc,
+            Reason = strikeBuffer.IsConnected ? null : "Not connected to the Blitzortung feed",
         };
 
         return Ok(new WeatherStatusDto

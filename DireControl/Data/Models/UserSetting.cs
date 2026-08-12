@@ -191,9 +191,6 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>OpenWeatherMap API key used for the wind tile overlay.</summary>
     public string? OpenWeatherMapApiKey { get; set; }
 
-    /// <summary>Tomorrow.io API key used for the lightning tile overlay.</summary>
-    public string? TomorrowIoApiKey { get; set; }
-
     /// <summary>Radar tile provider. Defaults to IEM NEXRAD (free, US coverage).</summary>
     public RadarProvider RadarProvider { get; set; } = RadarProvider.IemNexrad;
 

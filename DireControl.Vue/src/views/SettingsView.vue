@@ -758,14 +758,11 @@ function saveApiKeys() {
 
 // ─── Weather overlay API keys ─────────────────────────────────────────────────
 const owmApiKey = ref('')
-const tomorrowIoApiKey = ref('')
 const owmKeyConfigured = ref(false)
-const tomorrowKeyConfigured = ref(false)
 const weatherKeysSaving = ref(false)
 const weatherKeysSaveError = ref('')
 const weatherKeysSaveSuccess = ref(false)
 const showOwmKey = ref(false)
-const showTomorrowKey = ref(false)
 const selectedRadarProvider = ref<RadarProvider>(RadarProvider.IemNexrad)
 const rainViewerProApiKey = ref('')
 const rvProKeyConfigured = ref(false)
@@ -776,16 +773,12 @@ async function saveWeatherApiKeys() {
   weatherKeysSaveError.value = ''
   weatherKeysSaveSuccess.value = false
   const owmValue = owmApiKey.value.trim() || null
-  const tomorrowValue = tomorrowIoApiKey.value.trim() || null
   const rvProValue = rainViewerProApiKey.value.trim() || null
   try {
-    await updateWeatherApiKeys(owmValue, tomorrowValue, selectedRadarProvider.value, rvProValue)
+    await updateWeatherApiKeys(owmValue, selectedRadarProvider.value, rvProValue)
     weatherKeysSaveSuccess.value = true
     // Update configured flags based on what was saved
-    if (owmValue !== null) owmKeyConfigured.value = true
-    if (tomorrowValue !== null) tomorrowKeyConfigured.value = true
-    if (owmValue === null) owmKeyConfigured.value = false
-    if (tomorrowValue === null) tomorrowKeyConfigured.value = false
+    owmKeyConfigured.value = owmValue !== null
     rvProKeyConfigured.value =
       selectedRadarProvider.value === RadarProvider.RainViewerPro
         ? rvProValue !== null
@@ -794,7 +787,6 @@ async function saveWeatherApiKeys() {
         : false
     // Clear the fields after saving — values are secrets
     owmApiKey.value = ''
-    tomorrowIoApiKey.value = ''
     rainViewerProApiKey.value = ''
     setTimeout(() => {
       weatherKeysSaveSuccess.value = false
@@ -1127,7 +1119,6 @@ onMounted(async () => {
   try {
     const status = await getWeatherStatus()
     owmKeyConfigured.value = status.wind.available
-    tomorrowKeyConfigured.value = status.lightning.available
     selectedRadarProvider.value = status.radarProvider as RadarProvider
     rvProKeyConfigured.value = status.rainViewerProKeyConfigured
   } catch {
@@ -2025,29 +2016,14 @@ async function confirmDelete() {
                 >
               </div>
 
-              <!-- Tomorrow.io lightning key -->
-              <div class="text-body-2 font-weight-medium mb-2">Lightning (Tomorrow.io)</div>
-              <v-text-field
-                v-model="tomorrowIoApiKey"
-                label="Tomorrow.io API Key"
-                density="compact"
-                :type="showTomorrowKey ? 'text' : 'password'"
-                :append-inner-icon="showTomorrowKey ? 'mdi-eye-off' : 'mdi-eye'"
-                :placeholder="
-                  tomorrowKeyConfigured ? 'Key saved — enter a new value to replace' : ''
-                "
-                class="mb-1"
-                :prepend-inner-icon="
-                  tomorrowIoApiKey.trim() || tomorrowKeyConfigured
-                    ? 'mdi-check-circle'
-                    : 'mdi-alert-circle-outline'
-                "
-                :color="tomorrowIoApiKey.trim() || tomorrowKeyConfigured ? 'success' : 'warning'"
-                @click:append-inner="showTomorrowKey = !showTomorrowKey"
-              />
+              <!-- Blitzortung lightning layer (no key needed) -->
+              <div class="text-body-2 font-weight-medium mb-2">Lightning (Blitzortung.org)</div>
               <div class="text-caption text-medium-emphasis mb-4">
-                Get a free key at
-                <a href="https://www.tomorrow.io" target="_blank" rel="noopener">tomorrow.io</a>
+                Lightning strikes come from the
+                <a href="https://www.blitzortung.org" target="_blank" rel="noopener"
+                  >Blitzortung.org</a
+                >
+                community network — no API key required.
               </div>
 
               <v-alert v-if="weatherKeysSaveError" type="error" density="compact" class="mb-3">

@@ -360,9 +360,6 @@ public class SettingsController(
         setting.OpenWeatherMapApiKey = string.IsNullOrWhiteSpace(request.OpenWeatherMapApiKey)
             ? null
             : request.OpenWeatherMapApiKey.Trim();
-        setting.TomorrowIoApiKey = string.IsNullOrWhiteSpace(request.TomorrowIoApiKey)
-            ? null
-            : request.TomorrowIoApiKey.Trim();
         setting.RadarProvider = request.RadarProvider ?? RadarProvider.IemNexrad;
         setting.RainViewerProApiKey = string.IsNullOrWhiteSpace(request.RainViewerProApiKey)
             ? null
