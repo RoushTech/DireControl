@@ -2016,16 +2016,6 @@ async function confirmDelete() {
                 >
               </div>
 
-              <!-- Blitzortung lightning layer (no key needed) -->
-              <div class="text-body-2 font-weight-medium mb-2">Lightning (Blitzortung.org)</div>
-              <div class="text-caption text-medium-emphasis mb-4">
-                Lightning strikes come from the
-                <a href="https://www.blitzortung.org" target="_blank" rel="noopener"
-                  >Blitzortung.org</a
-                >
-                community network — no API key required.
-              </div>
-
               <v-alert v-if="weatherKeysSaveError" type="error" density="compact" class="mb-3">
                 {{ weatherKeysSaveError }}
               </v-alert>
