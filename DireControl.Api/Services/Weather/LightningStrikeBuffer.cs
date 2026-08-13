@@ -13,7 +13,12 @@ public sealed class LightningStrikeBuffer
 {
     public static readonly TimeSpan Retention = TimeSpan.FromMinutes(60);
 
+    // Safety cap on the persistence hand-off queue so a stalled writer can't grow it unbounded.
+    private const int MaxPending = 200_000;
+
     private readonly ConcurrentQueue<LightningStrike> _strikes = new();
+    private readonly ConcurrentQueue<LightningStrike> _pending = new();
+    private int _pendingCount;
 
     public volatile bool IsConnected;
 
@@ -35,9 +40,33 @@ public sealed class LightningStrikeBuffer
         _strikes.Enqueue(strike);
         Interlocked.Exchange(ref _lastStrikeTicks, DateTime.UtcNow.Ticks);
 
+        if (Interlocked.Increment(ref _pendingCount) <= MaxPending)
+        {
+            _pending.Enqueue(strike);
+        }
+        else
+        {
+            Interlocked.Decrement(ref _pendingCount);
+        }
+
         var cutoff = DateTime.UtcNow - Retention;
         while (_strikes.TryPeek(out var oldest) && oldest.TimeUtc < cutoff)
             _strikes.TryDequeue(out _);
+    }
+
+    /// <summary>
+    /// Removes up to <paramref name="max"/> strikes queued for persistence and returns them
+    /// in arrival order. Called only by <see cref="LightningPersistenceService"/>.
+    /// </summary>
+    public List<LightningStrike> DrainPending(int max)
+    {
+        var drained = new List<LightningStrike>();
+        while (drained.Count < max && _pending.TryDequeue(out var strike))
+        {
+            Interlocked.Decrement(ref _pendingCount);
+            drained.Add(strike);
+        }
+        return drained;
     }
 
     /// <summary>

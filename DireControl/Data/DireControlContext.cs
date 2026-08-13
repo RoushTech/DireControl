@@ -24,6 +24,7 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<TerminalTranscriptChunk> TerminalTranscriptChunks => Set<TerminalTranscriptChunk>();
     public DbSet<TerminalPreset> TerminalPresets => Set<TerminalPreset>();
     public DbSet<TerminalMacro> TerminalMacros => Set<TerminalMacro>();
+    public DbSet<LightningStrikeRecord> LightningStrikes => Set<LightningStrikeRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

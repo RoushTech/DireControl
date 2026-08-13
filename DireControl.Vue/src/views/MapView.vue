@@ -12,9 +12,11 @@ import {
   type CoverageGridSquareDto,
 } from '@/api/analysisApi'
 import {
+  getLightningHistory,
   getLightningStrikes,
   getWeatherManifest,
   getWeatherStatus,
+  type LightningHistoryStrike,
   type LightningStrike,
   type WeatherManifest,
 } from '@/api/weatherApi'
@@ -324,6 +326,12 @@ let radarFrameLayers: L.TileLayer[] = []
 let radarFrameMeta: { time: number }[] = []
 let radarFrameReady: boolean[] = []
 let currentRadarFrame = 0
+// Index of the frame shown while idle (the newest past frame); when the shown frame
+// differs, lightning rendering follows the radar frame time instead of live data.
+let radarRestingIdx = 0
+// Bumped whenever playback stops or layers are rebuilt so that an advance() continuation
+// still awaiting a tile load can detect it is stale and die instead of double-advancing.
+let radarAnimGeneration = 0
 let radarAnimTimeout: ReturnType<typeof setTimeout> | null = null
 let radarRefreshInterval: ReturnType<typeof setInterval> | null = null
 const radarPlaying = ref(false)
@@ -344,6 +352,9 @@ let lightningRenderer: L.Canvas | null = null
 let lightningRefreshInterval: ReturnType<typeof setInterval> | null = null
 let lightningStrikes: LightningStrike[] = []
 let lightningFetchedAt = 0
+let lightningHistory: LightningHistoryStrike[] = []
+let lightningHistoryLoaded = false
+let lightningHistoryLoading = false
 
 const packetHub = usePacketHubStore()
 
@@ -846,15 +857,18 @@ function showRadarFrame(idx: number) {
   if (radarFrameMeta[clampedIdx]) {
     radarTimestamp.value = formatRadarTime(radarFrameMeta[clampedIdx]!.time)
   }
+  refreshLightningView()
 }
 
 async function playRadar() {
   if (radarPlaying.value) return
   radarPlaying.value = true
   keepRadarControlsVisible()
+  void ensureLightningHistory()
+  const gen = ++radarAnimGeneration
 
   const advance = async () => {
-    if (!radarPlaying.value || radarFrameLayers.length === 0) return
+    if (gen !== radarAnimGeneration || !radarPlaying.value || radarFrameLayers.length === 0) return
     const next = (currentRadarFrame + 1) % radarFrameLayers.length
     const layer = radarFrameLayers[next]!
     // Add the next frame to the map invisibly so its tiles start loading
@@ -868,9 +882,7 @@ async function playRadar() {
         const done = () => {
           radarFrameReady[next] = true
           clearTimeout(loadTimeout)
-          // Wait for Leaflet's per-tile opacity fade-in (200 ms) to complete before
-          // revealing the frame, otherwise tiles appear partially transparent on first play.
-          setTimeout(resolve, 250)
+          resolve()
         }
         layer.once('load', done)
         const loadTimeout = setTimeout(() => {
@@ -879,9 +891,13 @@ async function playRadar() {
         }, 3000)
       })
     }
-    if (!radarPlaying.value) return
+    // The await above can outlive a pause or a layer rebuild; a stale generation must
+    // die here or two advance chains end up running (double speed, jumping frames).
+    if (gen !== radarAnimGeneration || !radarPlaying.value) return
     showRadarFrame(next)
-    radarAnimTimeout = setTimeout(advance, radarFrameInterval.value)
+    // Dwell on the newest frame before wrapping so the loop restart reads as deliberate.
+    const dwell = next === radarFrameLayers.length - 1 ? 3 : 1
+    radarAnimTimeout = setTimeout(advance, radarFrameInterval.value * dwell)
   }
 
   radarAnimTimeout = setTimeout(advance, radarFrameInterval.value)
@@ -889,6 +905,7 @@ async function playRadar() {
 
 function pauseRadar() {
   radarPlaying.value = false
+  radarAnimGeneration++
   if (radarAnimTimeout) {
     clearTimeout(radarAnimTimeout)
     radarAnimTimeout = null
@@ -934,6 +951,7 @@ function keepLightningControlsVisible() {
 function clearRadarLayers() {
   pauseRadar()
   for (const layer of radarFrameLayers) {
+    layer.off()
     layer.remove()
   }
   radarFrameLayers = []
@@ -942,6 +960,53 @@ function clearRadarLayers() {
   radarFrameCount.value = 0
   radarTimestamp.value = ''
   radarCurrentIdx.value = 0
+}
+
+function buildRadarFrames(manifest: WeatherManifest) {
+  const allFrames = [...manifest.radar.past, ...(manifest.radar.nowcast ?? [])]
+  radarFrameMeta = allFrames.map((f) => ({ time: f.time }))
+  radarFrameReady = Array.from({ length: allFrames.length }, () => false)
+  radarFrameLayers = allFrames.map((f) => buildRadarLayer(f.path, manifest))
+  radarFrameLayers.forEach((layer, i) => {
+    // A pan/zoom exposes tiles this frame has never loaded; drop its readiness so the
+    // animation waits for them again instead of revealing blank sectors.
+    layer.on('loading', () => {
+      radarFrameReady[i] = false
+    })
+    layer.on('load', () => {
+      radarFrameReady[i] = true
+    })
+  })
+  radarFrameCount.value = radarFrameLayers.length
+  radarRestingIdx = Math.max(0, manifest.radar.past.length - 1)
+  // Frame times changed, so any radar-synced lightning history needs a refetch.
+  lightningHistoryLoaded = false
+}
+
+async function refreshRadarFrames() {
+  if (!showRadar.value) return
+  const wasPlaying = radarPlaying.value
+  const prevTime = radarFrameMeta[currentRadarFrame]?.time
+  clearRadarLayers()
+  radarManifest = await fetchRadarManifest()
+  if (!radarManifest) return
+  buildRadarFrames(radarManifest)
+  // Resume at the frame closest in time to where the user was rather than snapping to
+  // the newest frame mid-loop.
+  let idx = radarRestingIdx
+  if (wasPlaying && prevTime != null && radarFrameMeta.length > 0) {
+    let best = 0
+    for (let i = 1; i < radarFrameMeta.length; i++) {
+      if (
+        Math.abs(radarFrameMeta[i]!.time - prevTime) <
+        Math.abs(radarFrameMeta[best]!.time - prevTime)
+      )
+        best = i
+    }
+    idx = best
+  }
+  showRadarFrame(idx)
+  if (wasPlaying) void playRadar()
 }
 
 async function enableRadar() {
@@ -954,35 +1019,11 @@ async function enableRadar() {
       showRadar.value = false
       return
     }
-    const allFrames = [...radarManifest.radar.past, ...(radarManifest.radar.nowcast ?? [])]
-    radarFrameMeta = allFrames.map((f) => ({ time: f.time }))
-    radarFrameReady = Array.from({ length: allFrames.length }, () => false)
-    radarFrameLayers = allFrames.map((f) => buildRadarLayer(f.path, radarManifest!))
-    radarFrameCount.value = radarFrameLayers.length
+    buildRadarFrames(radarManifest)
     // Start on the last historical frame so we see the most recent real data first
-    showRadarFrame(radarManifest.radar.past.length - 1)
+    showRadarFrame(radarRestingIdx)
     keepRadarControlsVisible()
-    radarRefreshInterval = setInterval(
-      async () => {
-        if (!showRadar.value) return
-        const wasPlaying = radarPlaying.value
-        pauseRadar()
-        clearRadarLayers()
-        radarManifest = await fetchRadarManifest()
-        if (!radarManifest) return
-        const refreshedFrames = [
-          ...radarManifest.radar.past,
-          ...(radarManifest.radar.nowcast ?? []),
-        ]
-        radarFrameMeta = refreshedFrames.map((f) => ({ time: f.time }))
-        radarFrameReady = Array.from({ length: refreshedFrames.length }, () => false)
-        radarFrameLayers = refreshedFrames.map((f) => buildRadarLayer(f.path, radarManifest!))
-        radarFrameCount.value = radarFrameLayers.length
-        showRadarFrame(radarManifest.radar.past.length - 1)
-        if (wasPlaying) playRadar()
-      },
-      5 * 60 * 1000,
-    )
+    radarRefreshInterval = setInterval(() => void refreshRadarFrames(), 5 * 60 * 1000)
   } finally {
     radarLoading.value = false
   }
@@ -1001,6 +1042,8 @@ function disableRadar() {
     clearTimeout(radarControlsHideTimer)
     radarControlsHideTimer = null
   }
+  // With the radar gone, lightning (if enabled) returns to live rendering.
+  refreshLightningView()
 }
 
 async function toggleRadar() {
@@ -1081,10 +1124,25 @@ async function refreshLightningStrikes() {
     })
     lightningStrikes = res.strikes
     lightningFetchedAt = Date.now()
-    renderLightningStrikes()
+    if (!lightningFollowsRadar()) renderLightningStrikes()
   } catch {
     // keep last-known strikes; next poll retries
   }
+}
+
+function addLightningMarker(latitude: number, longitude: number, ageSeconds: number) {
+  const style = lightningStrikeStyle(ageSeconds)
+  lightningLayerGroup!.addLayer(
+    L.circleMarker([latitude, longitude], {
+      renderer: lightningRenderer!,
+      pane: 'weatherPane',
+      radius: style.radius,
+      stroke: false,
+      fillColor: style.color,
+      fillOpacity: style.opacity,
+      interactive: false,
+    }),
+  )
 }
 
 function renderLightningStrikes() {
@@ -1092,23 +1150,77 @@ function renderLightningStrikes() {
   const extraAgeS = (Date.now() - lightningFetchedAt) / 1000
   lightningLayerGroup.clearLayers()
   for (const s of lightningStrikes) {
-    const style = lightningStrikeStyle(s.ageSeconds + extraAgeS)
-    lightningLayerGroup.addLayer(
-      L.circleMarker([s.latitude, s.longitude], {
-        renderer: lightningRenderer,
-        pane: 'weatherPane',
-        radius: style.radius,
-        stroke: false,
-        fillColor: style.color,
-        fillOpacity: style.opacity,
-        interactive: false,
-      }),
-    )
+    addLightningMarker(s.latitude, s.longitude, s.ageSeconds + extraAgeS)
+  }
+}
+
+// ── Lightning ↔ radar playback sync ──
+// While the radar shows a historical frame, lightning is rendered from persisted
+// history at that frame's time (fading over the same one-hour window as the live
+// view) so the two overlays replay the same moment together.
+
+function lightningFollowsRadar(): boolean {
+  return (
+    showLightning.value &&
+    radarFrameMeta.length > 0 &&
+    (radarPlaying.value || radarCurrentIdx.value !== radarRestingIdx)
+  )
+}
+
+function renderLightningAtTime(frameTimeSeconds: number | undefined) {
+  if (frameTimeSeconds == null || !map.value || !lightningLayerGroup || !lightningRenderer) return
+  lightningLayerGroup.clearLayers()
+  for (const s of lightningHistory) {
+    const age = frameTimeSeconds - s.timeSeconds
+    if (age < 0 || age > LIGHTNING_MAX_AGE_S) continue
+    addLightningMarker(s.latitude, s.longitude, age)
+  }
+}
+
+async function ensureLightningHistory() {
+  if (!map.value || !showLightning.value || radarFrameMeta.length === 0) return
+  if (lightningHistoryLoaded || lightningHistoryLoading) return
+  lightningHistoryLoading = true
+  try {
+    const b = map.value.getBounds()
+    const times = radarFrameMeta.map((m) => m.time)
+    const res = await getLightningHistory({
+      minLat: b.getSouth(),
+      maxLat: b.getNorth(),
+      minLon: b.getWest(),
+      maxLon: b.getEast(),
+      fromSeconds: Math.min(...times) - LIGHTNING_MAX_AGE_S,
+      toSeconds: Math.max(...times),
+    })
+    lightningHistory = res.strikes
+    lightningHistoryLoaded = true
+    refreshLightningView()
+  } catch {
+    // history stays unloaded; playback falls back to live strikes on the next attempt
+  } finally {
+    lightningHistoryLoading = false
+  }
+}
+
+/** Re-renders lightning in whichever mode currently applies (frame-synced or live). */
+function refreshLightningView() {
+  if (!showLightning.value || !lightningLayerGroup) return
+  if (lightningFollowsRadar()) {
+    if (!lightningHistoryLoaded) {
+      void ensureLightningHistory()
+      return
+    }
+    renderLightningAtTime(radarFrameMeta[currentRadarFrame]?.time)
+  } else {
+    renderLightningStrikes()
   }
 }
 
 function onLightningMoveEnd() {
   void refreshLightningStrikes()
+  // New viewport needs a new history window for radar-synced playback.
+  lightningHistoryLoaded = false
+  if (lightningFollowsRadar()) void ensureLightningHistory()
 }
 
 function enableLightning() {
@@ -1119,6 +1231,7 @@ function enableLightning() {
   lightningLayerGroup = L.layerGroup().addTo(map.value)
   keepLightningControlsVisible()
   void refreshLightningStrikes()
+  if (lightningFollowsRadar()) void ensureLightningHistory()
   lightningRefreshInterval = setInterval(() => void refreshLightningStrikes(), LIGHTNING_POLL_MS)
   map.value.on('moveend', onLightningMoveEnd)
 }
@@ -1131,6 +1244,8 @@ function disableLightning() {
   }
   lightningRenderer = null
   lightningStrikes = []
+  lightningHistory = []
+  lightningHistoryLoaded = false
   if (lightningRefreshInterval) {
     clearInterval(lightningRefreshInterval)
     lightningRefreshInterval = null
@@ -2023,7 +2138,7 @@ watch(
 // Watch: weather overlay opacity — apply immediately to live layers
 watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
 watch(windOpacity, (v) => windLayer?.setOpacity(v))
-watch(lightningOpacity, () => renderLightningStrikes())
+watch(lightningOpacity, () => refreshLightningView())
 
 // Watch: when selectedCallsign changes (e.g. from BeaconStreamView navigation), open path + fly
 watch(
@@ -3119,6 +3234,14 @@ defineExpose({ TILE_PROVIDERS })
 </style>
 
 <style>
+/* Radar animation cross-fades whole layers by swapping container opacity; Leaflet's
+   independent per-tile fade-in (~200 ms, driven by inline styles) would leave freshly
+   loaded tiles semi-transparent when a frame is revealed at fast playback speeds.
+   Forcing tile opacity only affects the fade — layer opacity lives on the container. */
+.leaflet-weatherPane-pane .leaflet-tile {
+  opacity: 1 !important;
+}
+
 .aprs-icon-container {
   background: transparent !important;
   border: none !important;

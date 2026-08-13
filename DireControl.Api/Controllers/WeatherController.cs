@@ -94,6 +94,7 @@ public class WeatherController(
         catch (HttpRequestException)
         {
             // Upstream rejected the tile; return a transparent tile so Leaflet renders nothing.
+            Response.Headers.CacheControl = "public, max-age=60";
             return File(TransparentTile, "image/png");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -105,6 +106,10 @@ public class WeatherController(
         if (data is null)
             return StatusCode(503, "Radar manifest not yet available.");
 
+        // Frame paths are immutable (RainViewer embeds a timestamp, IEM a 5-minute bucket),
+        // so tiles are safe to cache client-side. Without this, every pan/zoom re-requests
+        // tiles for all attached animation frames and playback fills in sector by sector.
+        Response.Headers.CacheControl = "public, max-age=900";
         return File(data, "image/png");
     }
 
@@ -156,6 +161,52 @@ public class WeatherController(
                 Longitude = s.Longitude,
                 AgeSeconds = (int)Math.Max(0, (now - s.TimeUtc).TotalSeconds),
             }).ToList(),
+        });
+    }
+
+    /// <summary>
+    /// Time-windowed strike history from the database, used to replay lightning in sync
+    /// with radar animation frames. Times are Unix epoch seconds to match radar frame times.
+    /// </summary>
+    [HttpGet("lightning/history")]
+    public async Task<ActionResult<LightningHistoryDto>> GetLightningHistory(
+        [FromQuery] long fromSeconds, [FromQuery] long toSeconds,
+        [FromQuery] double minLat = -90, [FromQuery] double maxLat = 90,
+        [FromQuery] double minLon = -180, [FromQuery] double maxLon = 180,
+        CancellationToken ct = default)
+    {
+        const int limit = 10_000;
+
+        var oldestAllowed = DateTime.UtcNow - LightningPersistenceService.HistoryRetention;
+        var fromUtc = DateTimeOffset.FromUnixTimeSeconds(fromSeconds).UtcDateTime;
+        var toUtc = DateTimeOffset.FromUnixTimeSeconds(toSeconds).UtcDateTime;
+        if (fromUtc < oldestAllowed)
+            fromUtc = oldestAllowed;
+        if (toUtc <= fromUtc)
+            return BadRequest("toSeconds must be after fromSeconds.");
+
+        // Newest-first + Take keeps the most recent strikes when the window overflows the limit.
+        var rows = await db.LightningStrikes.AsNoTracking()
+            .ApplyWindow(fromUtc, toUtc)
+            .ApplyBounds(minLat, maxLat, minLon, maxLon)
+            .OrderByDescending(s => s.TimeUtc)
+            .Take(limit)
+            .ToListAsync(ct);
+        rows.Reverse();
+
+        // SQLite materialises DateTime with Kind=Unspecified; all stored values are UTC.
+        var strikes = rows.Select(s => new LightningHistoryStrikeDto
+        {
+            Latitude = s.Latitude,
+            Longitude = s.Longitude,
+            TimeSeconds = new DateTimeOffset(DateTime.SpecifyKind(s.TimeUtc, DateTimeKind.Utc)).ToUnixTimeSeconds(),
+        }).ToList();
+
+        return Ok(new LightningHistoryDto
+        {
+            GeneratedAt = DateTime.UtcNow,
+            Truncated = strikes.Count == limit,
+            Strikes = strikes,
         });
     }
 

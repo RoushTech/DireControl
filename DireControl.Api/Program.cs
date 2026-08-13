@@ -129,7 +129,8 @@ services
     .AddSingleton<IemRadarProvider>()
     .AddSingleton<WindTileCache>()
     .AddSingleton<LightningStrikeBuffer>()
-    .AddHostedService<BlitzortungService>();
+    .AddHostedService<BlitzortungService>()
+    .AddHostedService<LightningPersistenceService>();
 
 var app = builder.Build();
 

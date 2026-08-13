@@ -63,3 +63,28 @@ export async function getLightningStrikes(bounds: {
   })
   return data
 }
+
+export interface LightningHistoryStrike {
+  latitude: number
+  longitude: number
+  /** Strike time as Unix epoch seconds (UTC) — same time base as radar frame times. */
+  timeSeconds: number
+}
+
+export interface LightningHistory {
+  generatedAt: string
+  truncated: boolean
+  strikes: LightningHistoryStrike[]
+}
+
+export async function getLightningHistory(params: {
+  minLat: number
+  maxLat: number
+  minLon: number
+  maxLon: number
+  fromSeconds: number
+  toSeconds: number
+}): Promise<LightningHistory> {
+  const { data } = await http.get<LightningHistory>('/api/weather/lightning/history', { params })
+  return data
+}

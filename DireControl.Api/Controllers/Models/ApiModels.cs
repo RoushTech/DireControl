@@ -310,6 +310,22 @@ public sealed class LightningStrikeDto
     public int AgeSeconds { get; init; }
 }
 
+public sealed class LightningHistoryDto
+{
+    public DateTime GeneratedAt { get; init; }
+    /// <summary>True when the strike count hit the query limit and older strikes were dropped.</summary>
+    public bool Truncated { get; init; }
+    public required List<LightningHistoryStrikeDto> Strikes { get; init; }
+}
+
+public sealed class LightningHistoryStrikeDto
+{
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    /// <summary>Strike time as Unix epoch seconds (UTC) — same time base as radar frame times.</summary>
+    public long TimeSeconds { get; init; }
+}
+
 public sealed class TrackPointDto
 {
     public double Latitude { get; init; }
