@@ -1098,12 +1098,15 @@ async function toggleWind() {
 const LIGHTNING_POLL_MS = 15_000
 const LIGHTNING_MAX_AGE_S = 60 * 60
 
-function lightningStrikeStyle(ageSeconds: number): {
+function lightningStrikeStyle(
+  ageSeconds: number,
+  maxAgeS = LIGHTNING_MAX_AGE_S,
+): {
   color: string
   opacity: number
   radius: number
 } {
-  const f = Math.min(Math.max(ageSeconds / LIGHTNING_MAX_AGE_S, 0), 1)
+  const f = Math.min(Math.max(ageSeconds / maxAgeS, 0), 1)
   // Newest strikes bright yellow-white fading toward dim red as they age out.
   return {
     color: `hsl(${55 * (1 - f)}, 100%, ${75 - 30 * f}%)`,
@@ -1130,8 +1133,13 @@ async function refreshLightningStrikes() {
   }
 }
 
-function addLightningMarker(latitude: number, longitude: number, ageSeconds: number) {
-  const style = lightningStrikeStyle(ageSeconds)
+function addLightningMarker(
+  latitude: number,
+  longitude: number,
+  ageSeconds: number,
+  maxAgeS = LIGHTNING_MAX_AGE_S,
+) {
+  const style = lightningStrikeStyle(ageSeconds, maxAgeS)
   lightningLayerGroup!.addLayer(
     L.circleMarker([latitude, longitude], {
       renderer: lightningRenderer!,
@@ -1156,8 +1164,8 @@ function renderLightningStrikes() {
 
 // ── Lightning ↔ radar playback sync ──
 // While the radar shows a historical frame, lightning is rendered from persisted
-// history at that frame's time (fading over the same one-hour window as the live
-// view) so the two overlays replay the same moment together.
+// history at that frame's time: only the strikes from that frame's own slice, fading
+// out through the following frame so fast playback doesn't strobe.
 
 function lightningFollowsRadar(): boolean {
   return (
@@ -1167,13 +1175,25 @@ function lightningFollowsRadar(): boolean {
   )
 }
 
+/** Seconds between radar frames (5 min for IEM, 10 min for RainViewer). */
+function radarFrameStepS(): number {
+  if (radarFrameMeta.length < 2) return 300
+  return Math.max(60, radarFrameMeta[1]!.time - radarFrameMeta[0]!.time)
+}
+
+/** Strikes stay visible for their own frame slice plus one more frame of fade-out. */
+function playbackLightningWindowS(): number {
+  return radarFrameStepS() * 2
+}
+
 function renderLightningAtTime(frameTimeSeconds: number | undefined) {
   if (frameTimeSeconds == null || !map.value || !lightningLayerGroup || !lightningRenderer) return
+  const maxAgeS = playbackLightningWindowS()
   lightningLayerGroup.clearLayers()
   for (const s of lightningHistory) {
     const age = frameTimeSeconds - s.timeSeconds
-    if (age < 0 || age > LIGHTNING_MAX_AGE_S) continue
-    addLightningMarker(s.latitude, s.longitude, age)
+    if (age < 0 || age > maxAgeS) continue
+    addLightningMarker(s.latitude, s.longitude, age, maxAgeS)
   }
 }
 
@@ -1189,7 +1209,7 @@ async function ensureLightningHistory() {
       maxLat: b.getNorth(),
       minLon: b.getWest(),
       maxLon: b.getEast(),
-      fromSeconds: Math.min(...times) - LIGHTNING_MAX_AGE_S,
+      fromSeconds: Math.min(...times) - playbackLightningWindowS(),
       toSeconds: Math.max(...times),
     })
     lightningHistory = res.strikes

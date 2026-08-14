@@ -61,6 +61,16 @@ export interface CreateProximityRuleRequest {
   radiusMetres: number
 }
 
+export interface LightningAlertDto {
+  distanceKm: number
+  /** Bearing from the home position to the strike, degrees 0–360. */
+  bearingDegrees: number
+  latitude: number
+  longitude: number
+  strikeTimeUtc: string
+  radiusKm: number
+}
+
 export const ALERT_TYPE_COLORS: Record<string, string> = {
   WatchList: 'amber',
   Proximity: 'blue',

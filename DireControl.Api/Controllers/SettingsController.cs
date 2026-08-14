@@ -92,6 +92,9 @@ public class SettingsController(
             AgwpeServerPort = userSetting.AgwpeServerPort,
             AgwpeServerBindAddress = userSetting.AgwpeServerBindAddress,
             TerminalTranscriptRetentionDays = userSetting.TerminalTranscriptRetentionDays,
+            LightningAlertEnabled = userSetting.LightningAlertEnabled,
+            LightningAlertRadiusKm = userSetting.LightningAlertRadiusKm,
+            LightningAlertCooldownMinutes = userSetting.LightningAlertCooldownMinutes,
         });
     }
 
@@ -366,6 +369,34 @@ public class SettingsController(
             : request.RainViewerProApiKey.Trim();
 
         await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpPut("lightning-alerts")]
+    public async Task<ActionResult> UpdateLightningAlerts(
+        [FromBody] UpdateLightningAlertsRequest request,
+        CancellationToken ct)
+    {
+        if (request.LightningAlertRadiusKm is < 1 or > 500)
+            return BadRequest("Alert radius must be between 1 and 500 km.");
+
+        if (request.LightningAlertCooldownMinutes is < 0 or > 120)
+            return BadRequest("Alert cooldown must be between 0 and 120 minutes.");
+
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        setting.LightningAlertEnabled = request.LightningAlertEnabled;
+        setting.LightningAlertRadiusKm = request.LightningAlertRadiusKm;
+        setting.LightningAlertCooldownMinutes = request.LightningAlertCooldownMinutes;
+
+        await db.SaveChangesAsync(ct);
+
+        // LightningAlertService re-reads settings from the database every cycle.
         return NoContent();
     }
 }

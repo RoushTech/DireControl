@@ -26,6 +26,7 @@ import {
   updateAprsIsSettings,
   updateStationIdentity,
   updateWeatherApiKeys,
+  updateLightningAlerts,
   RadarProvider,
 } from '@/api/stationsApi'
 import {
@@ -798,6 +799,69 @@ async function saveWeatherApiKeys() {
   }
 }
 
+// ─── Lightning proximity alerts ───────────────────────────────────────────────
+const lightningAlertEnabled = ref(false)
+// Stored in km like all internal distances; edited in the user's display unit.
+const lightningAlertRadiusKm = ref(30)
+const lightningAlertRadiusText = ref('')
+const lightningAlertCooldownMinutes = ref(5)
+const lightningAlertsSaving = ref(false)
+const lightningAlertsSaveError = ref('')
+const lightningAlertsSaveSuccess = ref(false)
+
+function radiusToDisplay(km: number): string {
+  const value = distanceUnit.value === 'mi' ? km * 0.621371 : km
+  return String(Math.round(value * 10) / 10)
+}
+
+function loadLightningAlertSettings(s: SettingsDto) {
+  lightningAlertEnabled.value = s.lightningAlertEnabled
+  lightningAlertRadiusKm.value = s.lightningAlertRadiusKm
+  lightningAlertRadiusText.value = radiusToDisplay(s.lightningAlertRadiusKm)
+  lightningAlertCooldownMinutes.value = s.lightningAlertCooldownMinutes
+}
+
+watch(distanceUnit, () => {
+  lightningAlertRadiusText.value = radiusToDisplay(lightningAlertRadiusKm.value)
+})
+
+async function saveLightningAlerts() {
+  lightningAlertsSaveError.value = ''
+  lightningAlertsSaveSuccess.value = false
+
+  const displayValue = parseFloat(lightningAlertRadiusText.value)
+  if (isNaN(displayValue) || displayValue <= 0) {
+    lightningAlertsSaveError.value = 'Enter a valid alert radius.'
+    return
+  }
+  const radiusKm = distanceUnit.value === 'mi' ? displayValue / 0.621371 : displayValue
+  if (radiusKm < 1 || radiusKm > 500) {
+    lightningAlertsSaveError.value =
+      'Alert radius must be between 1 and 500 km (roughly 0.6–310 mi).'
+    return
+  }
+  const cooldown = Math.round(Number(lightningAlertCooldownMinutes.value))
+  if (isNaN(cooldown) || cooldown < 0 || cooldown > 120) {
+    lightningAlertsSaveError.value = 'Cooldown must be between 0 and 120 minutes.'
+    return
+  }
+
+  lightningAlertsSaving.value = true
+  try {
+    await updateLightningAlerts(lightningAlertEnabled.value, radiusKm, cooldown)
+    lightningAlertRadiusKm.value = radiusKm
+    lightningAlertCooldownMinutes.value = cooldown
+    lightningAlertsSaveSuccess.value = true
+    setTimeout(() => {
+      lightningAlertsSaveSuccess.value = false
+    }, 3000)
+  } catch {
+    lightningAlertsSaveError.value = 'Failed to save lightning alert settings.'
+  } finally {
+    lightningAlertsSaving.value = false
+  }
+}
+
 // ---- Geofences ----
 const geofences = ref<GeofenceDto[]>([])
 const showAddGeofence = ref(false)
@@ -1108,6 +1172,7 @@ onMounted(async () => {
     loadRfServicesSettings(s)
     loadExternalTncSettings(s)
     loadPacketSettings(s)
+    loadLightningAlertSettings(s)
   } catch {
     /* ignore */
   }
@@ -2032,6 +2097,69 @@ async function confirmDelete() {
                 </v-btn>
                 <v-fade-transition>
                   <span v-if="weatherKeysSaveSuccess" class="text-caption text-success">
+                    <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
+                  </span>
+                </v-fade-transition>
+              </div>
+            </v-card>
+
+            <!-- ================================================================ -->
+            <!-- Lightning Alerts -->
+            <!-- ================================================================ -->
+            <div class="section-header d-flex align-center mb-2">
+              <span class="text-h6">Lightning Alerts</span>
+            </div>
+
+            <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="text-body-2 text-medium-emphasis mb-4">
+                Plays an alert sound and shows a notification when a lightning strike lands within
+                the alert radius of your home position.
+              </div>
+              <v-switch
+                v-model="lightningAlertEnabled"
+                label="Enable lightning alerts"
+                color="primary"
+                density="compact"
+                hide-details
+                class="mb-3"
+              />
+              <v-text-field
+                v-model="lightningAlertRadiusText"
+                label="Alert radius"
+                density="compact"
+                :suffix="distanceUnit"
+                :disabled="!lightningAlertEnabled"
+                hint="Alert when a strike lands within this distance of home."
+                persistent-hint
+                class="mb-3"
+              />
+              <v-text-field
+                v-model.number="lightningAlertCooldownMinutes"
+                label="Cooldown (minutes)"
+                type="number"
+                density="compact"
+                :disabled="!lightningAlertEnabled"
+                hint="Minimum time between alerts while a storm is active."
+                persistent-hint
+                class="mb-3"
+              />
+
+              <v-alert v-if="lightningAlertsSaveError" type="error" density="compact" class="mb-3">
+                {{ lightningAlertsSaveError }}
+              </v-alert>
+
+              <div class="d-flex align-center ga-3">
+                <v-btn
+                  size="small"
+                  color="primary"
+                  prepend-icon="mdi-content-save"
+                  :loading="lightningAlertsSaving"
+                  @click="saveLightningAlerts"
+                >
+                  Save
+                </v-btn>
+                <v-fade-transition>
+                  <span v-if="lightningAlertsSaveSuccess" class="text-caption text-success">
                     <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
                   </span>
                 </v-fade-transition>

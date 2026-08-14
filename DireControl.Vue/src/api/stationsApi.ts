@@ -145,6 +145,18 @@ export const RadarProvider = {
 } as const
 export type RadarProvider = (typeof RadarProvider)[keyof typeof RadarProvider]
 
+export async function updateLightningAlerts(
+  lightningAlertEnabled: boolean,
+  lightningAlertRadiusKm: number,
+  lightningAlertCooldownMinutes: number,
+): Promise<void> {
+  await http.put('/api/v0/settings/lightning-alerts', {
+    lightningAlertEnabled,
+    lightningAlertRadiusKm,
+    lightningAlertCooldownMinutes,
+  })
+}
+
 export async function updateWeatherApiKeys(
   openWeatherMapApiKey: string | null,
   radarProvider: RadarProvider,

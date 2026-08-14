@@ -197,6 +197,17 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>RainViewer Pro API key. Only used when RadarProvider is RainViewerPro.</summary>
     public string? RainViewerProApiKey { get; set; }
 
+    // ─── Lightning proximity alerts ──────────────────────────────────────────
+
+    /// <summary>Whether lightning strikes near the home position raise an alert.</summary>
+    public bool LightningAlertEnabled { get; set; } = false;
+
+    /// <summary>Alert when a strike lands within this many kilometres of home.</summary>
+    public double LightningAlertRadiusKm { get; set; } = 30;
+
+    /// <summary>Minimum minutes between successive lightning alerts, so an active storm doesn't spam.</summary>
+    public int LightningAlertCooldownMinutes { get; set; } = 5;
+
     public void Configure(EntityTypeBuilder<UserSetting> builder)
     {
         builder.HasData(new UserSetting { Id = 1 });

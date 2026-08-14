@@ -149,6 +149,11 @@ public sealed class SettingsDto
     public int AgwpeServerPort { get; init; }
     public required string AgwpeServerBindAddress { get; init; }
     public int TerminalTranscriptRetentionDays { get; init; }
+
+    // Lightning proximity alerts
+    public bool LightningAlertEnabled { get; init; }
+    public double LightningAlertRadiusKm { get; init; }
+    public int LightningAlertCooldownMinutes { get; init; }
 }
 
 /// <summary>PUT api/v0/settings/packet — connected-mode, PMS, AGWPE, terminal settings.</summary>
@@ -257,6 +262,14 @@ public sealed class UpdateWeatherApiKeysRequest
     public string? RainViewerProApiKey { get; init; }
 }
 
+/// <summary>PUT api/v0/settings/lightning-alerts — lightning proximity alert settings.</summary>
+public sealed class UpdateLightningAlertsRequest
+{
+    public bool LightningAlertEnabled { get; init; }
+    public double LightningAlertRadiusKm { get; init; } = 30;
+    public int LightningAlertCooldownMinutes { get; init; } = 5;
+}
+
 // ─── Weather proxy DTOs ────────────────────────────────────────────────────
 
 public sealed class WeatherManifestDto
@@ -324,6 +337,18 @@ public sealed class LightningHistoryStrikeDto
     public double Longitude { get; init; }
     /// <summary>Strike time as Unix epoch seconds (UTC) — same time base as radar frame times.</summary>
     public long TimeSeconds { get; init; }
+}
+
+/// <summary>Broadcast on the packet hub when a strike lands within the alert radius of home.</summary>
+public sealed class LightningAlertDto
+{
+    public double DistanceKm { get; init; }
+    /// <summary>Bearing from the home position to the strike, degrees 0–360.</summary>
+    public double BearingDegrees { get; init; }
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    public DateTime StrikeTimeUtc { get; init; }
+    public double RadiusKm { get; init; }
 }
 
 public sealed class TrackPointDto

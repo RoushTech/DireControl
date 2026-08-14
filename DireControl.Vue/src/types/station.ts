@@ -141,6 +141,9 @@ export interface SettingsDto {
   agwpeServerPort: number
   agwpeServerBindAddress: string
   terminalTranscriptRetentionDays: number
+  lightningAlertEnabled: boolean
+  lightningAlertRadiusKm: number
+  lightningAlertCooldownMinutes: number
 }
 
 export interface CallsignCountDto {

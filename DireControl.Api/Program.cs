@@ -130,7 +130,8 @@ services
     .AddSingleton<WindTileCache>()
     .AddSingleton<LightningStrikeBuffer>()
     .AddHostedService<BlitzortungService>()
-    .AddHostedService<LightningPersistenceService>();
+    .AddHostedService<LightningPersistenceService>()
+    .AddHostedService<LightningAlertService>();
 
 var app = builder.Build();
 

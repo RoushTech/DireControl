@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useTheme } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
+import { useLightningAlertsStore } from '@/stores/lightningAlertsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { usePacketHubStore } from '@/stores/packetHub'
 import { useUiStore } from '@/stores/uiStore'
@@ -24,6 +25,8 @@ const route = useRoute()
 const theme = useTheme()
 const messagesStore = useMessagesStore()
 const alertsStore = useAlertsStore()
+// Instantiated for its store-level hub subscription (toast + sound on strikes near home).
+useLightningAlertsStore()
 const toastStore = useToastStore()
 const packetHub = usePacketHubStore()
 const uiStore = useUiStore()
