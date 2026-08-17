@@ -144,6 +144,7 @@ export interface SettingsDto {
   lightningAlertEnabled: boolean
   lightningAlertRadiusKm: number
   lightningAlertCooldownMinutes: number
+  lightningAlertAutoPan: boolean
 }
 
 export interface CallsignCountDto {

@@ -95,6 +95,7 @@ public class SettingsController(
             LightningAlertEnabled = userSetting.LightningAlertEnabled,
             LightningAlertRadiusKm = userSetting.LightningAlertRadiusKm,
             LightningAlertCooldownMinutes = userSetting.LightningAlertCooldownMinutes,
+            LightningAlertAutoPan = userSetting.LightningAlertAutoPan,
         });
     }
 
@@ -393,6 +394,7 @@ public class SettingsController(
         setting.LightningAlertEnabled = request.LightningAlertEnabled;
         setting.LightningAlertRadiusKm = request.LightningAlertRadiusKm;
         setting.LightningAlertCooldownMinutes = request.LightningAlertCooldownMinutes;
+        setting.LightningAlertAutoPan = request.LightningAlertAutoPan;
 
         await db.SaveChangesAsync(ct);
 

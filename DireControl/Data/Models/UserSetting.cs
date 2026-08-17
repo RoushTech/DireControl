@@ -208,6 +208,9 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>Minimum minutes between successive lightning alerts, so an active storm doesn't spam.</summary>
     public int LightningAlertCooldownMinutes { get; set; } = 5;
 
+    /// <summary>Whether the map pans to the strike that raised the alert when one fires.</summary>
+    public bool LightningAlertAutoPan { get; set; } = false;
+
     public void Configure(EntityTypeBuilder<UserSetting> builder)
     {
         builder.HasData(new UserSetting { Id = 1 });

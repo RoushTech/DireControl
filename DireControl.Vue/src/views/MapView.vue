@@ -4,7 +4,13 @@ import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
 import { usePacketHubStore } from '@/stores/packetHub'
-import { getStations, getStationTrack, getStationPackets, getSettings } from '@/api/stationsApi'
+import {
+  getStations,
+  getStationTrack,
+  getStationPackets,
+  getSettings,
+  updateLightningAlerts,
+} from '@/api/stationsApi'
 import { getGeofences, getProximityRules } from '@/api/alertsApi'
 import {
   getCoverageGridSquares,
@@ -161,7 +167,6 @@ const {
   radarOpacity,
   windOpacity,
   lightningOpacity,
-  lightningAutoCenter,
 } = useMapPrefs()
 
 // ─── Layer panel ──────────────────────────────────────────────────────────────
@@ -1328,6 +1333,38 @@ const alertStack = computed(() => [...triggeringStrikes.value].reverse())
 let alertStrikeLayer: L.LayerGroup | null = null
 const alertStrikeMarkers = new Map<string, L.Marker>()
 
+// Auto-pan belongs to the alert, not the map, so it lives with the other lightning
+// alert settings on the server and follows the operator between browsers.
+const lightningAutoPan = ref(false)
+const autoPanSaving = ref(false)
+
+async function loadLightningAlertSettings() {
+  const settings = await ensureSettings()
+  lightningAutoPan.value = settings?.lightningAlertAutoPan ?? false
+}
+
+/** Write-through toggle so the setting can be flipped mid-storm without leaving the map. */
+async function toggleAutoPan() {
+  const settings = await ensureSettings()
+  if (!settings || autoPanSaving.value) return
+  const next = !lightningAutoPan.value
+  autoPanSaving.value = true
+  try {
+    await updateLightningAlerts(
+      settings.lightningAlertEnabled,
+      settings.lightningAlertRadiusKm,
+      settings.lightningAlertCooldownMinutes,
+      next,
+    )
+    settings.lightningAlertAutoPan = next
+    lightningAutoPan.value = next
+  } catch (err) {
+    console.error('Failed to save lightning auto-pan setting:', err)
+  } finally {
+    autoPanSaving.value = false
+  }
+}
+
 function ensureAlertPane() {
   if (!map.value) return
   if (!map.value.getPane('lightningAlertPane')) {
@@ -1426,7 +1463,7 @@ watch(
   (strikes, prev) => {
     renderAlertStrikes()
     const newest = strikes[strikes.length - 1]
-    if (!newest || !lightningAutoCenter.value) return
+    if (!newest || !lightningAutoPan.value) return
     if (prev?.some((s) => s.key === newest.key)) return
     focusAlertStrike(newest)
   },
@@ -2457,6 +2494,7 @@ onMounted(async () => {
   trackPruneInterval = setInterval(pruneTracks, 30_000)
 
   // Alerts can predate this mount (they arrive on any screen), so draw what's live
+  await loadLightningAlertSettings()
   lightningAlertsStore.pruneTriggers()
   renderAlertStrikes()
 
@@ -2927,20 +2965,6 @@ defineExpose({ TILE_PROVIDERS })
                 </v-btn>
               </div>
             </div>
-            <div class="layer-row">
-              <v-icon size="16" :color="lightningAutoCenter ? 'primary' : 'grey'"
-                >mdi-crosshairs-gps</v-icon
-              >
-              <span class="layer-row-label">Center on alerts</span>
-              <v-switch
-                v-model="lightningAutoCenter"
-                density="compact"
-                hide-details
-                color="primary"
-                class="layer-switch"
-                aria-label="Center map on lightning alerts"
-              />
-            </div>
           </div>
 
           <div class="layer-panel-foot">
@@ -2985,18 +3009,21 @@ defineExpose({ TILE_PROVIDERS })
           <div class="strike-alert-panel-head">
             <v-icon size="16" color="deep-orange-accent-3">mdi-flash-alert</v-icon>
             <span class="font-weight-bold text-caption">Lightning alerts</span>
+            <!-- Mirrors the alert's own "Pan map to the triggering strike" setting,
+                 written straight through so a storm can be handled from the map. -->
             <v-btn
-              :color="lightningAutoCenter ? 'primary' : 'grey'"
+              :color="lightningAutoPan ? 'primary' : 'grey'"
+              :loading="autoPanSaving"
               size="x-small"
               variant="text"
               icon="mdi-crosshairs-gps"
               class="ml-auto"
               :title="
-                lightningAutoCenter
-                  ? 'Auto-center on new alerts: on'
-                  : 'Auto-center on new alerts: off'
+                lightningAutoPan
+                  ? 'Auto-pan to new alerts: on (saved with the alert settings)'
+                  : 'Auto-pan to new alerts: off (saved with the alert settings)'
               "
-              @click="lightningAutoCenter = !lightningAutoCenter"
+              @click="toggleAutoPan"
             />
             <v-btn
               size="x-small"
@@ -3233,16 +3260,6 @@ defineExpose({ TILE_PROVIDERS })
               <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
             </div>
           </div>
-          <v-list-item @click="lightningAutoCenter = !lightningAutoCenter">
-            <template #prepend
-              ><v-icon :color="lightningAutoCenter ? 'primary' : 'grey'"
-                >mdi-crosshairs-gps</v-icon
-              ></template
-            >
-            <v-list-item-title>{{
-              lightningAutoCenter ? 'Stop centering on alerts' : 'Center on alerts'
-            }}</v-list-item-title>
-          </v-list-item>
         </v-list>
       </v-menu>
 

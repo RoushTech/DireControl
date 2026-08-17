@@ -26,7 +26,5 @@ export function useMapPrefs() {
     radarOpacity: pref('radarOpacity', 0.6),
     windOpacity: pref('windOpacity', 0.7),
     lightningOpacity: pref('lightningOpacity', 0.8),
-    /** Pan the map to each new lightning proximity alert as it arrives. */
-    lightningAutoCenter: pref('lightningAutoCenter', false),
   }
 }

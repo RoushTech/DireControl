@@ -805,6 +805,7 @@ const lightningAlertEnabled = ref(false)
 const lightningAlertRadiusKm = ref(30)
 const lightningAlertRadiusText = ref('')
 const lightningAlertCooldownMinutes = ref(5)
+const lightningAlertAutoPan = ref(false)
 const lightningAlertsSaving = ref(false)
 const lightningAlertsSaveError = ref('')
 const lightningAlertsSaveSuccess = ref(false)
@@ -819,6 +820,7 @@ function loadLightningAlertSettings(s: SettingsDto) {
   lightningAlertRadiusKm.value = s.lightningAlertRadiusKm
   lightningAlertRadiusText.value = radiusToDisplay(s.lightningAlertRadiusKm)
   lightningAlertCooldownMinutes.value = s.lightningAlertCooldownMinutes
+  lightningAlertAutoPan.value = s.lightningAlertAutoPan
 }
 
 watch(distanceUnit, () => {
@@ -848,7 +850,12 @@ async function saveLightningAlerts() {
 
   lightningAlertsSaving.value = true
   try {
-    await updateLightningAlerts(lightningAlertEnabled.value, radiusKm, cooldown)
+    await updateLightningAlerts(
+      lightningAlertEnabled.value,
+      radiusKm,
+      cooldown,
+      lightningAlertAutoPan.value,
+    )
     lightningAlertRadiusKm.value = radiusKm
     lightningAlertCooldownMinutes.value = cooldown
     lightningAlertsSaveSuccess.value = true
@@ -2140,6 +2147,16 @@ async function confirmDelete() {
                 density="compact"
                 :disabled="!lightningAlertEnabled"
                 hint="Minimum time between alerts while a storm is active."
+                persistent-hint
+                class="mb-3"
+              />
+              <v-switch
+                v-model="lightningAlertAutoPan"
+                label="Pan map to the triggering strike"
+                color="primary"
+                density="compact"
+                :disabled="!lightningAlertEnabled"
+                hint="Centres the map on each strike that raises an alert. The strike stays marked either way."
                 persistent-hint
                 class="mb-3"
               />

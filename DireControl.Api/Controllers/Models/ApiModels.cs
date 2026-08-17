@@ -154,6 +154,7 @@ public sealed class SettingsDto
     public bool LightningAlertEnabled { get; init; }
     public double LightningAlertRadiusKm { get; init; }
     public int LightningAlertCooldownMinutes { get; init; }
+    public bool LightningAlertAutoPan { get; init; }
 }
 
 /// <summary>PUT api/v0/settings/packet — connected-mode, PMS, AGWPE, terminal settings.</summary>
@@ -268,6 +269,7 @@ public sealed class UpdateLightningAlertsRequest
     public bool LightningAlertEnabled { get; init; }
     public double LightningAlertRadiusKm { get; init; } = 30;
     public int LightningAlertCooldownMinutes { get; init; } = 5;
+    public bool LightningAlertAutoPan { get; init; }
 }
 
 // ─── Weather proxy DTOs ────────────────────────────────────────────────────

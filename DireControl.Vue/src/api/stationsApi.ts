@@ -149,11 +149,13 @@ export async function updateLightningAlerts(
   lightningAlertEnabled: boolean,
   lightningAlertRadiusKm: number,
   lightningAlertCooldownMinutes: number,
+  lightningAlertAutoPan: boolean,
 ): Promise<void> {
   await http.put('/api/v0/settings/lightning-alerts', {
     lightningAlertEnabled,
     lightningAlertRadiusKm,
     lightningAlertCooldownMinutes,
+    lightningAlertAutoPan,
   })
 }
 
