@@ -136,6 +136,7 @@ services
 var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
+await LightningPersistenceService.RehydrateBufferAsync(app.Services);
 await app.Services.GetRequiredService<LogLevelService>().ApplyFromDatabaseAsync();
 await app.Services.GetRequiredService<StationIdentityService>().ApplyFromDatabaseAsync();
 

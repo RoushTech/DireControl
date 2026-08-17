@@ -351,6 +351,12 @@ public sealed class LightningAlertDto
     public double Longitude { get; init; }
     public DateTime StrikeTimeUtc { get; init; }
     public double RadiusKm { get; init; }
+    /// <summary>
+    /// Seconds between the strike time reported by the feed and this alert being broadcast —
+    /// i.e. how stale the strike already was. Measured on the server so it is unaffected by
+    /// client clock skew.
+    /// </summary>
+    public double FeedLagSeconds { get; init; }
 }
 
 public sealed class TrackPointDto

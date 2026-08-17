@@ -69,6 +69,11 @@ export interface LightningAlertDto {
   longitude: number
   strikeTimeUtc: string
   radiusKm: number
+  /**
+   * Seconds between the strike and the alert being broadcast, measured on the server —
+   * i.e. how far behind the lightning feed was running. Unaffected by client clock skew.
+   */
+  feedLagSeconds: number
 }
 
 /** A strike that fired a proximity alert, kept client-side so the map can mark it. */

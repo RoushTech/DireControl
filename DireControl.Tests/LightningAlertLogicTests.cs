@@ -35,61 +35,79 @@ public class LightningAlertLogicTests
     }
 
     [Test]
-    public void BoundingBox_ContainsPointsWithinRadius()
+    public void Evaluate_StrikeWithinRadius_Alerts()
     {
-        var (minLat, maxLat, minLon, maxLon) = LightningAlertLogic.BoundingBox(35, -85, 50);
+        var now = DateTime.UtcNow;
 
-        // A strike 40 km due north/east must fall inside the box.
-        Assert.That(minLat, Is.LessThan(35 + 40.0 / 111.32));
-        Assert.That(maxLat, Is.GreaterThan(35 + 40.0 / 111.32));
-        Assert.That(minLon, Is.LessThan(-85));
-        Assert.That(maxLon, Is.GreaterThan(-85 + 40.0 / (111.32 * Math.Cos(35 * Math.PI / 180))));
+        var (shouldAlert, distanceKm) = LightningAlertLogic.Evaluate(
+            At(35.1, -85), 35, -85, 50, now, null, TimeSpan.FromMinutes(5), null);
+
+        Assert.That(shouldAlert, Is.True);
+        Assert.That(distanceKm, Is.EqualTo(11.1).Within(0.2));
     }
 
     [Test]
-    public void BoundingBox_ClampsLatitudeAtPoles()
+    public void Evaluate_StrikeOutsideRadius_DoesNotAlert()
     {
-        var (minLat, maxLat, _, _) = LightningAlertLogic.BoundingBox(89.9, 0, 100);
-        Assert.That(maxLat, Is.EqualTo(90));
-        Assert.That(minLat, Is.GreaterThan(88));
+        var now = DateTime.UtcNow;
+
+        var (shouldAlert, distanceKm) = LightningAlertLogic.Evaluate(
+            At(36.0, -85), 35, -85, 50, now, null, TimeSpan.FromMinutes(5), null);
+
+        Assert.That(shouldAlert, Is.False);
+        Assert.That(distanceKm, Is.EqualTo(111.2).Within(0.5));
     }
 
     [Test]
-    public void BoundingBox_NearPole_CoversAllLongitudes()
+    public void Evaluate_WithinCooldown_DoesNotAlert()
     {
-        var (_, _, minLon, maxLon) = LightningAlertLogic.BoundingBox(89.95, 0, 100);
-        Assert.That(maxLon - minLon, Is.GreaterThanOrEqualTo(360));
+        var now = DateTime.UtcNow;
+
+        var (shouldAlert, _) = LightningAlertLogic.Evaluate(
+            At(35.1, -85), 35, -85, 50, now, now - TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5), null);
+
+        Assert.That(shouldAlert, Is.False);
     }
 
     [Test]
-    public void FindClosest_ReturnsNearestStrikeWithinRadius()
+    public void Evaluate_AfterCooldown_Alerts()
     {
-        var strikes = new[]
-        {
-            At(36.0, -85),   // ~111 km away — outside a 50 km radius
-            At(35.2, -85),   // ~22 km away
-            At(35.1, -85),   // ~11 km away — closest
-        };
+        var now = DateTime.UtcNow;
 
-        var closest = LightningAlertLogic.FindClosest(strikes, 35, -85, 50);
+        var (shouldAlert, _) = LightningAlertLogic.Evaluate(
+            At(35.1, -85), 35, -85, 50, now, now - TimeSpan.FromMinutes(6), TimeSpan.FromMinutes(5), null);
 
-        Assert.That(closest, Is.Not.Null);
-        Assert.That(closest!.Value.Strike.Latitude, Is.EqualTo(35.1));
-        Assert.That(closest.Value.DistanceKm, Is.EqualTo(11.1).Within(0.2));
+        Assert.That(shouldAlert, Is.True);
     }
 
+    /// <summary>The feed can redeliver a strike; it must not alert twice even with no cooldown.</summary>
     [Test]
-    public void FindClosest_NoStrikeWithinRadius_ReturnsNull()
+    public void Evaluate_SameStrikeRedelivered_DoesNotAlertTwice()
     {
-        var strikes = new[] { At(36.0, -85) }; // ~111 km away
+        var now = DateTime.UtcNow;
+        var strike = new LightningStrike(now.AddSeconds(-3), 35.1, -85);
 
-        Assert.That(LightningAlertLogic.FindClosest(strikes, 35, -85, 50), Is.Null);
+        var (first, _) = LightningAlertLogic.Evaluate(
+            strike, 35, -85, 50, now, null, TimeSpan.Zero, null);
+        var (second, _) = LightningAlertLogic.Evaluate(
+            strike, 35, -85, 50, now, now, TimeSpan.Zero, strike);
+
+        Assert.That(first, Is.True);
+        Assert.That(second, Is.False);
     }
 
+    /// <summary>A different strike with a zero cooldown is a new alert, not a duplicate.</summary>
     [Test]
-    public void FindClosest_EmptyInput_ReturnsNull()
+    public void Evaluate_DifferentStrikeWithNoCooldown_Alerts()
     {
-        Assert.That(LightningAlertLogic.FindClosest([], 35, -85, 50), Is.Null);
+        var now = DateTime.UtcNow;
+        var previous = new LightningStrike(now.AddSeconds(-30), 35.1, -85);
+        var latest = new LightningStrike(now.AddSeconds(-1), 35.12, -85.02);
+
+        var (shouldAlert, _) = LightningAlertLogic.Evaluate(
+            latest, 35, -85, 50, now, now.AddSeconds(-30), TimeSpan.Zero, previous);
+
+        Assert.That(shouldAlert, Is.True);
     }
 
     [Test]

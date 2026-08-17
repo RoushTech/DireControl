@@ -7,7 +7,6 @@ namespace DireControl.Api.Services.Weather;
 public static class LightningAlertLogic
 {
     private const double EarthRadiusKm = 6371;
-    private const double KmPerDegreeLat = 111.32;
 
     public static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
     {
@@ -31,37 +30,26 @@ public static class LightningAlertLogic
     }
 
     /// <summary>
-    /// Bounding box covering <paramref name="radiusKm"/> around a point, suitable for
-    /// <see cref="LightningStrikeBuffer.Query"/>. The longitude span widens with latitude
-    /// and degenerates to the whole world near the poles; the buffer handles both a
-    /// wrapped box (minLon &gt; maxLon) and a ≥ 360° span.
+    /// Whether a strike should raise an alert, and how far away it is. Evaluated per strike
+    /// as it arrives from the feed, so a strike is only ever judged once — the alert fires
+    /// on the first strike to breach the radius rather than the closest one in a poll window.
     /// </summary>
-    public static (double MinLat, double MaxLat, double MinLon, double MaxLon) BoundingBox(
-        double lat, double lon, double radiusKm)
+    /// <param name="lastAlertedStrike">
+    /// The strike that raised the previous alert. The feed can redeliver a strike, and an
+    /// identical one must never alert twice regardless of how short the cooldown is.
+    /// </param>
+    public static (bool ShouldAlert, double DistanceKm) Evaluate(
+        LightningStrike strike,
+        double homeLat, double homeLon, double radiusKm,
+        DateTime nowUtc, DateTime? lastAlertUtc, TimeSpan cooldown,
+        LightningStrike? lastAlertedStrike)
     {
-        var dLat = radiusKm / KmPerDegreeLat;
-        var minLat = Math.Max(-90, lat - dLat);
-        var maxLat = Math.Min(90, lat + dLat);
-
-        var cosLat = Math.Cos(ToRad(lat));
-        var dLon = cosLat <= 0.01 ? 180 : Math.Min(180, dLat / cosLat);
-        return (minLat, maxLat, lon - dLon, lon + dLon);
-    }
-
-    /// <summary>The strike closest to home that lies within <paramref name="radiusKm"/>, or null.</summary>
-    public static (LightningStrike Strike, double DistanceKm)? FindClosest(
-        IEnumerable<LightningStrike> strikes, double homeLat, double homeLon, double radiusKm)
-    {
-        (LightningStrike Strike, double DistanceKm)? closest = null;
-        foreach (var strike in strikes)
-        {
-            var distanceKm = HaversineKm(homeLat, homeLon, strike.Latitude, strike.Longitude);
-            if (distanceKm > radiusKm)
-                continue;
-            if (closest is null || distanceKm < closest.Value.DistanceKm)
-                closest = (strike, distanceKm);
-        }
-        return closest;
+        var distanceKm = HaversineKm(homeLat, homeLon, strike.Latitude, strike.Longitude);
+        if (distanceKm > radiusKm)
+            return (false, distanceKm);
+        if (lastAlertedStrike == strike)
+            return (false, distanceKm);
+        return (CooldownElapsed(nowUtc, lastAlertUtc, cooldown), distanceKm);
     }
 
     public static bool CooldownElapsed(DateTime nowUtc, DateTime? lastAlertUtc, TimeSpan cooldown)

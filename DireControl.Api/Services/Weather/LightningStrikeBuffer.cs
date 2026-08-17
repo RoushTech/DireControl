@@ -22,6 +22,14 @@ public sealed class LightningStrikeBuffer
 
     public volatile bool IsConnected;
 
+    /// <summary>
+    /// Raised on the ingest thread for every strike decoded from the live feed, so alerting
+    /// can react the moment a strike lands instead of waiting for a poll. Handlers must be
+    /// cheap, non-blocking, and must not throw — they run on the feed's receive loop.
+    /// Not raised for strikes loaded by <see cref="Seed"/>, which are already history.
+    /// </summary>
+    public event Action<LightningStrike>? StrikeReceived;
+
     private long _lastStrikeTicks;
 
     public DateTime? LastStrikeUtc
@@ -52,6 +60,30 @@ public sealed class LightningStrikeBuffer
         var cutoff = DateTime.UtcNow - Retention;
         while (_strikes.TryPeek(out var oldest) && oldest.TimeUtc < cutoff)
             _strikes.TryDequeue(out _);
+
+        StrikeReceived?.Invoke(strike);
+    }
+
+    /// <summary>
+    /// Refills the buffer from persisted history at startup, oldest first, so a restart
+    /// doesn't blank the map. Seeded strikes are already in the database and long past,
+    /// so they are neither queued for persistence nor announced to
+    /// <see cref="StrikeReceived"/> — replaying them as live would fire stale alerts.
+    /// </summary>
+    public void Seed(IEnumerable<LightningStrike> strikes)
+    {
+        var cutoff = DateTime.UtcNow - Retention;
+        var newestTicks = 0L;
+        foreach (var strike in strikes)
+        {
+            if (strike.TimeUtc < cutoff)
+                continue;
+            _strikes.Enqueue(strike);
+            newestTicks = Math.Max(newestTicks, strike.TimeUtc.Ticks);
+        }
+
+        if (newestTicks > Interlocked.Read(ref _lastStrikeTicks))
+            Interlocked.Exchange(ref _lastStrikeTicks, newestTicks);
     }
 
     /// <summary>

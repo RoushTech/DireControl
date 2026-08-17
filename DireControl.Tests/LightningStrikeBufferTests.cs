@@ -12,6 +12,58 @@ public class LightningStrikeBufferTests
         => new(DateTime.UtcNow - age, lat, lon);
 
     [Test]
+    public void Add_RaisesStrikeReceived()
+    {
+        var buffer = new LightningStrikeBuffer();
+        var received = new List<LightningStrike>();
+        buffer.StrikeReceived += received.Add;
+
+        var strike = At(35, -85, TimeSpan.FromSeconds(2));
+        buffer.Add(strike);
+
+        Assert.That(received, Is.EqualTo(new[] { strike }));
+    }
+
+    [Test]
+    public void Seed_FillsBufferWithoutRaisingStrikeReceived()
+    {
+        var buffer = new LightningStrikeBuffer();
+        var received = new List<LightningStrike>();
+        buffer.StrikeReceived += received.Add;
+
+        buffer.Seed([At(35, -85, TimeSpan.FromMinutes(10)), At(36, -86, TimeSpan.FromMinutes(5))]);
+
+        Assert.That(buffer.Count, Is.EqualTo(2));
+        Assert.That(received, Is.Empty, "replayed history must not fire alerts");
+    }
+
+    [Test]
+    public void Seed_DropsStrikesPastRetention()
+    {
+        var buffer = new LightningStrikeBuffer();
+
+        buffer.Seed([
+            At(35, -85, LightningStrikeBuffer.Retention + TimeSpan.FromMinutes(5)),
+            At(36, -86, TimeSpan.FromMinutes(5)),
+        ]);
+
+        Assert.That(buffer.Count, Is.EqualTo(1));
+        var result = buffer.Query(-90, 90, -180, 180, DateTime.UtcNow.AddHours(-2), 100);
+        Assert.That(result.Single().Latitude, Is.EqualTo(36));
+    }
+
+    /// <summary>Seeded strikes are already persisted — re-saving them would duplicate history.</summary>
+    [Test]
+    public void Seed_DoesNotQueueStrikesForPersistence()
+    {
+        var buffer = new LightningStrikeBuffer();
+
+        buffer.Seed([At(35, -85, TimeSpan.FromMinutes(5))]);
+
+        Assert.That(buffer.DrainPending(100), Is.Empty);
+    }
+
+    [Test]
     public void Add_PrunesStrikesPastRetention()
     {
         var buffer = new LightningStrikeBuffer();

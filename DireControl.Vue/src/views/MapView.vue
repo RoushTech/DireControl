@@ -41,7 +41,7 @@ import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
 import OwnStationPanel from '@/components/OwnStationPanel.vue'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRadiosStore } from '@/stores/radiosStore'
-import { cardinal, useLightningAlertsStore } from '@/stores/lightningAlertsStore'
+import { cardinal, formatStrikeAge, useLightningAlertsStore } from '@/stores/lightningAlertsStore'
 import type { DigiConfirmationBroadcastDto } from '@/types/radio'
 
 const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
@@ -1426,6 +1426,7 @@ function renderAlertStrikes() {
     marker.bindPopup(
       `<strong>Lightning alert</strong><br>${alertStrikeTitle(strike)} of station` +
         `<br>Struck: ${formatTime(strike.strikeTimeUtc)}` +
+        `<br>Alerted: ${formatStrikeAge(strike.feedLagSeconds)} (feed lag)` +
         `<br>Alert radius: ${formatDistance(strike.radiusKm)}`,
     )
     if (isNewest) {
@@ -3038,7 +3039,7 @@ defineExpose({ TILE_PROVIDERS })
               v-for="strike in alertStack"
               :key="strike.key"
               class="strike-alert-item"
-              :title="`Center on this strike — ${formatTime(strike.strikeTimeUtc)}`"
+              :title="`Center on this strike — struck ${formatTime(strike.strikeTimeUtc)}, alerted ${formatStrikeAge(strike.feedLagSeconds)}`"
               @click="focusAlertStrike(strike)"
             >
               <v-icon size="14" color="deep-orange-accent-3">mdi-flash</v-icon>
