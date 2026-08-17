@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
 import 'leaflet.heat'
@@ -21,7 +21,8 @@ import {
   type WeatherManifest,
 } from '@/api/weatherApi'
 import { StationType, type StationDto, type SettingsDto } from '@/types/station'
-import type { PacketBroadcastDto, ResolvedPathEntry } from '@/types/packet'
+import type { PacketBroadcastDto, ResolvedPathEntry, TrackPointDto } from '@/types/packet'
+import type { TriggeringStrike } from '@/types/alert'
 import type { TileProviderConfig } from '@/types/map'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
@@ -34,6 +35,7 @@ import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
 import OwnStationPanel from '@/components/OwnStationPanel.vue'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRadiosStore } from '@/stores/radiosStore'
+import { cardinal, useLightningAlertsStore } from '@/stores/lightningAlertsStore'
 import type { DigiConfirmationBroadcastDto } from '@/types/radio'
 
 const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
@@ -142,8 +144,10 @@ const radiosStore = useRadiosStore()
 const theme = useTheme()
 const { mobile } = useDisplay()
 const { distanceUnit, formatDistance } = useUnits()
+const lightningAlertsStore = useLightningAlertsStore()
 const {
   tracks: showTracks,
+  trackMinutes,
   estPos: showGhostMarkers,
   stale: showStaleStations,
   zones: showOverlays,
@@ -157,6 +161,7 @@ const {
   radarOpacity,
   windOpacity,
   lightningOpacity,
+  lightningAutoCenter,
 } = useMapPrefs()
 
 // ─── Layer panel ──────────────────────────────────────────────────────────────
@@ -233,8 +238,11 @@ const mobileStationSheetOpen = ref(false)
 let highlightMarker: L.CircleMarker | null = null
 let highlightTimeout: ReturnType<typeof setTimeout> | null = null
 
-// Movement tracks state
+// Movement tracks state. Points are cached per station so the track can be re-clipped
+// to a shorter window (pref change, or simply the passage of time) without refetching.
 const trackLayers = new Map<string, L.LayerGroup>()
+const trackPoints = new Map<string, TrackPointDto[]>()
+let trackPruneInterval: ReturnType<typeof setInterval> | null = null
 
 // Packet path visualisation state
 // Each entry holds the map layer group, an optional fade timer, and whether
@@ -328,7 +336,7 @@ let radarFrameReady: boolean[] = []
 let currentRadarFrame = 0
 // Index of the frame shown while idle (the newest past frame); when the shown frame
 // differs, lightning rendering follows the radar frame time instead of live data.
-let radarRestingIdx = 0
+const radarRestingIdx = ref(0)
 // Bumped whenever playback stops or layers are rebuilt so that an advance() continuation
 // still awaiting a tile load can detect it is stale and die instead of double-advancing.
 let radarAnimGeneration = 0
@@ -612,6 +620,8 @@ async function checkHomePosition() {
   if (settings?.homePosition) {
     showNoHomePositionBanner.value = false
     await drawHomeMarker()
+    // Leader lines need the home position, so redraw any alerts that predate it
+    renderAlertStrikes()
     if (homePositionPollInterval) {
       clearInterval(homePositionPollInterval)
       homePositionPollInterval = null
@@ -919,6 +929,25 @@ function stepRadarFrame(delta: -1 | 1) {
   keepRadarControlsVisible()
 }
 
+/**
+ * Stops playback and snaps radar back to the newest observed frame, which also drops
+ * lightning out of frame-synced playback and back onto live strikes.
+ */
+function showLatestWeather() {
+  pauseRadar()
+  if (radarFrameLayers.length > 0) showRadarFrame(radarRestingIdx.value)
+  refreshLightningView()
+  keepRadarControlsVisible()
+  keepLightningControlsVisible()
+}
+
+/** True while radar/lightning are showing something other than the newest data. */
+const showingHistoricalWeather = computed(
+  () =>
+    radarFrameCount.value > 0 &&
+    (radarPlaying.value || radarCurrentIdx.value !== radarRestingIdx.value),
+)
+
 // ── Weather controls auto-hide ─────────────────────────────────────────────
 
 function keepRadarControlsVisible() {
@@ -978,7 +1007,7 @@ function buildRadarFrames(manifest: WeatherManifest) {
     })
   })
   radarFrameCount.value = radarFrameLayers.length
-  radarRestingIdx = Math.max(0, manifest.radar.past.length - 1)
+  radarRestingIdx.value = Math.max(0, manifest.radar.past.length - 1)
   // Frame times changed, so any radar-synced lightning history needs a refetch.
   lightningHistoryLoaded = false
 }
@@ -993,7 +1022,7 @@ async function refreshRadarFrames() {
   buildRadarFrames(radarManifest)
   // Resume at the frame closest in time to where the user was rather than snapping to
   // the newest frame mid-loop.
-  let idx = radarRestingIdx
+  let idx = radarRestingIdx.value
   if (wasPlaying && prevTime != null && radarFrameMeta.length > 0) {
     let best = 0
     for (let i = 1; i < radarFrameMeta.length; i++) {
@@ -1021,7 +1050,7 @@ async function enableRadar() {
     }
     buildRadarFrames(radarManifest)
     // Start on the last historical frame so we see the most recent real data first
-    showRadarFrame(radarRestingIdx)
+    showRadarFrame(radarRestingIdx.value)
     keepRadarControlsVisible()
     radarRefreshInterval = setInterval(() => void refreshRadarFrames(), 5 * 60 * 1000)
   } finally {
@@ -1171,7 +1200,7 @@ function lightningFollowsRadar(): boolean {
   return (
     showLightning.value &&
     radarFrameMeta.length > 0 &&
-    (radarPlaying.value || radarCurrentIdx.value !== radarRestingIdx)
+    (radarPlaying.value || radarCurrentIdx.value !== radarRestingIdx.value)
   )
 }
 
@@ -1287,6 +1316,123 @@ async function toggleLightning() {
   }
 }
 
+// ── Triggering strikes (proximity alerts) ─────────────────────────────────────
+// Rendered in their own pane and layer group so they are never touched by the
+// live/playback rendering of the lightning layer: an alert marker stays put while
+// the radar is scrubbed through time, and shows even with the layer switched off.
+
+const triggeringStrikes = computed(() => lightningAlertsStore.triggeringStrikes)
+/** Newest first — the order the alert stack is listed in. */
+const alertStack = computed(() => [...triggeringStrikes.value].reverse())
+
+let alertStrikeLayer: L.LayerGroup | null = null
+const alertStrikeMarkers = new Map<string, L.Marker>()
+
+function ensureAlertPane() {
+  if (!map.value) return
+  if (!map.value.getPane('lightningAlertPane')) {
+    const pane = map.value.createPane('lightningAlertPane')
+    pane.style.zIndex = '620' // above markerPane (600), below popupPane (700)
+  }
+}
+
+function alertStrikeTitle(strike: TriggeringStrike): string {
+  return `${formatDistance(strike.distanceKm)} ${cardinal(strike.bearingDegrees)}`
+}
+
+function renderAlertStrikes() {
+  if (!map.value) return
+  ensureAlertPane()
+  if (!alertStrikeLayer) alertStrikeLayer = L.layerGroup().addTo(map.value)
+  alertStrikeLayer.clearLayers()
+  alertStrikeMarkers.clear()
+
+  const strikes = triggeringStrikes.value
+  const homePos = settingsCache?.homePosition
+  strikes.forEach((strike, i) => {
+    const isNewest = i === strikes.length - 1
+    const fade = isNewest ? 1 : 0.45
+
+    // Leader line from the home station makes "this is the strike that alerted" unambiguous.
+    if (homePos) {
+      alertStrikeLayer!.addLayer(
+        L.polyline(
+          [
+            [homePos.lat, homePos.lon],
+            [strike.latitude, strike.longitude],
+          ],
+          {
+            pane: 'lightningAlertPane',
+            color: '#FF3D00',
+            weight: 2,
+            opacity: 0.75 * fade,
+            dashArray: '6 6',
+            interactive: false,
+          },
+        ),
+      )
+    }
+
+    const marker = L.marker([strike.latitude, strike.longitude], {
+      pane: 'lightningAlertPane',
+      icon: L.divIcon({
+        className: '',
+        html: `<div class="strike-alert-marker${isNewest ? ' strike-alert-marker-newest' : ''}">
+                 <span class="strike-alert-pulse"></span>
+                 <span class="strike-alert-bolt">⚡</span>
+               </div>`,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      }),
+      zIndexOffset: 1000,
+    })
+    marker.bindPopup(
+      `<strong>Lightning alert</strong><br>${alertStrikeTitle(strike)} of station` +
+        `<br>Struck: ${formatTime(strike.strikeTimeUtc)}` +
+        `<br>Alert radius: ${formatDistance(strike.radiusKm)}`,
+    )
+    if (isNewest) {
+      marker.bindTooltip(alertStrikeTitle(strike), {
+        permanent: true,
+        direction: 'top',
+        offset: [0, -16],
+        className: 'strike-alert-label',
+      })
+    }
+    alertStrikeLayer!.addLayer(marker)
+    alertStrikeMarkers.set(strike.key, marker)
+  })
+}
+
+/** Centres the map on a triggering strike and opens its popup. */
+function focusAlertStrike(strike: TriggeringStrike) {
+  if (!map.value) return
+  map.value.flyTo([strike.latitude, strike.longitude], Math.max(map.value.getZoom(), 9), {
+    duration: 0.6,
+  })
+  alertStrikeMarkers.get(strike.key)?.openPopup()
+}
+
+function dismissAlertStrike(strike: TriggeringStrike) {
+  lightningAlertsStore.dismissTrigger(strike.key)
+}
+
+function clearAlertStrikes() {
+  lightningAlertsStore.clearTriggers()
+}
+
+watch(
+  triggeringStrikes,
+  (strikes, prev) => {
+    renderAlertStrikes()
+    const newest = strikes[strikes.length - 1]
+    if (!newest || !lightningAutoCenter.value) return
+    if (prev?.some((s) => s.key === newest.key)) return
+    focusAlertStrike(newest)
+  },
+  { deep: true },
+)
+
 // --- Sidebar & Panel ---
 
 function toggleSidebar() {
@@ -1341,60 +1487,102 @@ function onHighlightPosition(lat: number, lon: number) {
 
 // --- Movement Tracks ---
 
+/** Selectable track windows, in minutes. */
+const TRACK_WINDOW_OPTIONS = [
+  { title: '5 min', value: 5 },
+  { title: '15 min', value: 15 },
+  { title: '30 min', value: 30 },
+  { title: '1 hr', value: 60 },
+  { title: '2 hr', value: 120 },
+  { title: '6 hr', value: 360 },
+  { title: '12 hr', value: 720 },
+  { title: '24 hr', value: 1440 },
+]
+
 async function fetchAndDrawTrack(callsign: string) {
   if (!map.value) return
-  removeTrack(callsign)
   try {
-    const points = await getStationTrack(callsign)
-    if (points.length < 2) return
-    const group = L.layerGroup()
-    const totalPoints = points.length
-    for (let i = 0; i < totalPoints - 1; i++) {
-      const from = points[i]!
-      const to = points[i + 1]!
-      const opacity = 0.2 + 0.8 * (i / (totalPoints - 1))
-      const weight = 2 + Math.round(2 * (i / (totalPoints - 1)))
-      const segment = L.polyline(
-        [
-          [from.latitude, from.longitude],
-          [to.latitude, to.longitude],
-        ],
-        { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
-      )
-      group.addLayer(segment)
-    }
-    for (let i = 0; i < totalPoints; i++) {
-      const pt = points[i]!
-      const opacity = 0.3 + 0.7 * (i / Math.max(totalPoints - 1, 1))
-      const circle = L.circleMarker([pt.latitude, pt.longitude], {
-        radius: 4,
-        color: '#1976D2',
-        fillColor: '#1976D2',
-        fillOpacity: opacity,
-        weight: 1,
-        opacity,
-      })
-      const speedStr = pt.speed != null ? `${pt.speed.toFixed(1)} knots` : 'N/A'
-      circle.bindPopup(
-        `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
-      )
-      group.addLayer(circle)
-    }
-    trackLayers.set(callsign, group)
-    if (showTracks.value) {
-      group.addTo(map.value)
-    }
+    trackPoints.set(callsign, await getStationTrack(callsign, trackMinutes.value))
+    drawTrack(callsign)
   } catch (err) {
     console.error(`Failed to fetch track for ${callsign}:`, err)
   }
 }
 
-function removeTrack(callsign: string) {
+/** Redraws a cached track, clipped to the configured window. */
+function drawTrack(callsign: string) {
+  if (!map.value) return
+  removeTrack(callsign, { keepPoints: true })
+  const cutoff = Date.now() - trackMinutes.value * 60_000
+  const points = (trackPoints.get(callsign) ?? []).filter(
+    (p) => new Date(p.receivedAt).getTime() >= cutoff,
+  )
+  if (points.length < 2) return
+
+  const group = L.layerGroup()
+  const totalPoints = points.length
+  for (let i = 0; i < totalPoints - 1; i++) {
+    const from = points[i]!
+    const to = points[i + 1]!
+    const opacity = 0.2 + 0.8 * (i / (totalPoints - 1))
+    const weight = 2 + Math.round(2 * (i / (totalPoints - 1)))
+    const segment = L.polyline(
+      [
+        [from.latitude, from.longitude],
+        [to.latitude, to.longitude],
+      ],
+      { color: '#1976D2', weight, opacity, lineCap: 'round', lineJoin: 'round' },
+    )
+    group.addLayer(segment)
+  }
+  for (let i = 0; i < totalPoints; i++) {
+    const pt = points[i]!
+    const opacity = 0.3 + 0.7 * (i / Math.max(totalPoints - 1, 1))
+    const circle = L.circleMarker([pt.latitude, pt.longitude], {
+      radius: 4,
+      color: '#1976D2',
+      fillColor: '#1976D2',
+      fillOpacity: opacity,
+      weight: 1,
+      opacity,
+    })
+    const speedStr = pt.speed != null ? `${pt.speed.toFixed(1)} knots` : 'N/A'
+    circle.bindPopup(
+      `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
+    )
+    group.addLayer(circle)
+  }
+  trackLayers.set(callsign, group)
+  if (showTracks.value) {
+    group.addTo(map.value)
+  }
+}
+
+/** Re-clips every cached track so tails expire on their own, without new beacons. */
+function pruneTracks() {
+  if (!showTracks.value) return
+  for (const callsign of trackPoints.keys()) {
+    drawTrack(callsign)
+  }
+}
+
+/** Refetches every drawn track — used when the window grows past what is cached. */
+async function reloadTracks() {
+  if (!showTracks.value) return
+  // Snapshot the keys — fetchAndDrawTrack writes back into the same map.
+  const callsigns = [...trackPoints.keys()]
+  for (const callsign of callsigns) {
+    await fetchAndDrawTrack(callsign)
+  }
+}
+
+function removeTrack(callsign: string, opts?: { keepPoints?: boolean }) {
   const existing = trackLayers.get(callsign)
   if (existing) {
     existing.remove()
     trackLayers.delete(callsign)
   }
+  if (!opts?.keepPoints) trackPoints.delete(callsign)
 }
 
 function toggleTracks() {
@@ -1403,9 +1591,8 @@ function toggleTracks() {
   if (showTracks.value) {
     for (const [callsign, station] of stationCache) {
       if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
-        const existing = trackLayers.get(callsign)
-        if (existing) {
-          existing.addTo(map.value)
+        if (trackPoints.has(callsign)) {
+          drawTrack(callsign)
         } else {
           fetchAndDrawTrack(callsign)
         }
@@ -1422,7 +1609,7 @@ async function loadTracksForMobileStations() {
   if (!showTracks.value) return
   for (const [callsign, station] of stationCache) {
     if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
-      if (!trackLayers.has(callsign)) {
+      if (!trackPoints.has(callsign)) {
         await fetchAndDrawTrack(callsign)
       }
     }
@@ -2155,6 +2342,15 @@ watch(
   },
 )
 
+// Watch: track window — shrinking only needs a re-clip, growing needs more history
+watch(trackMinutes, (minutes, prev) => {
+  if (minutes > prev) {
+    void reloadTracks()
+  } else {
+    pruneTracks()
+  }
+})
+
 // Watch: weather overlay opacity — apply immediately to live layers
 watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
 watch(windOpacity, (v) => windLayer?.setOpacity(v))
@@ -2257,6 +2453,13 @@ onMounted(async () => {
   updateStaleDecayClasses()
   staleDecayInterval = setInterval(updateStaleDecayClasses, 60_000)
 
+  // Track tails expire on their own — re-clip every 30 s even without new beacons
+  trackPruneInterval = setInterval(pruneTracks, 30_000)
+
+  // Alerts can predate this mount (they arrive on any screen), so draw what's live
+  lightningAlertsStore.pruneTriggers()
+  renderAlertStrikes()
+
   // Restore persisted layer states (issue #32 item 2)
   if (showRings.value) await drawRings()
   if (showOverlays.value) await loadAndDrawOverlays()
@@ -2323,6 +2526,10 @@ onUnmounted(() => {
     clearInterval(staleDecayInterval)
     staleDecayInterval = null
   }
+  if (trackPruneInterval) {
+    clearInterval(trackPruneInterval)
+    trackPruneInterval = null
+  }
   for (const group of ghostLayers.values()) {
     group.remove()
   }
@@ -2331,6 +2538,10 @@ onUnmounted(() => {
     group.remove()
   }
   trackLayers.clear()
+  trackPoints.clear()
+  alertStrikeLayer?.remove()
+  alertStrikeLayer = null
+  alertStrikeMarkers.clear()
   for (const marker of staleMarkers.values()) {
     marker.remove()
   }
@@ -2443,6 +2654,21 @@ defineExpose({ TILE_PROVIDERS })
                 aria-label="Movement tracks"
                 @update:model-value="toggleTracks"
               />
+            </div>
+            <div v-if="showTracks" class="layer-sub">
+              <div class="d-flex align-center ga-2">
+                <span class="layer-opacity-label">Trail length</span>
+                <v-select
+                  v-model="trackMinutes"
+                  :items="TRACK_WINDOW_OPTIONS"
+                  item-title="title"
+                  item-value="value"
+                  density="compact"
+                  hide-details
+                  class="track-window-select"
+                  aria-label="Movement track length"
+                />
+              </div>
             </div>
             <div class="layer-row">
               <v-icon size="16" :color="showGhostMarkers ? 'primary' : 'grey'"
@@ -2559,6 +2785,16 @@ defineExpose({ TILE_PROVIDERS })
                   variant="text"
                   @click="stepRadarFrame(1)"
                 />
+                <v-btn
+                  :disabled="!showingHistoricalWeather"
+                  size="x-small"
+                  variant="tonal"
+                  color="primary"
+                  class="radar-latest-btn"
+                  @click="showLatestWeather"
+                >
+                  <v-icon size="14" start>mdi-clock-fast</v-icon>Latest
+                </v-btn>
                 <span class="radar-timestamp">{{ radarTimestamp }}</span>
                 <span class="radar-frame-dots"
                   >{{ radarCurrentIdx + 1 }}/{{ radarFrameCount }}</span
@@ -2678,6 +2914,32 @@ defineExpose({ TILE_PROVIDERS })
                 />
                 <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
               </div>
+              <div v-if="showingHistoricalWeather" class="d-flex align-center ga-2">
+                <span class="layer-opacity-label">Showing history</span>
+                <v-btn
+                  size="x-small"
+                  variant="tonal"
+                  color="primary"
+                  class="radar-latest-btn"
+                  @click="showLatestWeather"
+                >
+                  <v-icon size="14" start>mdi-clock-fast</v-icon>Latest
+                </v-btn>
+              </div>
+            </div>
+            <div class="layer-row">
+              <v-icon size="16" :color="lightningAutoCenter ? 'primary' : 'grey'"
+                >mdi-crosshairs-gps</v-icon
+              >
+              <span class="layer-row-label">Center on alerts</span>
+              <v-switch
+                v-model="lightningAutoCenter"
+                density="compact"
+                hide-details
+                color="primary"
+                class="layer-switch"
+                aria-label="Center map on lightning alerts"
+              />
             </div>
           </div>
 
@@ -2716,6 +2978,55 @@ defineExpose({ TILE_PROVIDERS })
             v-model:expanded="ringPanelOpen"
           />
         </div>
+
+        <!-- Lightning proximity alerts — newest first, stacking as they arrive
+             and dropping off as they expire. -->
+        <div v-if="alertStack.length > 0" class="strike-alert-panel">
+          <div class="strike-alert-panel-head">
+            <v-icon size="16" color="deep-orange-accent-3">mdi-flash-alert</v-icon>
+            <span class="font-weight-bold text-caption">Lightning alerts</span>
+            <v-btn
+              :color="lightningAutoCenter ? 'primary' : 'grey'"
+              size="x-small"
+              variant="text"
+              icon="mdi-crosshairs-gps"
+              class="ml-auto"
+              :title="
+                lightningAutoCenter
+                  ? 'Auto-center on new alerts: on'
+                  : 'Auto-center on new alerts: off'
+              "
+              @click="lightningAutoCenter = !lightningAutoCenter"
+            />
+            <v-btn
+              size="x-small"
+              variant="text"
+              icon="mdi-close-box-multiple-outline"
+              title="Clear all alerts"
+              @click="clearAlertStrikes"
+            />
+          </div>
+          <div class="strike-alert-list">
+            <button
+              v-for="strike in alertStack"
+              :key="strike.key"
+              class="strike-alert-item"
+              :title="`Center on this strike — ${formatTime(strike.strikeTimeUtc)}`"
+              @click="focusAlertStrike(strike)"
+            >
+              <v-icon size="14" color="deep-orange-accent-3">mdi-flash</v-icon>
+              <span class="strike-alert-item-dist">{{ alertStrikeTitle(strike) }}</span>
+              <span class="strike-alert-item-time">{{ formatTime(strike.strikeTimeUtc) }}</span>
+              <v-icon
+                size="14"
+                class="strike-alert-item-x"
+                title="Dismiss"
+                @click.stop="dismissAlertStrike(strike)"
+                >mdi-close</v-icon
+              >
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Mobile: layer menu button (⋮) -->
@@ -2745,6 +3056,22 @@ defineExpose({ TILE_PROVIDERS })
             >
             <v-list-item-title>{{ showTracks ? 'Hide Tracks' : 'Show Tracks' }}</v-list-item-title>
           </v-list-item>
+          <div v-if="showTracks" class="mobile-layer-sub">
+            <div class="d-flex align-center ga-2">
+              <span class="layer-opacity-label">Trail length</span>
+              <v-select
+                v-model="trackMinutes"
+                :items="TRACK_WINDOW_OPTIONS"
+                item-title="title"
+                item-value="value"
+                density="compact"
+                hide-details
+                class="track-window-select"
+                aria-label="Movement track length"
+                @click.stop
+              />
+            </div>
+          </div>
           <v-list-item @click="toggleGhostMarkers">
             <template #prepend
               ><v-icon :color="showGhostMarkers ? 'indigo' : 'grey'"
@@ -2830,6 +3157,16 @@ defineExpose({ TILE_PROVIDERS })
                 variant="text"
                 @click.stop="stepRadarFrame(1)"
               />
+              <v-btn
+                :disabled="!showingHistoricalWeather"
+                size="x-small"
+                variant="tonal"
+                color="primary"
+                class="radar-latest-btn"
+                @click.stop="showLatestWeather"
+              >
+                <v-icon size="14" start>mdi-clock-fast</v-icon>Latest
+              </v-btn>
               <span class="radar-timestamp">{{ radarTimestamp }}</span>
               <span class="radar-frame-dots">{{ radarCurrentIdx + 1 }}/{{ radarFrameCount }}</span>
             </div>
@@ -2896,6 +3233,16 @@ defineExpose({ TILE_PROVIDERS })
               <span class="layer-opacity-pct">{{ Math.round(lightningOpacity * 100) }}%</span>
             </div>
           </div>
+          <v-list-item @click="lightningAutoCenter = !lightningAutoCenter">
+            <template #prepend
+              ><v-icon :color="lightningAutoCenter ? 'primary' : 'grey'"
+                >mdi-crosshairs-gps</v-icon
+              ></template
+            >
+            <v-list-item-title>{{
+              lightningAutoCenter ? 'Stop centering on alerts' : 'Center on alerts'
+            }}</v-list-item-title>
+          </v-list-item>
         </v-list>
       </v-menu>
 
@@ -3225,6 +3572,84 @@ defineExpose({ TILE_PROVIDERS })
   flex-shrink: 0;
 }
 
+.radar-latest-btn {
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.track-window-select {
+  width: 104px;
+  flex-shrink: 0;
+}
+
+/* ── Lightning proximity alerts ─────────────────────────────────────────────── */
+
+.strike-alert-panel {
+  width: 232px;
+  background: rgb(var(--v-theme-surface));
+  border-radius: 10px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-left: 3px solid #ff3d00;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.strike-alert-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 8px;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.strike-alert-list {
+  max-height: 172px;
+  overflow-y: auto;
+}
+
+.strike-alert-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px 4px 8px;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.strike-alert-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.07);
+}
+
+/* Newest alert reads first — the one the toast just announced. */
+.strike-alert-item:first-child .strike-alert-item-dist {
+  font-weight: 700;
+}
+
+.strike-alert-item-dist {
+  white-space: nowrap;
+}
+
+.strike-alert-item-time {
+  margin-left: auto;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
+.strike-alert-item-x {
+  opacity: 0.45;
+}
+
+.strike-alert-item-x:hover {
+  opacity: 1;
+}
+
 .layer-opacity-label {
   font-size: 11px;
   white-space: nowrap;
@@ -3265,6 +3690,78 @@ defineExpose({ TILE_PROVIDERS })
 .aprs-icon-container {
   background: transparent !important;
   border: none !important;
+}
+
+/* ── Alert-triggering lightning strike ──────────────────────────────────────
+   Deliberately louder than the ordinary lightning dots, and drawn in its own pane
+   so radar playback never clears or dims it. */
+
+.strike-alert-marker {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+}
+
+/* Static ring — the strike's actual position. */
+.strike-alert-marker::after {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 2px solid #ff3d00;
+  background: rgba(255, 61, 0, 0.25);
+}
+
+/* Expanding halo, newest alert only. */
+.strike-alert-pulse {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 2px solid #ff3d00;
+}
+
+.strike-alert-marker-newest .strike-alert-pulse {
+  animation: strike-alert-pulse 1.6s ease-out infinite;
+}
+
+.strike-alert-bolt {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.85));
+}
+
+@keyframes strike-alert-pulse {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.strike-alert-label {
+  background: #ff3d00 !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 3px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  padding: 1px 5px !important;
+  white-space: nowrap !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
+.strike-alert-label::before {
+  border-top-color: #ff3d00 !important;
 }
 
 .ghost-label {

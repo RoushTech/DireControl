@@ -10,6 +10,8 @@ function pref<T>(key: string, defaultVal: T): Ref<T> {
 export function useMapPrefs() {
   return {
     tracks: pref('tracks', true),
+    /** How far back movement tracks reach, in minutes. */
+    trackMinutes: pref('trackMinutes', 30),
     estPos: pref('estPos', true),
     stale: pref('stale', false),
     zones: pref('zones', false),
@@ -24,5 +26,7 @@ export function useMapPrefs() {
     radarOpacity: pref('radarOpacity', 0.6),
     windOpacity: pref('windOpacity', 0.7),
     lightningOpacity: pref('lightningOpacity', 0.8),
+    /** Pan the map to each new lightning proximity alert as it arrives. */
+    lightningAutoCenter: pref('lightningAutoCenter', false),
   }
 }

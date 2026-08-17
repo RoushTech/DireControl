@@ -71,6 +71,14 @@ export interface LightningAlertDto {
   radiusKm: number
 }
 
+/** A strike that fired a proximity alert, kept client-side so the map can mark it. */
+export interface TriggeringStrike extends LightningAlertDto {
+  /** Stable identity for the strike (time + rounded position). */
+  key: string
+  /** Local clock time the alert arrived, used for expiry. */
+  alertedAt: number
+}
+
 export const ALERT_TYPE_COLORS: Record<string, string> = {
   WatchList: 'amber',
   Proximity: 'blue',
