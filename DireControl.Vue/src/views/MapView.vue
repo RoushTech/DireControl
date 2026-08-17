@@ -601,10 +601,31 @@ function clearHomeMarker() {
   }
 }
 
+/** Zoom the map opens at, and the tightest zoom "back to home" will leave you at. */
+const HOME_ZOOM = 9
+
+// Reactive mirror of the home position — settingsCache is a plain field, so the
+// template can't gate the recenter control on it.
+const homePosition = shallowRef<{ lat: number; lon: number } | null>(null)
+
+/**
+ * Returns to the home station after the map has been moved — by a lightning alert
+ * auto-pan, a station selection, or plain panning. Never zooms in: a wide view stays
+ * wide, a view tighter than the default is pulled back out to it.
+ */
+function centerOnHome() {
+  const home = homePosition.value
+  if (!map.value || !home) return
+  map.value.flyTo([home.lat, home.lon], Math.min(map.value.getZoom(), HOME_ZOOM), {
+    duration: 0.6,
+  })
+}
+
 async function drawHomeMarker() {
   clearHomeMarker()
   if (!map.value) return
   const settings = await ensureSettings()
+  homePosition.value = settings?.homePosition ?? null
   if (!settings?.homePosition) return
   const { lat, lon } = settings.homePosition
   const icon = L.divIcon({
@@ -2986,6 +3007,15 @@ defineExpose({ TILE_PROVIDERS })
             :selected="selectedProvider"
             :api-keys="apiKeys"
             @update:selected="setTileProvider"
+          />
+          <v-btn
+            v-if="homePosition"
+            color="grey-darken-1"
+            size="small"
+            variant="elevated"
+            icon="mdi-home-map-marker"
+            title="Back to home station"
+            @click="centerOnHome"
           />
           <v-btn
             color="grey-darken-1"
