@@ -67,9 +67,10 @@ export const useLightningAlertsStore = defineStore('lightningAlerts', () => {
     // must not toast or sound twice.
     if (triggeringStrikes.value.some((s) => s.key === strikeKey(dto))) return
 
+    // Kept terse so it stays on one line in the toast, which is 360 px wide.
     const message =
-      `Lightning strike ${formatDistance(dto.distanceKm)} ${cardinal(dto.bearingDegrees)} of station` +
-      ` — ${formatStrikeAge(dto.feedLagSeconds)}`
+      `Lightning ${formatDistance(dto.distanceKm)} ${cardinal(dto.bearingDegrees)}` +
+      ` · ${formatStrikeAge(dto.feedLagSeconds)}`
     recordTrigger(dto)
     toastStore.toast(message, 'warning', 10000)
     showBrowserNotification(message)
