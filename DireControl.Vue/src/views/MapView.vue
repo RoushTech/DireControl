@@ -1006,7 +1006,13 @@ function keepLightningControlsVisible() {
 function clearRadarLayers() {
   pauseRadar()
   for (const layer of radarFrameLayers) {
-    layer.off()
+    // Only our own readiness handlers. A bare off() also strips the internal listener
+    // Leaflet adds on layer add to unsubscribe the layer from the map when it is removed,
+    // so the discarded frame stays wired to the map's zoom event with a null _map and
+    // throws on the next zoom — which aborts the rest of that event's listener chain and
+    // leaves every layer registered after it (the new radar frames, the lightning alert
+    // markers) stuck at its last screen position until the page is reloaded.
+    layer.off('loading load')
     layer.remove()
   }
   radarFrameLayers = []
@@ -2473,6 +2479,10 @@ function onResizeMouseUp() {
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
   localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value))
+  // The drag resizes the map container without a transition, so Leaflet's cached size is
+  // stale until it is told: everything on the map would otherwise zoom about the old
+  // centre and slide sideways on the next zoom.
+  map.value?.invalidateSize()
 }
 
 onMounted(async () => {
