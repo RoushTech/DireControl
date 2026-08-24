@@ -284,6 +284,26 @@ public sealed class AprsPacketParsingService(
         packet.HopCount = hopCount;
         packet.ResolvedPath = viaHops;
 
+        // Classify reception from the via entries (TOCALL excluded, asterisks intact).
+        // Stored per packet so reception statistics can group on it in SQL rather than
+        // re-splitting every Path string in memory.
+        var viaEntries = string.IsNullOrEmpty(rawPath)
+            ? (IReadOnlyList<string>)[]
+            : rawPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var classified = AprsPathParser.ClassifyHeardVia(viaEntries);
+
+        // Reprocessing must not clobber a classification ingest derived from the frame we
+        // actually heard.  An RF row upgraded from an APRS-IS copy keeps the internet raw
+        // text, whose qAR/TCPIP path would misclassify our own direct reception as igated.
+        var preserveIngestClassification =
+            reprocess
+            && packet.Source == PacketSource.Rf
+            && packet.HeardVia is HeardVia.Direct or HeardVia.Digi
+            && classified is HeardVia.IgateRf or HeardVia.IgateRfDigi;
+
+        if (!preserveIngestClassification)
+            packet.HeardVia = classified;
+
         switch (aprs.InfoField)
         {
             case WeatherInfo weather:
@@ -418,27 +438,18 @@ public sealed class AprsPacketParsingService(
                     existing.LastComputedAt = now;
                 }
 
-                // Recompute HeardVia from last 10 packets for this station.
-                // Pull both HopCount and Path so each packet can be classified independently.
-                var recentPacketData = await db.Packets
+                // Recompute HeardVia from the last 10 packets for this station. Each packet
+                // carries its own classification (stamped at parse time), so this is a plain
+                // column read rather than a re-parse of every stored path.
+                var perPacketVias = await db.Packets
                     .Where(p => p.StationCallsign == callsign)
                     .OrderByDescending(p => p.ReceivedAt)
                     .Take(10)
-                    .Select(p => new { p.HopCount, p.Path })
+                    .Select(p => p.HeardVia)
                     .ToListAsync(ct);
 
-                if (recentPacketData.Count > 0)
+                if (perPacketVias.Count > 0)
                 {
-                    var perPacketVias = recentPacketData
-                        .Select(p =>
-                        {
-                            IReadOnlyList<string> entries = string.IsNullOrEmpty(p.Path)
-                                ? []
-                                : p.Path.Split(',', StringSplitOptions.RemoveEmptyEntries);
-                            return AprsPathParser.ClassifyHeardVia(entries);
-                        })
-                        .ToList();
-
                     var hasDirectRf = perPacketVias.Any(v => v == HeardVia.Direct);
                     var hasDigi = perPacketVias.Any(v => v == HeardVia.Digi);
 

@@ -60,7 +60,7 @@ const shortcuts = [
 // ─── Nav groups ──────────────────────────────────────────────────────────────
 const activityRoutes = ['/beacons', '/radio', '/logs']
 const commsRoutes = ['/messages', '/terminal', '/alerts']
-const insightsRoutes = ['/statistics', '/network']
+const insightsRoutes = ['/statistics', '/network', '/rf-heard']
 
 const activityActive = computed(() => activityRoutes.includes(route.path))
 const commsActive = computed(
@@ -343,6 +343,12 @@ async function syncServerClock() {
           title="Network"
           @click="mobileDrawerOpen = false"
         />
+        <v-list-item
+          to="/rf-heard"
+          prepend-icon="mdi-antenna"
+          title="RF Heard"
+          @click="mobileDrawerOpen = false"
+        />
 
         <v-divider class="my-1" />
         <v-list-item
@@ -451,6 +457,7 @@ async function syncServerClock() {
           <v-list density="compact" nav>
             <v-list-item to="/statistics" prepend-icon="mdi-chart-bar" title="Statistics" />
             <v-list-item to="/network" prepend-icon="mdi-access-point-network" title="Network" />
+            <v-list-item to="/rf-heard" prepend-icon="mdi-antenna" title="RF Heard" />
           </v-list>
         </v-menu>
 

@@ -2,6 +2,7 @@ using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
 using DireControl.Modem.Ax25;
+using DireControl.PathParsing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -131,6 +132,15 @@ public sealed class RfFrameIngestService(
             existingAprsIs.Source = PacketSource.Rf;
             existingAprsIs.KissChannel = kissChannel;
             existingAprsIs.SignalData ??= signalData;
+
+            // Classify from the frame we actually heard, not from the stored APRS-IS raw
+            // text — that copy's path carries qAR/TCPIP and would report our own direct
+            // reception as igated, hiding it from the direct-RF statistics.
+            var (_, _, rfPath) = AprsPathParser.ParseTnc2Header(rawPacket);
+            existingAprsIs.HeardVia = AprsPathParser.ClassifyHeardVia(
+                string.IsNullOrEmpty(rfPath)
+                    ? []
+                    : rfPath.Split(',', StringSplitOptions.RemoveEmptyEntries));
             var rfStation = await db.Stations.FindAsync([callsign], ct);
             if (rfStation is not null)
             {

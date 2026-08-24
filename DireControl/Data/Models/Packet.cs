@@ -25,6 +25,14 @@ public class Packet : IEntityTypeConfiguration<Packet>
     public PacketSource Source { get; set; } = PacketSource.Rf;
 
     /// <summary>
+    /// Per-packet reception classification derived from the via-path — the value
+    /// <see cref="Station.HeardVia"/> is rolled up from. Stored (rather than re-derived
+    /// from <see cref="Path"/> on every read) so reception statistics can be aggregated
+    /// with a grouped SQL query instead of classifying every row in memory.
+    /// </summary>
+    public HeardVia HeardVia { get; set; } = HeardVia.Unknown;
+
+    /// <summary>
     /// Everything after the first ':' in the TNC2 string — the APRS info field.
     /// Stored for efficient deduplication across RF and APRS-IS paths.
     /// </summary>
@@ -56,6 +64,9 @@ public class Packet : IEntityTypeConfiguration<Packet>
         builder.HasIndex(p => p.ReceivedAt);
         builder.HasIndex(p => new { p.StationCallsign, p.ReceivedAt });
         builder.HasIndex(p => p.ParserVersion);
+        // HeardVia leads so the same index serves both the reception-statistics query
+        // (Source + HeardVia + time range) and the backfill sweep for unclassified rows.
+        builder.HasIndex(p => new { p.HeardVia, p.Source, p.ReceivedAt });
 
         builder.Property(p => p.ResolvedPath)
                .HasConversion(

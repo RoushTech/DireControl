@@ -60,6 +60,11 @@ const router = createRouter({
       component: () => import('@/views/NetworkView.vue'),
     },
     {
+      path: '/rf-heard',
+      name: 'rf-heard',
+      component: () => import('@/views/RfHeardView.vue'),
+    },
+    {
       path: '/stations/:callsign',
       name: 'station',
       component: () => import('@/views/StationView.vue'),

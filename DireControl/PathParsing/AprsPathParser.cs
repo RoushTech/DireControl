@@ -108,10 +108,12 @@ public static class AprsPathParser
 
         if (!hasQConstruct && !hasTcpIp)
         {
-            // Pure RF packet — check for starred non-alias entries to distinguish direct vs digi
-            bool hasDigiHop = pathEntries.Any(h =>
-                h.TrimEnd().EndsWith('*') && !IsGenericAlias(h));
-            return hasDigiHop ? HeardVia.Digi : HeardVia.Direct;
+            // Pure RF packet — direct unless a digipeater actually relayed it.  Uses the
+            // same detection as the igated branch (which short-circuits harmlessly here,
+            // there being no internet section to reach) so the non-standard
+            // digi-before-alias form "W4CAT-2,WIDE2*" is recognised as a hop on RF too,
+            // matching what ExtractViaHops already counts.
+            return HasDigiHopBeforeQCode(pathEntries) ? HeardVia.Digi : HeardVia.Direct;
         }
 
         if (hasTcpIp || pathEntries.Any(h =>
@@ -135,7 +137,12 @@ public static class AprsPathParser
             return hasDigiHop ? HeardVia.IgateRfDigi : HeardVia.IgateRf;
         }
 
-        return HeardVia.Unknown;
+        // Every remaining q-construct (qAS from a server, qAU/qAX from an unverified client,
+        // qAZ server-generated) means the packet reached APRS-IS without an RF leg of ours —
+        // qAR and qAO, handled above, are the only ones that signal RF origin. Returning
+        // Internet rather than Unknown keeps Unknown meaning strictly "not yet classified",
+        // which is what the reception backfill sweep relies on to know when it is done.
+        return HeardVia.Internet;
     }
 
     /// <summary>

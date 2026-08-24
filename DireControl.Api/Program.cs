@@ -111,6 +111,7 @@ services
     .AddHostedService<AutoBeaconService>()
     .AddHostedService<WeatherCacheService>()
     .AddHostedService<StatisticsAggregationService>()
+    .AddHostedService<RfHeardAggregationService>()
     .AddHostedService<LogBroadcastService>()
     .AddHostedService<DatabaseCleanupHostedService>()
     .AddSingleton<DatabaseMaintenanceService>()
