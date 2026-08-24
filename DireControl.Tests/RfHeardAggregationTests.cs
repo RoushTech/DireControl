@@ -560,6 +560,33 @@ public sealed class RfHeardAggregationTests
     }
 
     [Test]
+    public async Task Classification_StartsWithTheNewestPackets()
+    {
+        // A partly-classified table is still served by the live endpoints, so the half that
+        // gets done first decides what the operator sees. Oldest-first showed a stale slice of
+        // months-old traffic as though it were current; newest-first makes the recent window
+        // right immediately and fills history in behind it.
+        AddRadio("W3UWU", "1", channel: 0);
+        AddStation("K4TUX-9");
+
+        AddPacket("K4TUX-9", 0, MiddayUtcOfLocalDay(Today.AddDays(-100)), HeardVia.Unknown);
+        AddPacket("K4TUX-9", 0, MiddayUtcOfLocalDay(Today), HeardVia.Unknown);
+        await _db.SaveChangesAsync();
+
+        await RfHeardAggregationService.AggregateAsync(
+            _db, OurCallsign, HomeLat, HomeLon, null, CancellationToken.None,
+            maxClassifyPerPass: 1);
+
+        var packets = await _db.Packets.AsNoTracking().OrderBy(p => p.ReceivedAt).ToListAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(packets[0].HeardVia, Is.EqualTo(HeardVia.Unknown), "old packet waits");
+            Assert.That(packets[1].HeardVia, Is.EqualTo(HeardVia.Direct), "recent packet done first");
+        });
+    }
+
+    [Test]
     public async Task StoredHistoryOlderThanTheTrailingWindow_IsBackfilledOnFirstRun()
     {
         // The feature is meant to be useful immediately against an existing packet archive,

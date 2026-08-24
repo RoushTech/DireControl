@@ -12,8 +12,18 @@ import {
   Legend,
 } from 'chart.js'
 import { useTheme } from 'vuetify'
-import { getRfHeardDaily, getRfHeardStations, getRfHeardSummary } from '@/api/rfHeardApi'
-import type { RfHeardDailyDto, RfHeardStationDto, RfHeardSummaryDto } from '@/types/rfHeard'
+import {
+  getRfHeardDaily,
+  getRfHeardStations,
+  getRfHeardStatus,
+  getRfHeardSummary,
+} from '@/api/rfHeardApi'
+import type {
+  RfHeardDailyDto,
+  RfHeardStationDto,
+  RfHeardStatusDto,
+  RfHeardSummaryDto,
+} from '@/types/rfHeard'
 import { StationType } from '@/types/station'
 import { timeAgo } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
@@ -38,6 +48,7 @@ const stations = ref<RfHeardStationDto[]>([])
 const loading = ref(false)
 const error = ref(false)
 const loadedAt = ref<number | null>(null)
+const status = ref<RfHeardStatusDto | null>(null)
 
 // ---- Controls ----
 
@@ -80,14 +91,16 @@ async function load() {
   loading.value = true
   error.value = false
   try {
-    const [summaryResult, dailyResult, stationResult] = await Promise.all([
+    const [summaryResult, dailyResult, stationResult, statusResult] = await Promise.all([
       getRfHeardSummary(),
       getRfHeardDaily(range.value, channel.value ?? undefined),
       getRfHeardStations(channel.value ?? undefined),
+      getRfHeardStatus(),
     ])
     summary.value = summaryResult
     daily.value = dailyResult
     stations.value = stationResult
+    status.value = statusResult
     loadedAt.value = serverNow()
   } catch {
     error.value = true
@@ -200,6 +213,13 @@ const typeLabel: Record<StationType, string> = {
   [StationType.Gateway]: 'Gateway',
 }
 
+const backfillPercent = computed(() => {
+  const st = status.value
+  if (!st) return 0
+  const total = st.packetsClassified + st.packetsRemaining
+  return total === 0 ? 100 : Math.floor((st.packetsClassified / total) * 100)
+})
+
 function formatKm(km: number | null): string {
   return km === null ? '—' : `${km.toFixed(1)} km`
 }
@@ -229,6 +249,31 @@ onMounted(load)
 
     <v-alert v-if="error" type="warning" variant="tonal" density="compact" class="mb-4">
       Could not load RF reception data. Is the API running?
+    </v-alert>
+
+    <!-- Until the one-time sweep finishes, everything below is drawn from a partial view of
+         the stored packets. Saying so is the difference between "still working" and "wrong". -->
+    <v-alert
+      v-if="status?.backfillInProgress"
+      type="info"
+      variant="tonal"
+      density="compact"
+      class="mb-4"
+    >
+      <div class="d-flex align-center ga-3 flex-wrap">
+        <span>
+          Classifying stored packets — {{ backfillPercent }}% done,
+          {{ status.packetsRemaining.toLocaleString() }} to go. Counts below cover only what
+          has been classified so far and will keep growing; the daily trend appears once this
+          finishes.
+        </span>
+      </div>
+      <v-progress-linear
+        :model-value="backfillPercent"
+        height="4"
+        rounded
+        class="mt-2"
+      />
     </v-alert>
 
     <!-- Per-radio summary -->

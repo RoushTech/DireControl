@@ -750,7 +750,13 @@ function formatGap(minutes: number): string {
 
 watch(
   () => props.callsign,
-  async (val) => {
+  async (val, previous) => {
+    // Only a genuine change of station resets the view. On the station page this panel is
+    // mounted lazily when a non-Info tab is picked, so resetting on the immediate run would
+    // shove `tab` straight back to 'info' and unmount the panel again — the tab would look
+    // dead. `previous` is undefined only on that immediate run.
+    const stationChanged = previous !== undefined && previous !== val
+
     if (!val) {
       station.value = null
       packets.value = []
@@ -763,7 +769,7 @@ watch(
       stats.value = null
       signalPoints.value = []
       packetsNewData.value = false
-      tab.value = 'info'
+      if (stationChanged) tab.value = 'info'
       return
     }
     packetPage.value = 1
@@ -773,7 +779,7 @@ watch(
     stats.value = null
     signalPoints.value = []
     packetsNewData.value = false
-    tab.value = 'info'
+    if (stationChanged) tab.value = 'info'
     await Promise.all([fetchStation(), fetchPackets()])
     if (station.value?.isWeatherStation) {
       await fetchWeather()

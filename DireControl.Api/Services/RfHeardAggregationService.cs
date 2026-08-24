@@ -147,7 +147,8 @@ public sealed class RfHeardAggregationService(
     /// <see cref="AprsPathParser.ClassifyHeardVia"/> always returns a real value — so the
     /// sweep converges and then costs an empty index seek per pass. Work is capped at
     /// <see cref="MaxClassifyPerPass"/> so a large archive is drained over several passes
-    /// instead of one long burst.
+    /// instead of one long burst, and runs newest-first so the recent window — the part
+    /// anyone is actually looking at — is correct after a single pass.
     /// </summary>
     /// <returns>How many packets were classified, and whether more are still waiting.</returns>
     private static async Task<(int Classified, bool More)> BackfillHeardViaAsync(
@@ -160,7 +161,11 @@ public sealed class RfHeardAggregationService(
             var batch = await db.Packets
                 .AsNoTracking()
                 .Where(p => p.HeardVia == HeardVia.Unknown)
-                .OrderBy(p => p.Id)
+                // Newest first: the recent window is what anyone actually looks at, so it
+                // becomes correct after the first pass and history fills in behind it.
+                // Oldest-first left the view showing a stale slice of ancient traffic that
+                // looked like current data.
+                .OrderByDescending(p => p.Id)
                 .Take(Math.Min(BackfillBatchSize, maxPerPass - total))
                 .Select(p => new { p.Id, p.Path })
                 .ToListAsync(ct);

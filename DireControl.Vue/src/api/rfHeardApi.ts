@@ -1,5 +1,10 @@
 import http from './axios'
-import type { RfHeardDailyDto, RfHeardStationDto, RfHeardSummaryDto } from '@/types/rfHeard'
+import type {
+  RfHeardDailyDto,
+  RfHeardStationDto,
+  RfHeardStatusDto,
+  RfHeardSummaryDto,
+} from '@/types/rfHeard'
 
 /**
  * Per-radio, per-day direct reception. Days with no reception come back as explicit zero
@@ -24,5 +29,10 @@ export async function getRfHeardStations(
 
 export async function getRfHeardSummary(): Promise<RfHeardSummaryDto[]> {
   const { data } = await http.get<RfHeardSummaryDto[]>('/api/v0/rf-heard/summary')
+  return data
+}
+
+export async function getRfHeardStatus(): Promise<RfHeardStatusDto> {
+  const { data } = await http.get<RfHeardStatusDto>('/api/v0/rf-heard/status')
   return data
 }

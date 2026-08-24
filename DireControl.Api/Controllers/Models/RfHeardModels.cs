@@ -74,3 +74,25 @@ public sealed class RfHeardSummaryDto
 
     public DateTime? LastHeardDirect { get; init; }
 }
+
+/// <summary>
+/// Whether the one-time sweep that classifies stored packets is still running. While it is,
+/// every figure on this page is drawn from a partial view of the archive and will grow.
+/// </summary>
+public sealed class RfHeardStatusDto
+{
+    /// <summary>True while packets remain unclassified.</summary>
+    public bool BackfillInProgress { get; init; }
+
+    /// <summary>Packets still to classify.</summary>
+    public int PacketsRemaining { get; init; }
+
+    /// <summary>Packets already classified — the denominator for a progress readout.</summary>
+    public int PacketsClassified { get; init; }
+
+    /// <summary>
+    /// True once the daily archive has been built. It is deliberately withheld until
+    /// classification finishes, so a day is never summarised from half its packets.
+    /// </summary>
+    public bool ArchiveReady { get; init; }
+}

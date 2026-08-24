@@ -206,6 +206,28 @@ public class RfHeardController(
         return Ok(result);
     }
 
+    /// <summary>
+    /// Whether the reception figures can yet be trusted as complete. On first deploy the
+    /// stored packet archive has to be classified before any of it counts, and until that
+    /// finishes every other endpoint here is answering from a partial table — which looks
+    /// like real data rather than an empty one, so the UI has to be able to say so.
+    /// </summary>
+    [HttpGet("status")]
+    public async Task<ActionResult<RfHeardStatusDto>> GetStatus(CancellationToken ct = default)
+    {
+        var remaining = await db.Packets.CountAsync(p => p.HeardVia == HeardVia.Unknown, ct);
+        var classified = await db.Packets.CountAsync(p => p.HeardVia != HeardVia.Unknown, ct);
+        var archiveRows = await db.RfHeardDailies.AnyAsync(ct);
+
+        return Ok(new RfHeardStatusDto
+        {
+            BackfillInProgress = remaining > 0,
+            PacketsRemaining = remaining,
+            PacketsClassified = classified,
+            ArchiveReady = archiveRows,
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Shared queries
     // -------------------------------------------------------------------------

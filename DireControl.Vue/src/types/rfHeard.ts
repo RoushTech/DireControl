@@ -47,3 +47,11 @@ export interface RfHeardSummaryDto {
   bestDistanceKm: number | null
   lastHeardDirect: string | null
 }
+
+/** Whether the one-time classification sweep has finished; figures are partial until it has. */
+export interface RfHeardStatusDto {
+  backfillInProgress: boolean
+  packetsRemaining: number
+  packetsClassified: number
+  archiveReady: boolean
+}
