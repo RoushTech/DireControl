@@ -28,6 +28,7 @@ import { StationType } from '@/types/station'
 import { timeAgo } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
+import { useUnits } from '@/composables/useUnits'
 
 ChartJS.register(
   CategoryScale,
@@ -41,6 +42,7 @@ ChartJS.register(
 
 const theme = useTheme()
 const { now } = useTick(5000)
+const { distanceUnit, formatDistance } = useUnits()
 
 const summary = ref<RfHeardSummaryDto[]>([])
 const daily = ref<RfHeardDailyDto[]>([])
@@ -61,20 +63,43 @@ const RANGES = [
 
 /** Every metric the daily rollup records, plotted the same way. */
 const METRICS = [
-  { title: 'Unique stations', value: 'uniqueDirectStations', unit: '' },
-  { title: 'New stations', value: 'newDirectStations', unit: '' },
-  { title: 'Farthest heard', value: 'maxDirectDistanceKm', unit: ' km' },
-  { title: 'Median distance', value: 'medianDirectDistanceKm', unit: ' km' },
+  { title: 'Unique stations', value: 'uniqueDirectStations', isDistance: false },
+  { title: 'New stations', value: 'newDirectStations', isDistance: false },
+  { title: 'Farthest heard', value: 'maxDirectDistanceKm', isDistance: true },
+  { title: 'Median distance', value: 'medianDirectDistanceKm', isDistance: true },
 ] as const
 
 type MetricKey = (typeof METRICS)[number]['value']
+
+const HEARD_WITHIN = [
+  { title: 'Last 24 hours', value: 24 },
+  { title: 'Last 7 days', value: 24 * 7 },
+  { title: 'Last 30 days', value: 24 * 30 },
+  { title: 'Last 90 days', value: 24 * 90 },
+  { title: 'All time', value: 0 },
+]
+
+/** Hours; 0 means no recency limit. */
+const heardWithin = ref(0)
 
 const range = ref(30)
 const metric = ref<MetricKey>('uniqueDirectStations')
 /** null = all radios. */
 const channel = ref<number | null>(null)
 
-const metricUnit = computed(() => METRICS.find((m) => m.value === metric.value)?.unit ?? '')
+const metricIsDistance = computed(
+  () => METRICS.find((m) => m.value === metric.value)?.isDistance ?? false,
+)
+
+/** Axis suffix — blank for counts, the user's chosen distance unit otherwise. */
+const metricUnit = computed(() => (metricIsDistance.value ? ` ${distanceUnit.value}` : ''))
+
+const MILES_PER_KM = 0.621371
+
+/** The API always speaks km; the chart plots whichever unit the operator picked. */
+function toDisplayDistance(km: number): number {
+  return distanceUnit.value === 'mi' ? km * MILES_PER_KM : km
+}
 
 const radioOptions = computed(() => [
   { title: 'All radios', value: null },
@@ -94,7 +119,11 @@ async function load() {
     const [summaryResult, dailyResult, stationResult, statusResult] = await Promise.all([
       getRfHeardSummary(),
       getRfHeardDaily(range.value, channel.value ?? undefined),
-      getRfHeardStations(channel.value ?? undefined),
+      getRfHeardStations(
+        channel.value ?? undefined,
+        500,
+        heardWithin.value || undefined,
+      ),
       getRfHeardStatus(),
     ])
     summary.value = summaryResult
@@ -135,7 +164,11 @@ const chartData = computed(() => {
       const color = SERIES_COLORS[i % SERIES_COLORS.length]!
       return {
         label: daily.value.find((d) => d.channelNumber === ch)?.radioName ?? `Channel ${ch}`,
-        data: days.map((day) => byKey.get(`${ch}|${day}`)?.[metric.value] ?? null),
+        data: days.map((day) => {
+          const value = byKey.get(`${ch}|${day}`)?.[metric.value] ?? null
+          if (value === null) return null
+          return metricIsDistance.value ? toDisplayDistance(value) : value
+        }),
         borderColor: color,
         backgroundColor: `${color}33`,
         borderWidth: 2,
@@ -190,6 +223,17 @@ const hasChartData = computed(() =>
   daily.value.some((d) => d.uniqueDirectStations > 0 || d.directPackets > 0),
 )
 
+/**
+ * An empty chart means two very different things: the archive for this range has not been
+ * built yet, or it has and nothing was heard. Saying "no receptions" in the first case reads
+ * as a broken radio.
+ */
+const emptyChartMessage = computed(() =>
+  status.value?.backfillInProgress
+    ? 'Still classifying stored packets — the trend fills in from today backwards as it goes.'
+    : 'No direct receptions recorded in this range.',
+)
+
 // ---- Station table ----
 
 const stationSearch = ref('')
@@ -220,8 +264,9 @@ const backfillPercent = computed(() => {
   return total === 0 ? 100 : Math.floor((st.packetsClassified / total) * 100)
 })
 
-function formatKm(km: number | null): string {
-  return km === null ? '—' : `${km.toFixed(1)} km`
+/** Distances arrive from the API in km; render them in the operator's chosen unit. */
+function distanceLabel(km: number | null): string {
+  return km === null ? '—' : formatDistance(km)
 }
 
 onMounted(load)
@@ -308,7 +353,7 @@ onMounted(load)
             </div>
             <v-divider class="my-2" />
             <div class="d-flex justify-space-between text-caption text-medium-emphasis">
-              <span>Farthest ever: {{ formatKm(s.bestDistanceKm) }}</span>
+              <span>Farthest ever: {{ distanceLabel(s.bestDistanceKm) }}</span>
               <span v-if="s.lastHeardDirect">Last: {{ timeAgo(s.lastHeardDirect, now) }}</span>
             </div>
           </v-card-text>
@@ -361,7 +406,7 @@ onMounted(load)
           <Line :data="chartData" :options="chartOptions" />
         </div>
         <div v-else class="text-center text-caption text-medium-emphasis py-8">
-          No direct receptions recorded in this range.
+          {{ emptyChartMessage }}
         </div>
       </v-card-text>
     </v-card>
@@ -372,12 +417,22 @@ onMounted(load)
         Stations heard direct
         <v-chip size="x-small" color="green" variant="tonal">{{ stations.length }}</v-chip>
         <v-spacer />
+        <v-select
+          v-model="heardWithin"
+          :items="HEARD_WITHIN"
+          label="Heard within"
+          density="compact"
+          variant="outlined"
+          hide-details
+          style="max-width: 180px"
+          @update:model-value="load"
+        />
         <v-text-field
           v-model="stationSearch"
           density="compact"
           variant="outlined"
           hide-details
-          placeholder="Filter callsign"
+          placeholder="Search callsign"
           prepend-inner-icon="mdi-magnify"
           style="max-width: 220px"
         />
@@ -417,7 +472,7 @@ onMounted(load)
             </span>
           </template>
           <template #[`item.distanceKm`]="{ item }">
-            {{ formatKm(item.distanceKm) }}
+            {{ distanceLabel(item.distanceKm) }}
           </template>
         </v-data-table>
       </v-card-text>

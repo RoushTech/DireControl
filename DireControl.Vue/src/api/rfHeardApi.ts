@@ -17,12 +17,17 @@ export async function getRfHeardDaily(days: number, channel?: number): Promise<R
   return data
 }
 
+/**
+ * Stations heard direct. `sinceHours` narrows *which* stations are listed by how recently they
+ * were heard; each one still reports its full first-heard/packet-count history.
+ */
 export async function getRfHeardStations(
   channel?: number,
   limit = 500,
+  sinceHours?: number,
 ): Promise<RfHeardStationDto[]> {
   const { data } = await http.get<RfHeardStationDto[]>('/api/v0/rf-heard/stations', {
-    params: { channel, limit },
+    params: { channel, limit, sinceHours },
   })
   return data
 }

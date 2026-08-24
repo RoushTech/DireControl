@@ -107,19 +107,30 @@ public sealed class RfHeardAggregationService(
                 remaining ? " (more remain; continuing next pass)" : "");
         }
 
-        // Do not build the archive from a half-classified table. Classification advances in
-        // packet-id order, so while it is draining the boundary falls inside some day — and a
-        // day summarised now from its classified half would be written, marked done, and never
-        // revisited, silently under-reporting that day forever. Wait until the table is whole.
+        // A day must never be summarised from half its packets: the row would be written,
+        // treated as done, and never revisited — under-reporting that day forever. Classification
+        // runs newest-first, so the unclassified remainder is always the older end of the table
+        // and the newest unclassified packet marks the frontier. Days strictly newer than that
+        // are whole and safe to build now; the day straddling it, and everything older, waits.
+        // This is what lets the recent trend appear while deep history is still draining.
+        DateOnly? oldestSafeDay = null;
         if (remaining)
         {
+            var frontier = await db.Packets
+                .Where(p => p.HeardVia == HeardVia.Unknown)
+                .MaxAsync(p => (DateTime?)p.ReceivedAt, ct);
+
+            if (frontier is not { } frontierAt)
+                return;
+
+            oldestSafeDay = RfHeardLogic.LocalDay(frontierAt).AddDays(1);
             logger?.LogInformation(
-                "RF heard: holding off the daily archive until packet classification finishes.");
-            return;
+                "RF heard: building the archive back to {Day}; older days await classification.",
+                oldestSafeDay);
         }
 
         var radios = await db.Radios.AsNoTracking().ToListAsync(ct);
-        var days = await SelectDaysToRecomputeAsync(db, ct);
+        var days = await SelectDaysToRecomputeAsync(db, oldestSafeDay, ct);
         if (days.Count == 0)
             return;
 
@@ -203,13 +214,17 @@ public sealed class RfHeardAggregationService(
     /// that has packets but no row yet — the first-run backfill, bounded per pass.
     /// </summary>
     private static async Task<List<DateOnly>> SelectDaysToRecomputeAsync(
-        DireControlContext db, CancellationToken ct)
+        DireControlContext db, DateOnly? oldestSafeDay, CancellationToken ct)
     {
         var today = RfHeardLogic.LocalDay(DateTime.UtcNow);
 
         var days = new HashSet<DateOnly>();
         for (var i = 0; i < RecomputeTrailingDays; i++)
-            days.Add(today.AddDays(-i));
+        {
+            var day = today.AddDays(-i);
+            if (oldestSafeDay is null || day >= oldestSafeDay)
+                days.Add(day);
+        }
 
         var oldestPacket = await db.Packets
             .Where(p => p.Source == PacketSource.Rf && p.HeardVia == HeardVia.Direct)
@@ -229,8 +244,12 @@ public sealed class RfHeardAggregationService(
             var backfilled = 0;
 
             // Newest-first, so the most recently interesting history appears first.
+            var floor = oldestSafeDay is { } safe && safe > RfHeardLogic.LocalDay(oldest)
+                ? safe
+                : RfHeardLogic.LocalDay(oldest);
+
             for (var day = today.AddDays(-RecomputeTrailingDays);
-                 day >= RfHeardLogic.LocalDay(oldest) && backfilled < MaxBackfillDaysPerPass;
+                 day >= floor && backfilled < MaxBackfillDaysPerPass;
                  day = day.AddDays(-1))
             {
                 if (known.Add(day))

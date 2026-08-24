@@ -587,6 +587,61 @@ public sealed class RfHeardAggregationTests
     }
 
     [Test]
+    public async Task RecentDaysAreBuiltWhileOlderHistoryIsStillClassifying()
+    {
+        // The trend is the headline of the page; making it wait for years of deep history to
+        // classify left it blank for the better part of an hour. Days newer than the
+        // classification frontier are whole, so they are published straight away.
+        AddRadio("W3UWU", "1", channel: 0);
+        AddStation("K4TUX-9");
+
+        AddPacket("K4TUX-9", 0, MiddayUtcOfLocalDay(Today.AddDays(-100)), HeardVia.Unknown);
+        AddPacket("K4TUX-9", 0, MiddayUtcOfLocalDay(Today), HeardVia.Unknown);
+        await _db.SaveChangesAsync();
+
+        // Only the newest packet gets classified this pass.
+        await RfHeardAggregationService.AggregateAsync(
+            _db, OurCallsign, HomeLat, HomeLon, null, CancellationToken.None,
+            maxClassifyPerPass: 1);
+
+        var rows = await _db.RfHeardDailies.AsNoTracking().ToListAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows, Has.Count.EqualTo(1), "today is complete and published");
+            Assert.That(rows[0].Day, Is.EqualTo(Today));
+            Assert.That(rows[0].UniqueDirectStations, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task TheDayStraddlingTheClassificationFrontier_IsNotPublishedEarly()
+    {
+        // Half a day's packets classified must not become that day's answer — the row would be
+        // written, treated as done, and never corrected.
+        AddRadio("W3UWU", "1", channel: 0);
+        AddStation("K4TUX-9");
+        AddStation("W4ABC-1");
+
+        var day = Today.AddDays(-3);
+        AddPacket("K4TUX-9", 0, MiddayUtcOfLocalDay(day), HeardVia.Unknown);
+        AddPacket("W4ABC-1", 0, MiddayUtcOfLocalDay(day).AddHours(1), HeardVia.Unknown);
+        await _db.SaveChangesAsync();
+
+        await RfHeardAggregationService.AggregateAsync(
+            _db, OurCallsign, HomeLat, HomeLon, null, CancellationToken.None,
+            maxClassifyPerPass: 1);
+
+        Assert.That(await _db.RfHeardDailies.AnyAsync(d => d.Day == day), Is.False,
+                    "the frontier day waits until all of it is classified");
+
+        await RunAsync();
+
+        var row = await _db.RfHeardDailies.AsNoTracking().SingleAsync(d => d.Day == day);
+        Assert.That(row.UniqueDirectStations, Is.EqualTo(2));
+    }
+
+    [Test]
     public async Task StoredHistoryOlderThanTheTrailingWindow_IsBackfilledOnFirstRun()
     {
         // The feature is meant to be useful immediately against an existing packet archive,

@@ -102,9 +102,18 @@ public class RfHeardController(
     public async Task<ActionResult<IReadOnlyList<RfHeardStationDto>>> GetStations(
         [FromQuery] int? channel = null,
         [FromQuery] int limit = 500,
+        [FromQuery] double? sinceHours = null,
         CancellationToken ct = default)
     {
         limit = Math.Clamp(limit, 1, 5000);
+
+        // Recency selects *which stations* to list, but each one still reports its full
+        // history. Filtering the packets first would make "first heard" mean "first heard in
+        // the last 24 hours", which is not a fact anyone wants. The grouped result is one row
+        // per station, so narrowing it here costs nothing.
+        DateTime? since = sinceHours is { } hours && hours > 0
+            ? DateTime.UtcNow.AddHours(-hours)
+            : null;
 
         var rows = await QueryHeardAsync(channel, ct);
         var radios = await LoadRadiosByChannelAsync(ct);
@@ -112,6 +121,7 @@ public class RfHeardController(
 
         var heard = rows
             .Where(r => !RfHeardLogic.IsOwnStation(r.Callsign, radios.Values, ourCallsign))
+            .Where(r => since is not { } cutoff || r.Last >= cutoff)
             .OrderByDescending(r => r.Last)
             .Take(limit)
             .ToList();
