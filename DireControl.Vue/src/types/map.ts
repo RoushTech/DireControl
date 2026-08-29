@@ -8,4 +8,8 @@ export interface TileProviderConfig {
   requiresApiKey?: boolean
   /** localStorage key used to retrieve the API key for this provider */
   apiKeyParam?: string
+  /** Highest zoom the provider actually serves tiles for (default 19) */
+  maxZoom?: number
+  /** Extra class on the tile container — used to render a light basemap dark via CSS */
+  className?: string
 }

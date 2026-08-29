@@ -741,15 +741,23 @@ function readApiKeys(): Record<string, string> {
 
 const jawgApiKey = ref(readApiKeys()['jawg'] ?? '')
 const showJawgKey = ref(false)
+const cartoApiKey = ref(readApiKeys()['carto'] ?? '')
+const showCartoKey = ref(false)
 const apiKeySaved = ref(false)
+
+function setApiKey(keys: Record<string, string>, name: string, value: string) {
+  const trimmed = value.trim()
+  if (trimmed) {
+    keys[name] = trimmed
+  } else {
+    delete keys[name]
+  }
+}
 
 function saveApiKeys() {
   const keys = readApiKeys()
-  if (jawgApiKey.value.trim()) {
-    keys['jawg'] = jawgApiKey.value.trim()
-  } else {
-    delete keys['jawg']
-  }
+  setApiKey(keys, 'jawg', jawgApiKey.value)
+  setApiKey(keys, 'carto', cartoApiKey.value)
   localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys))
   apiKeySaved.value = true
   setTimeout(() => {
@@ -1987,6 +1995,18 @@ async function confirmDelete() {
                 persistent-hint
                 class="mb-3"
                 @click:append-inner="showJawgKey = !showJawgKey"
+              />
+              <v-text-field
+                v-model="cartoApiKey"
+                label="CARTO API key"
+                density="compact"
+                :type="showCartoKey ? 'text' : 'password'"
+                :append-inner-icon="showCartoKey ? 'mdi-eye-off' : 'mdi-eye'"
+                hint="Required for the Carto Light / Carto Dark Matter tile providers — CARTO's
+                  basemaps now stamp unkeyed tiles. Get a key at carto.com."
+                persistent-hint
+                class="mb-3"
+                @click:append-inner="showCartoKey = !showCartoKey"
               />
               <div class="d-flex align-center ga-3 mt-2">
                 <v-btn

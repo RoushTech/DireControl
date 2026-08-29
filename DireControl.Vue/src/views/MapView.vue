@@ -64,11 +64,13 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
   },
   cartoLight: {
     name: 'Carto Light',
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?api_key={apiKey}',
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
     theme: 'light',
     group: 'light',
+    requiresApiKey: true,
+    apiKeyParam: 'carto',
   },
   topo: {
     name: 'OpenTopoMap',
@@ -86,13 +88,34 @@ const TILE_PROVIDERS: Record<string, TileProviderConfig> = {
     group: 'light',
   },
   // ── Dark ───────────────────────────────────────────────────────────────────
+  // OSM ships no dark raster style of its own — this is the standard OSM tile set
+  // inverted client-side via CSS, so it stays key-free and goes all the way to z19.
+  osmDark: {
+    name: 'OpenStreetMap Dark',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    theme: 'dark',
+    group: 'dark',
+    className: 'tile-dark-invert',
+  },
+  esriDarkGray: {
+    name: 'Esri Dark Gray Canvas',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
+    theme: 'dark',
+    group: 'dark',
+    maxZoom: 16,
+  },
   cartoDark: {
     name: 'Carto Dark Matter',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key={apiKey}',
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
     theme: 'dark',
     group: 'dark',
+    requiresApiKey: true,
+    apiKeyParam: 'carto',
   },
   stadiaAlidadeDark: {
     name: 'Stadia Alidade Dark',
@@ -135,6 +158,19 @@ const HOP_SEGMENT_COLORS = ['#4A90D9', '#7B68EE', '#DA70D6'] // blue, purple, or
 const HOP_COLOR_FALLBACK = '#FF8C00' // dark orange for hop 3+
 const UNKNOWN_SEGMENT_COLOR = '#999999' // grey for dashed unknown segments
 const FINAL_HOP_COLOR = '#2ECC71' // green for the last hop to our station
+
+// Providers used when nothing is stored, or when the stored one needs a key we lack.
+const DEFAULT_LIGHT_PROVIDER = 'osm'
+const DEFAULT_DARK_PROVIDER = 'osmDark'
+// Light/dark counterparts, so following the app theme keeps the chosen basemap style.
+const THEME_COUNTERPART: Record<string, string> = {
+  osm: 'osmDark',
+  osmDark: 'osm',
+  cartoLight: 'cartoDark',
+  cartoDark: 'cartoLight',
+  stadiaAlidadeSmooth: 'stadiaAlidadeDark',
+  stadiaAlidadeDark: 'stadiaAlidadeSmooth',
+}
 
 const STORAGE_KEY = 'direcontrol-tile-provider'
 const SIDEBAR_KEY = 'direcontrol-sidebar-open'
@@ -212,9 +248,16 @@ function providerIsAvailable(key: string): boolean {
   return true
 }
 
-// Fall back to 'osm' if the persisted provider requires an API key that isn't present
-const _storedProvider = localStorage.getItem(STORAGE_KEY) ?? 'osm'
-const selectedProvider = ref(providerIsAvailable(_storedProvider) ? _storedProvider : 'osm')
+// Fall back to a key-free provider of the same theme if the persisted provider
+// requires an API key that isn't present (Carto now demands one for its basemaps).
+function keyFreeFallbackFor(key: string): string {
+  return TILE_PROVIDERS[key]?.theme === 'dark' ? DEFAULT_DARK_PROVIDER : DEFAULT_LIGHT_PROVIDER
+}
+
+const _storedProvider = localStorage.getItem(STORAGE_KEY) ?? DEFAULT_LIGHT_PROVIDER
+const selectedProvider = ref(
+  providerIsAvailable(_storedProvider) ? _storedProvider : keyFreeFallbackFor(_storedProvider),
+)
 
 const providerFallbackSnackbar = ref(false)
 const providerFallbackMessage = ref('')
@@ -2167,11 +2210,13 @@ function setTileProvider(key: string) {
   const provider = TILE_PROVIDERS[key]
   if (!provider || !map.value) return
 
-  // If the provider requires an API key that isn't present, fall back to OSM
+  // If the provider requires an API key that isn't present, fall back to a key-free
+  // provider with the same light/dark theme so the map doesn't flip appearance.
   if (provider.requiresApiKey && provider.apiKeyParam && !apiKeys.value[provider.apiKeyParam]) {
-    providerFallbackMessage.value = `${provider.name} requires an API key — add it in Settings. Fallen back to OpenStreetMap.`
+    const fallback = keyFreeFallbackFor(key)
+    providerFallbackMessage.value = `${provider.name} requires an API key — add it in Settings. Fallen back to ${TILE_PROVIDERS[fallback]!.name}.`
     providerFallbackSnackbar.value = true
-    key = 'osm'
+    key = fallback
   }
 
   const resolvedProvider = TILE_PROVIDERS[key]!
@@ -2187,7 +2232,8 @@ function setTileProvider(key: string) {
   }
   tileLayer.value = L.tileLayer(url, {
     attribution: resolvedProvider.attribution,
-    maxZoom: 19,
+    maxZoom: resolvedProvider.maxZoom ?? 19,
+    className: resolvedProvider.className,
   }).addTo(map.value)
   selectedProvider.value = key
   localStorage.setItem(STORAGE_KEY, key)
@@ -2397,12 +2443,14 @@ watch(distanceUnit, () => {
   if (showOverlays.value) loadAndDrawOverlays()
 })
 
-// Watch: auto-switch tile to match light/dark theme when on cartoLight or cartoDark
+// Watch: auto-switch tile to match light/dark theme when the current provider has a
+// counterpart in the other theme (OSM, Carto, Stadia)
 watch(
   () => theme.global.current.value.dark,
   (dark) => {
-    if (selectedProvider.value === 'cartoLight' || selectedProvider.value === 'cartoDark') {
-      setTileProvider(dark ? 'cartoDark' : 'cartoLight')
+    const counterpart = THEME_COUNTERPART[selectedProvider.value]
+    if (counterpart && TILE_PROVIDERS[counterpart]?.theme === (dark ? 'dark' : 'light')) {
+      setTileProvider(counterpart)
     }
   },
 )
@@ -3743,6 +3791,14 @@ defineExpose({ TILE_PROVIDERS })
    Forcing tile opacity only affects the fade — layer opacity lives on the container. */
 .leaflet-weatherPane-pane .leaflet-tile {
   opacity: 1 !important;
+}
+
+/* OSM publishes no dark raster style, so "OpenStreetMap Dark" is the standard tile
+   set inverted in the browser. The filter lives on the tile layer's own container,
+   so markers, tracks, radar and labels drawn in other panes are unaffected.
+   hue-rotate puts inverted blues/greens back roughly where they started. */
+.leaflet-layer.tile-dark-invert {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9) saturate(0.7);
 }
 
 .aprs-icon-container {
