@@ -54,6 +54,7 @@ public sealed class SoundModemService(
     IServiceScopeFactory scopeFactory,
     RfFrameIngestService ingestService,
     ModemRestartTrigger restartTrigger,
+    RadioAudioBroker audioBroker,
     ILogger<SoundModemService> logger) : BackgroundService
 {
     private const int SampleRate = 48000;
@@ -446,11 +447,33 @@ public sealed class SoundModemService(
             "Modem for {Radio} running on \"{Device}\".", instance.Radio.FullCallsign, deviceName);
 
         var buffer = new float[1024];
+        var monitor = new AudioMonitorResampler(SampleRate);
+        var radioId = instance.Radio.Id;
+        var wasListening = false;
+
         while (!ct.IsCancellationRequested)
         {
             var read = device.Read(buffer);
-            if (read > 0)
-                receiver.ProcessSamples(buffer.AsSpan(0, read));
+            if (read <= 0)
+                continue;
+
+            var samples = buffer.AsSpan(0, read);
+            receiver.ProcessSamples(samples);
+
+            // Demodulation always runs; the monitor stream only costs anything
+            // while somebody is actually listening. A newly arrived listener
+            // starts from clean filter history rather than stale samples.
+            var listening = audioBroker.HasListeners(radioId);
+            if (listening)
+            {
+                if (!wasListening)
+                    monitor.Reset();
+
+                var carrier = receiver.CarrierDetected;
+                monitor.Process(samples, frame => audioBroker.PublishReceive(radioId, frame, carrier));
+            }
+
+            wasListening = listening;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -536,6 +559,7 @@ public sealed class SoundModemService(
             try
             {
                 ptt?.SetPtt(true);
+                PublishTransmitAudio(radio.Id, audio);
                 using var playback = new AlsaPlaybackDevice(playbackDevice, SampleRate);
                 playback.Write(audio);
                 playback.Drain();
@@ -582,6 +606,23 @@ public sealed class SoundModemService(
     }
 
     /// <summary>
+    /// Mirrors a rendered transmission into the audio monitor so an operator
+    /// can hear their own keyups.  The burst is already fully rendered, so it
+    /// is published in one go and reaches the client faster than real time —
+    /// client-side buffering is what plays it back at the correct rate.
+    /// </summary>
+    private void PublishTransmitAudio(string radioId, float[] audio)
+    {
+        if (!audioBroker.HasTxListeners(radioId))
+            return;
+
+        // A fresh resampler per burst: transmissions are discontinuous, so
+        // carrying filter history between them would be meaningless.
+        var monitor = new AudioMonitorResampler(SampleRate);
+        monitor.Process(audio, frame => audioBroker.PublishTransmit(radioId, frame));
+    }
+
+    /// <summary>
     /// Keys PTT and plays a TX calibration test tone through the radio's playback
     /// device at the current TX audio level, then unkeys.  Uses the same PTT and
     /// playback path as a normal transmission so there is no device contention.
@@ -609,6 +650,7 @@ public sealed class SoundModemService(
         try
         {
             ptt?.SetPtt(true);
+            PublishTransmitAudio(instance.Radio.Id, audio);
             using var playback = new AlsaPlaybackDevice(playbackDevice, SampleRate);
             playback.Write(audio);
             playback.Drain();

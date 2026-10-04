@@ -14,6 +14,7 @@ import { getAbout } from '@/api/aboutApi'
 import { recordServerSync } from '@/utils/serverTime'
 import { timeAgo } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
+import AudioMonitorButton from '@/components/AudioMonitorButton.vue'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
 const CLOCK_SYNC_INTERVAL_MS = 5 * 60 * 1000
@@ -467,6 +468,8 @@ async function syncServerClock() {
       <v-spacer />
 
       <template #append>
+        <AudioMonitorButton />
+
         <v-btn
           icon="mdi-keyboard-outline"
           variant="text"

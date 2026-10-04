@@ -81,6 +81,7 @@ services
     .AddHostedService<KissTcpService>()
     .AddSingleton<RfFrameIngestService>()
     .AddSingleton<ModemRestartTrigger>()
+    .AddSingleton<RadioAudioBroker>()
     .AddSingleton<SoundModemService>()
     .AddHostedService(sp => sp.GetRequiredService<SoundModemService>())
     .AddHostedService<ModemStatusBroadcaster>()
@@ -158,6 +159,7 @@ app.MapControllers();
 app.MapHub<PacketHub>(PacketHub.HubPath);
 app.MapHub<LogHub>(LogHub.HubPath);
 app.MapHub<TerminalHub>(TerminalHub.HubPath);
+app.MapHub<AudioHub>(AudioHub.HubPath);
 app.MapFallbackToFile("index.html");
 
 await app.RunAsync();
