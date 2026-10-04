@@ -20,7 +20,14 @@ public sealed class LogLevelService(
 
     /// <summary>Categories surfaced in the UI by default. Any category is accepted by the API.</summary>
     public static readonly string[] CommonCategories =
-        ["Default", "DireControl", "Microsoft.AspNetCore", "Microsoft.EntityFrameworkCore"];
+    [
+        "Default",
+        "DireControl",
+        LogCategories.ChannelActivity,
+        LogCategories.AudioCapture,
+        "Microsoft.AspNetCore",
+        "Microsoft.EntityFrameworkCore",
+    ];
 
     public static bool IsValidLevel(string level) =>
         Enum.TryParse<LogLevel>(level, ignoreCase: true, out _);

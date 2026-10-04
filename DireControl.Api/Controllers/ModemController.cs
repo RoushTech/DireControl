@@ -1,8 +1,12 @@
+using System.IO.Compression;
+using System.Text.Json;
 using DireControl.Api.Controllers.Models;
+using DireControl.Api.Logging;
 using DireControl.Api.Services;
 using DireControl.Data;
 using DireControl.Enums;
 using DireControl.Modem.Audio;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,6 +18,7 @@ public class ModemController(
     SoundModemService modemService,
     ModemRestartTrigger restartTrigger,
     ModemAudioCaptureService captureService,
+    LogStreamBroadcaster logStream,
     DireControlContext db) : ControllerBase
 {
     /// <summary>Live status of every radio's modem instance.</summary>
@@ -158,6 +163,135 @@ public class ModemController(
             ? Accepted()
             : NotFound("No recording is running for this radio.");
     }
+
+    /// <summary>Whether failed decodes are captured automatically.</summary>
+    [HttpGet("capture")]
+    public ActionResult<AudioCaptureSettingsDto> GetCaptureSettings() =>
+        Ok(new AudioCaptureSettingsDto
+        {
+            Enabled = captureService.CaptureEnabled,
+            CaptureCount = captureService.List().Count,
+        });
+
+    /// <summary>Turns automatic capture of failed decodes on or off.</summary>
+    [HttpPut("capture")]
+    public async Task<IActionResult> SetCaptureSettings(
+        [FromBody] SetAudioCaptureRequest request,
+        CancellationToken ct)
+    {
+        await captureService.SetCaptureEnabledAsync(request.Enabled, ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Downloads every capture plus the context needed to interpret it as one
+    /// zip: the audio, a manifest of modem state, and the recent log tail.
+    /// Streamed straight to the response — the captures can total tens of
+    /// megabytes and must not be buffered in memory first.
+    /// </summary>
+    [HttpGet("captures/pack")]
+    public async Task<IActionResult> GetCapturePack(CancellationToken ct)
+    {
+        var captures = captureService.List();
+
+        // ZipArchive is a synchronous API: it writes the central directory on
+        // Dispose using Stream.Write, which Kestrel rejects by default and which
+        // would otherwise truncate the archive into an unopenable file.  Sync IO
+        // is enabled for this request only.
+        var bodyControl = HttpContext.Features.Get<IHttpBodyControlFeature>();
+        if (bodyControl is not null)
+            bodyControl.AllowSynchronousIO = true;
+
+        Response.ContentType = "application/zip";
+        Response.Headers.ContentDisposition =
+            $"attachment; filename=\"direcontrol-logpack-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip\"";
+
+        using var archive = new ZipArchive(Response.Body, ZipArchiveMode.Create, leaveOpen: true);
+
+        await WriteTextEntryAsync(archive, "README.txt", CapturePackReadme, ct);
+        await WriteTextEntryAsync(
+            archive,
+            "manifest.json",
+            JsonSerializer.Serialize(
+                new
+                {
+                    GeneratedAtUtc = DateTime.UtcNow,
+                    SampleRate = SoundModemService.SampleRate,
+                    CaptureEnabled = captureService.CaptureEnabled,
+                    Modems = modemService.Statuses.Select(ToDto),
+                    Captures = captures,
+                },
+                // Matches the camelCase every other response uses; a manual
+                // serializer call does not inherit the MVC options.
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                }),
+            ct);
+
+        // The log tail is what makes the audio interpretable: the channel
+        // activity lines say what the modem made of each burst.
+        await WriteTextEntryAsync(
+            archive,
+            "log.txt",
+            string.Join(
+                Environment.NewLine,
+                logStream.Snapshot().Select(
+                    e => $"{e.Timestamp:yyyy-MM-dd HH:mm:ss.fff} {e.Level,-11} {e.Category} {e.Message}"
+                        + (string.IsNullOrEmpty(e.Exception) ? "" : Environment.NewLine + e.Exception))),
+            ct);
+
+        foreach (var capture in captures)
+        {
+            var path = captureService.ResolvePath(capture.Name);
+            if (path is null)
+                continue;
+
+            var entry = archive.CreateEntry($"recordings/{capture.Name}", CompressionLevel.Fastest);
+            await using var entryStream = entry.Open();
+            await using var file = System.IO.File.OpenRead(path);
+            await file.CopyToAsync(entryStream, ct);
+        }
+
+        return new EmptyResult();
+    }
+
+    private static async Task WriteTextEntryAsync(
+        ZipArchive archive, string name, string content, CancellationToken ct)
+    {
+        var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+        await using var stream = entry.Open();
+        await using var writer = new StreamWriter(stream);
+        await writer.WriteAsync(content.AsMemory(), ct);
+    }
+
+    private const string CapturePackReadme = """
+        DireControl audio log pack
+        ==========================
+
+        recordings/*.wav  Raw off-air audio at the modem's own sample rate, as the
+                          demodulator heard it. Files ending "-missed.wav" were
+                          captured automatically because a transmission armed
+                          carrier but produced no valid frame; "-rec.wav" files
+                          were recorded manually.
+
+        manifest.json     Modem state at the time the pack was built: audio
+                          levels, decoded and invalid frame counts, capture
+                          devices, and per-capture metadata.
+
+        log.txt           The most recent log entries held in memory. Lines from
+                          the "DireControl.ChannelActivity" category describe each
+                          carrier burst: duration, peak level, and what the
+                          demodulator made of it.
+
+        To replay the audio through the real demodulator and get a diagnostic
+        report, copy recordings/*.wav into DireControl.Tests/Corpus/ and run:
+
+            dotnet test DireControl.Tests/DireControl.Tests.csproj \
+                --filter Corpus_ReplayReport
+
+        """;
 
     /// <summary>
     /// Radio IDs with a manual recording in progress.  The server owns this

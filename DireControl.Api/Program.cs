@@ -144,6 +144,7 @@ await DatabaseInitializer.InitializeAsync(app.Services);
 await LightningPersistenceService.RehydrateBufferAsync(app.Services);
 await app.Services.GetRequiredService<LogLevelService>().ApplyFromDatabaseAsync();
 await app.Services.GetRequiredService<StationIdentityService>().ApplyFromDatabaseAsync();
+await app.Services.GetRequiredService<ModemAudioCaptureService>().ApplyFromDatabaseAsync();
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {

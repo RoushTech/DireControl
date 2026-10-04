@@ -211,6 +211,15 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>Whether the map pans to the strike that raised the alert when one fires.</summary>
     public bool LightningAlertAutoPan { get; set; } = false;
 
+    // ─── Diagnostics ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Whether a transmission that is heard but fails to decode has its audio
+    /// captured for offline replay.  Manual recording works regardless of this.
+    /// Sizing and retention live in configuration; this is the operator switch.
+    /// </summary>
+    public bool AudioCaptureEnabled { get; set; } = true;
+
     public void Configure(EntityTypeBuilder<UserSetting> builder)
     {
         builder.HasData(new UserSetting { Id = 1 });

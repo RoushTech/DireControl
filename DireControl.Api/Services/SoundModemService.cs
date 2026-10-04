@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using DireControl.Api.Logging;
 using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
@@ -56,8 +57,17 @@ public sealed class SoundModemService(
     ModemRestartTrigger restartTrigger,
     RadioAudioBroker audioBroker,
     ModemAudioCaptureService captureService,
+    ILoggerFactory loggerFactory,
     ILogger<SoundModemService> logger) : BackgroundService
 {
+    /// <summary>
+    /// Per-burst channel activity logs under its own category so it can be
+    /// silenced on its own.  Sharing this class's category would mean turning
+    /// it off also turned off modem start-up and transmit logging.
+    /// </summary>
+    private readonly ILogger _channelActivity =
+        loggerFactory.CreateLogger(LogCategories.ChannelActivity);
+
     /// <summary>
     /// The rate every modem instance captures and transmits at.  Public so
     /// audio capture and replay use exactly the rate the demodulator saw.
@@ -516,7 +526,7 @@ public sealed class SoundModemService(
 
                 // Burst length includes the demodulator's carrier hold, so a
                 // very short transmission still reports at least that long.
-                logger.LogInformation(
+                _channelActivity.LogInformation(
                     "{Radio} channel activity: {Ms} ms, peak {Peak:F3}, "
                     + "{Decoded} decoded, {Failed} CRC failure(s) — {Verdict}.",
                     instance.Radio.FullCallsign,

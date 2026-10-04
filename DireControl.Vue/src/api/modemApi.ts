@@ -176,3 +176,25 @@ export async function getRecordingRadios(): Promise<string[]> {
   const { data } = await http.get<string[]>('/api/v0/modem/recording')
   return data
 }
+
+/** State of automatic capture of failed decodes. */
+export interface AudioCaptureSettingsDto {
+  enabled: boolean
+  captureCount: number
+}
+
+export async function getAudioCaptureSettings(): Promise<AudioCaptureSettingsDto> {
+  const { data } = await http.get<AudioCaptureSettingsDto>('/api/v0/modem/capture')
+  return data
+}
+
+export async function setAudioCaptureEnabled(enabled: boolean): Promise<void> {
+  await http.put('/api/v0/modem/capture', { enabled })
+}
+
+/**
+ * The log pack is a zip of tens of megabytes, so it is fetched by navigating to
+ * this URL rather than through Axios — buffering it as a blob would be wasteful
+ * and would lose the browser's own download progress.
+ */
+export const AUDIO_LOG_PACK_URL = '/api/v0/modem/captures/pack'

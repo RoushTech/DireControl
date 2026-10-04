@@ -8,11 +8,9 @@ public class AudioCaptureOptions
 {
     public const string Section = "DireControl:AudioCapture";
 
-    /// <summary>
-    /// Whether a transmission that fails to decode is captured automatically.
-    /// Manual recording works regardless.
-    /// </summary>
-    public bool CaptureMissedDecodes { get; set; } = true;
+    // Enabling and disabling automatic capture is an operator decision and
+    // lives in the database (UserSetting.AudioCaptureEnabled) so it can be
+    // toggled from the UI.  Everything here is sizing and retention.
 
     /// <summary>Directory captures are written to, relative to the content root.</summary>
     public string Directory { get; set; } = "recordings";

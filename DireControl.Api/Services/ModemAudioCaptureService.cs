@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using DireControl.Api.Logging;
+using DireControl.Data;
 using DireControl.Modem.Audio;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Services;
@@ -25,10 +28,28 @@ public sealed record AudioCaptureInfo(
 /// trying to study.
 /// </summary>
 public sealed class ModemAudioCaptureService(
-    IOptions<AudioCaptureOptions> options,
+    IOptionsMonitor<AudioCaptureOptions> options,
+    IServiceScopeFactory scopeFactory,
     IHostEnvironment environment,
-    ILogger<ModemAudioCaptureService> logger) : BackgroundService
+    ILoggerFactory loggerFactory) : BackgroundService
 {
+    // Read on the audio thread for every block, written from a request thread
+    // when the operator flips the switch.
+    private volatile bool _captureEnabled = true;
+
+    /// <summary>
+    /// Whether a heard-but-not-decoded transmission is captured automatically.
+    /// Persisted in <c>UserSetting.AudioCaptureEnabled</c>; the audio thread
+    /// reads this cached copy rather than touching the database.
+    /// </summary>
+    public bool CaptureEnabled => _captureEnabled;
+
+    /// <summary>
+    /// Capture logs under its own category so the "captured N seconds" lines
+    /// can be silenced independently, while failures still surface at Warning.
+    /// </summary>
+    private readonly ILogger _logger = loggerFactory.CreateLogger(LogCategories.AudioCapture);
+
     /// <summary>
     /// Queued capture.  Carries a count rather than a trimmed array so handing
     /// off a partly-filled manual buffer costs nothing — trimming a 120-second
@@ -58,7 +79,12 @@ public sealed class ModemAudioCaptureService(
         public readonly object Gate = new();
     }
 
-    private readonly AudioCaptureOptions _options = options.Value;
+    /// <summary>
+    /// Read through the monitor on every use rather than snapshotted, so
+    /// editing the capture settings takes effect without a restart.
+    /// </summary>
+    private AudioCaptureOptions Options => options.CurrentValue;
+
     private readonly ConcurrentDictionary<string, RadioBuffers> _buffers = new();
 
     private readonly Channel<PendingWrite> _writes = Channel.CreateBounded<PendingWrite>(
@@ -68,7 +94,37 @@ public sealed class ModemAudioCaptureService(
             FullMode = BoundedChannelFullMode.DropWrite,
         });
 
-    private string Directory => Path.Combine(environment.ContentRootPath, _options.Directory);
+    private string Directory => Path.Combine(environment.ContentRootPath, Options.Directory);
+
+    /// <summary>
+    /// Loads the persisted capture switch and applies it.  Call once at
+    /// startup, before the modem begins producing audio.
+    /// </summary>
+    public async Task ApplyFromDatabaseAsync(CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        var settings = await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(ct);
+        _captureEnabled = settings?.AudioCaptureEnabled ?? true;
+    }
+
+    /// <summary>Persists and immediately applies the capture switch.</summary>
+    public async Task SetCaptureEnabledAsync(bool enabled, CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        var settings = await db.UserSettings.FirstOrDefaultAsync(ct);
+        if (settings is not null)
+        {
+            settings.AudioCaptureEnabled = enabled;
+            await db.SaveChangesAsync(ct);
+        }
+
+        // The audio thread owns the rolling buffers and releases them itself on
+        // its next block — clearing them from here would race with an in-flight
+        // append.
+        _captureEnabled = enabled;
+    }
 
     /// <summary>True while a manual recording is running for this radio.</summary>
     public bool IsRecording(string radioId) =>
@@ -84,13 +140,18 @@ public sealed class ModemAudioCaptureService(
 
         // The ring exists only to serve automatic capture; manual recording has
         // its own buffer, so turning automatic capture off stops paying for it.
-        if (_options.CaptureMissedDecodes)
+        // Sized here rather than allocated once, so both the operator switch
+        // and the pre-buffer length take effect without a restart.
+        var wanted = _captureEnabled ? Math.Max(1, Options.PreBufferSeconds) * sampleRate : 0;
+        if (state.Ring.Length != wanted)
         {
-            if (state.Ring.Length == 0)
-                state.Ring = new float[Math.Max(1, _options.PreBufferSeconds) * sampleRate];
-
-            AppendToRing(state, samples);
+            state.Ring = wanted == 0 ? [] : new float[wanted];
+            state.RingWritePos = 0;
+            state.RingWrapped = false;
         }
+
+        if (_captureEnabled)
+            AppendToRing(state, samples);
 
         if (Volatile.Read(ref state.Manual) is not null)
             AppendToManual(state, samples, sampleRate);
@@ -156,12 +217,12 @@ public sealed class ModemAudioCaptureService(
     /// </summary>
     public void CaptureMissedDecode(string radioId, string label, int sampleRate)
     {
-        if (!_options.CaptureMissedDecodes)
+        if (!_captureEnabled)
             return;
 
         var state = _buffers.GetOrAdd(radioId, _ => new RadioBuffers());
         var now = DateTime.UtcNow.Ticks;
-        var minGap = TimeSpan.FromSeconds(Math.Max(0, _options.MinCaptureIntervalSeconds)).Ticks;
+        var minGap = TimeSpan.FromSeconds(Math.Max(0, Options.MinCaptureIntervalSeconds)).Ticks;
         if (now - Volatile.Read(ref state.LastCaptureTicks) < minGap)
             return;
         Volatile.Write(ref state.LastCaptureTicks, now);
@@ -186,7 +247,7 @@ public sealed class ModemAudioCaptureService(
             // Pre-allocated to the cap so appends never trigger a resize on the
             // capture thread.
             Volatile.Write(
-                ref state.Manual, new float[Math.Max(1, _options.MaxManualSeconds) * sampleRate]);
+                ref state.Manual, new float[Math.Max(1, Options.MaxManualSeconds) * sampleRate]);
             return true;
         }
     }
@@ -241,7 +302,7 @@ public sealed class ModemAudioCaptureService(
     private void Enqueue(string name, float[] samples, int count, int sampleRate, string reason)
     {
         if (!_writes.Writer.TryWrite(new PendingWrite(name, samples, count, sampleRate, reason)))
-            logger.LogWarning("Audio capture \"{Name}\" dropped — write queue is full.", name);
+            _logger.LogWarning("Audio capture \"{Name}\" dropped — write queue is full.", name);
     }
 
     private static string FileName(string label, string kind)
@@ -274,7 +335,7 @@ public sealed class ModemAudioCaptureService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Could not list audio captures.");
+            _logger.LogError(ex, "Could not list audio captures.");
             return [];
         }
     }
@@ -325,7 +386,7 @@ public sealed class ModemAudioCaptureService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Could not delete audio capture \"{Name}\".", name);
+            _logger.LogError(ex, "Could not delete audio capture \"{Name}\".", name);
             return false;
         }
     }
@@ -340,7 +401,7 @@ public sealed class ModemAudioCaptureService(
                 var path = Path.Combine(Directory, write.Name);
                 WaveFile.Write(path, write.Samples.AsSpan(0, write.Count), write.SampleRate);
 
-                logger.LogInformation(
+                _logger.LogInformation(
                     "Captured {Seconds:F1}s of audio to \"{Name}\" ({Reason}).",
                     (double)write.Count / write.SampleRate, write.Name, write.Reason);
 
@@ -348,14 +409,14 @@ public sealed class ModemAudioCaptureService(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to write audio capture \"{Name}\".", write.Name);
+                _logger.LogError(ex, "Failed to write audio capture \"{Name}\".", write.Name);
             }
         }
     }
 
     private void Prune()
     {
-        var max = Math.Max(1, _options.MaxFiles);
+        var max = Math.Max(1, Options.MaxFiles);
         var stale = new DirectoryInfo(Directory)
             .GetFiles("*.wav")
             .OrderByDescending(f => f.LastWriteTimeUtc)
@@ -366,11 +427,11 @@ public sealed class ModemAudioCaptureService(
             try
             {
                 file.Delete();
-                logger.LogDebug("Pruned old audio capture \"{Name}\".", file.Name);
+                _logger.LogDebug("Pruned old audio capture \"{Name}\".", file.Name);
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Could not prune audio capture \"{Name}\".", file.Name);
+                _logger.LogWarning(ex, "Could not prune audio capture \"{Name}\".", file.Name);
             }
         }
     }

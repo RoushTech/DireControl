@@ -795,3 +795,15 @@ public sealed class AudioCaptureDto
     /// <summary>Why it was captured — "missed-decode" or "manual".</summary>
     public required string Reason { get; init; }
 }
+
+/// <summary>State of automatic off-air audio capture.</summary>
+public sealed class AudioCaptureSettingsDto
+{
+    public bool Enabled { get; init; }
+    public int CaptureCount { get; init; }
+}
+
+public sealed class SetAudioCaptureRequest
+{
+    public bool Enabled { get; init; }
+}
