@@ -13,6 +13,7 @@ namespace DireControl.Api.Controllers;
 public class ModemController(
     SoundModemService modemService,
     ModemRestartTrigger restartTrigger,
+    ModemAudioCaptureService captureService,
     DireControlContext db) : ControllerBase
 {
     /// <summary>Live status of every radio's modem instance.</summary>
@@ -126,6 +127,82 @@ public class ModemController(
                 statusCode: StatusCodes.Status503ServiceUnavailable,
                 detail: "No running TX-capable modem for this radio. Enable the modem and TX first.");
     }
+
+    /// <summary>
+    /// Starts recording this radio's raw off-air audio at the modem's own
+    /// sample rate, for replaying through the demodulator offline.  Stops
+    /// automatically at the configured cap so a forgotten recording cannot grow
+    /// without bound.
+    /// </summary>
+    [HttpPost("{radioId}/record")]
+    public IActionResult StartRecording(string radioId)
+    {
+        if (!IsModemRunning(radioId))
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                detail: "No running modem for this radio, so there is no audio to record.");
+
+        return captureService.StartRecording(radioId, SoundModemService.SampleRate)
+            ? Accepted()
+            : Conflict("A recording is already running for this radio.");
+    }
+
+    /// <summary>Stops the radio's manual recording and writes it to disk.</summary>
+    [HttpDelete("{radioId}/record")]
+    public IActionResult StopRecording(string radioId)
+    {
+        var radio = modemService.Statuses.FirstOrDefault(s => s.RadioId == radioId);
+        var label = radio?.FullCallsign ?? radioId;
+
+        return captureService.StopRecording(radioId, label, SoundModemService.SampleRate)
+            ? Accepted()
+            : NotFound("No recording is running for this radio.");
+    }
+
+    /// <summary>
+    /// Radio IDs with a manual recording in progress.  The server owns this
+    /// state, so the UI recovers it after a reload instead of forgetting that a
+    /// recording is still running.
+    /// </summary>
+    [HttpGet("recording")]
+    public ActionResult<List<string>> GetRecording() =>
+        Ok(modemService.Statuses
+            .Select(s => s.RadioId)
+            .Where(captureService.IsRecording)
+            .ToList());
+
+    /// <summary>Captured audio files on disk, newest first.</summary>
+    [HttpGet("captures")]
+    public ActionResult<List<AudioCaptureDto>> GetCaptures() =>
+        Ok(captureService.List()
+            .Select(c => new AudioCaptureDto
+            {
+                Name = c.Name,
+                SizeBytes = c.SizeBytes,
+                CapturedAtUtc = c.CapturedAtUtc,
+                DurationSeconds = c.DurationSeconds,
+                Reason = c.Reason,
+            })
+            .ToList());
+
+    /// <summary>Downloads one capture so it can be replayed or archived.</summary>
+    [HttpGet("captures/{name}")]
+    public IActionResult GetCapture(string name)
+    {
+        var path = captureService.ResolvePath(name);
+        if (path is null)
+            return NotFound();
+
+        return PhysicalFile(path, "audio/wav", name);
+    }
+
+    [HttpDelete("captures/{name}")]
+    public IActionResult DeleteCapture(string name) =>
+        captureService.Delete(name) ? NoContent() : NotFound();
+
+    /// <summary>True when this radio has a running modem producing audio.</summary>
+    private bool IsModemRunning(string radioId) =>
+        modemService.Statuses.Any(s => s.RadioId == radioId && s.State == ModemState.Running);
 
     private static List<string> ListSerialPorts()
     {

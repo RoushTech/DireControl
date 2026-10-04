@@ -68,6 +68,8 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
   let gainNode: GainNode | null = null
   let nextStartAt = 0
   let format: AudioStreamFormat = { sampleRate: 8000, frameSamples: 512, encoding: 'pcm_s16le' }
+  /** Frames scheduled but not yet played, so a re-prime can cancel them. */
+  const scheduled = new Set<AudioBufferSourceNode>()
 
   function readStoredVolume(): number {
     try {
@@ -108,14 +110,18 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
       .build()
 
     connection.onreconnected(() => {
-      // The old stream died with the old transport; re-subscribe if we were listening.
-      if (state.value !== 'idle' && radioId.value) void subscribeToStream(radioId.value)
+      // The old stream died with the old transport. Only re-subscribe if the
+      // audio context is still alive — otherwise frames would stream from the
+      // server forever with nothing to play them.
+      if (ctx && radioId.value) void subscribeToStream(radioId.value)
     })
     connection.onclose(() => {
-      if (state.value !== 'idle') {
-        state.value = 'error'
-        errorMessage.value = 'Audio connection lost.'
-      }
+      if (state.value === 'idle') return
+      // Automatic reconnect has given up. Release the output device rather than
+      // leaving a silent context holding it until the user next interacts.
+      void teardownAudio()
+      state.value = 'error'
+      errorMessage.value = 'Audio connection lost.'
     })
     return connection
   }
@@ -159,15 +165,34 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
     const source = ctx.createBufferSource()
     source.buffer = buffer
     source.connect(gainNode)
+    source.onended = () => {
+      scheduled.delete(source)
+    }
     source.start(nextStartAt)
+    scheduled.add(source)
     nextStartAt += buffer.duration
+  }
+
+  /**
+   * Cancels audio that is queued but not yet heard.  Without this, restarting a
+   * stream leaves up to a buffer's worth of old frames scheduled, which play on
+   * top of the new ones.
+   */
+  function flushScheduled() {
+    for (const source of scheduled) {
+      source.onended = null
+      source.stop()
+      source.disconnect()
+    }
+    scheduled.clear()
+    nextStartAt = 0
   }
 
   async function subscribeToStream(id: string) {
     const conn = ensureConnection()
     subscription?.dispose()
     subscription = null
-    nextStartAt = 0
+    flushScheduled()
 
     subscription = conn
       .stream<string>('Listen', id, squelchGated.value, includeTx.value)
@@ -219,6 +244,7 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
   async function teardownAudio() {
     subscription?.dispose()
     subscription = null
+    flushScheduled()
     gainNode?.disconnect()
     gainNode = null
     if (ctx) {

@@ -25,6 +25,7 @@ services
     .AddSingleton<StationIdentityService>()
     .Configure<DireControlOptions>(config.GetSection(DireControlOptions.Section))
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
+    .Configure<AudioCaptureOptions>(config.GetSection(AudioCaptureOptions.Section))
     .AddOpenApi()
     .AddDbContext<DireControlContext>(options =>
         options.UseSqlite(config.GetConnectionString("Default") ?? "Data Source=direcontrol.db"))
@@ -82,6 +83,8 @@ services
     .AddSingleton<RfFrameIngestService>()
     .AddSingleton<ModemRestartTrigger>()
     .AddSingleton<RadioAudioBroker>()
+    .AddSingleton<ModemAudioCaptureService>()
+    .AddHostedService(sp => sp.GetRequiredService<ModemAudioCaptureService>())
     .AddSingleton<SoundModemService>()
     .AddHostedService(sp => sp.GetRequiredService<SoundModemService>())
     .AddHostedService<ModemStatusBroadcaster>()

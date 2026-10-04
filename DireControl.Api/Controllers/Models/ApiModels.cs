@@ -783,3 +783,15 @@ public sealed class DigiConfirmationBroadcastDto
     public double? Lat { get; init; }
     public double? Lon { get; init; }
 }
+
+/// <summary>One captured off-air audio file available for offline replay.</summary>
+public sealed class AudioCaptureDto
+{
+    public required string Name { get; init; }
+    public long SizeBytes { get; init; }
+    public DateTime CapturedAtUtc { get; init; }
+    public double DurationSeconds { get; init; }
+
+    /// <summary>Why it was captured — "missed-decode" or "manual".</summary>
+    public required string Reason { get; init; }
+}

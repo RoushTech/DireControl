@@ -1,0 +1,3 @@
+# Captured audio is large (~1 MB per 15 s) and machine-specific — keep it local.
+*.wav
+replay-report.txt

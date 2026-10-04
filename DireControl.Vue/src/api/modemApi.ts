@@ -142,3 +142,37 @@ export async function sendTestTone(
 ): Promise<void> {
   await http.post(`/api/v0/modem/${radioId}/test-tone`, { kind, durationMs })
 }
+
+/** One captured off-air recording available for offline replay. */
+export interface AudioCaptureDto {
+  name: string
+  sizeBytes: number
+  capturedAtUtc: string
+  durationSeconds: number
+  /** "missed-decode" or "manual". */
+  reason: string
+}
+
+/** Starts recording a radio's raw off-air audio at the modem's own sample rate. */
+export async function startAudioRecording(radioId: string): Promise<void> {
+  await http.post(`/api/v0/modem/${radioId}/record`)
+}
+
+export async function stopAudioRecording(radioId: string): Promise<void> {
+  await http.delete(`/api/v0/modem/${radioId}/record`)
+}
+
+export async function getAudioCaptures(): Promise<AudioCaptureDto[]> {
+  const { data } = await http.get<AudioCaptureDto[]>('/api/v0/modem/captures')
+  return data
+}
+
+export async function deleteAudioCapture(name: string): Promise<void> {
+  await http.delete(`/api/v0/modem/captures/${encodeURIComponent(name)}`)
+}
+
+/** Radio IDs with a manual recording in progress, per the server. */
+export async function getRecordingRadios(): Promise<string[]> {
+  const { data } = await http.get<string[]>('/api/v0/modem/recording')
+  return data
+}

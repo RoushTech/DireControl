@@ -51,15 +51,16 @@ public sealed class AudioMonitorResampler
     /// Pushes input samples through the resampler, invoking
     /// <paramref name="onFrame"/> once per completed frame.  The callback
     /// receives a fresh array it may keep; partial frames are retained for the
-    /// next call.
+    /// next call.  <paramref name="gain"/> scales the input before filtering,
+    /// for sources whose natural level is not a monitoring level.
     /// </summary>
-    public void Process(ReadOnlySpan<float> samples, Action<byte[]> onFrame)
+    public void Process(ReadOnlySpan<float> samples, Action<byte[]> onFrame, float gain = 1f)
     {
         foreach (var sample in samples)
         {
             // Every input sample must run through the filter to keep its
             // history continuous; only every Nth output is kept.
-            var filtered = _antiAlias.Process(sample);
+            var filtered = _antiAlias.Process(sample * gain);
 
             if (++_phase < _decimation)
                 continue;

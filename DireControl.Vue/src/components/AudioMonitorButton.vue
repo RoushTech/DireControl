@@ -1,16 +1,61 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useAudioMonitorStore } from '@/stores/audioMonitorStore'
 import { useRadiosStore } from '@/stores/radiosStore'
+import {
+  getAudioCaptures,
+  getRecordingRadios,
+  startAudioRecording,
+  stopAudioRecording,
+  type AudioCaptureDto,
+} from '@/api/modemApi'
 
 const audio = useAudioMonitorStore()
 const radiosStore = useRadiosStore()
+
+const recordingRadios = ref<string[]>([])
+const captures = ref<AudioCaptureDto[]>([])
+const recordError = ref<string | null>(null)
 
 // This button lives in the app bar, so it may be the first thing to need the
 // radio list — views that load it themselves share the same store.
 onMounted(() => {
   if (radiosStore.radios.length === 0) void radiosStore.fetchRadios()
+  void refreshCaptureState()
 })
+
+/**
+ * Recording state lives on the server, so a page reload recovers it rather
+ * than showing a stopped button while audio is still being recorded.
+ */
+async function refreshCaptureState() {
+  try {
+    const [recording, files] = await Promise.all([getRecordingRadios(), getAudioCaptures()])
+    recordingRadios.value = recording
+    captures.value = files
+  } catch {
+    /* diagnostics are best-effort; never block the player on them */
+  }
+}
+
+const isRecording = (id: string) => recordingRadios.value.includes(id)
+
+const missedCaptureCount = computed(
+  () => captures.value.filter((c) => c.reason === 'missed-decode').length,
+)
+
+async function toggleRecording(id: string) {
+  recordError.value = null
+  try {
+    if (isRecording(id)) await stopAudioRecording(id)
+    else await startAudioRecording(id)
+  } catch {
+    recordError.value = isRecording(id)
+      ? 'Could not stop the recording.'
+      : 'Could not start recording — the radio needs a running modem.'
+  }
+  await refreshCaptureState()
+}
 
 /**
  * Only radios with the native sound modem configured have audio to stream —
@@ -37,6 +82,14 @@ const buttonIcon = computed(() => {
   return audio.muted ? 'mdi-headphones-off' : 'mdi-headphones'
 })
 
+/** Live modem state for a radio, matching the TX/RX convention in OwnStationPanel. */
+function activityFor(id: string): { label: string; color: string } | null {
+  const activity = radiosStore.getActivityForRadio(id)
+  if (activity?.transmitting) return { label: 'TX', color: 'error' }
+  if (activity?.carrierDetected) return { label: 'RX', color: 'success' }
+  return null
+}
+
 function volumeIcon() {
   if (audio.muted || audio.volume === 0) return 'mdi-volume-off'
   if (audio.volume < 0.5) return 'mdi-volume-medium'
@@ -45,7 +98,13 @@ function volumeIcon() {
 </script>
 
 <template>
-  <v-menu :close-on-content-click="false" location="bottom end">
+  <!-- Captures accumulate in the background, so the counts are refreshed each
+       time the menu opens rather than only on mount. -->
+  <v-menu
+    :close-on-content-click="false"
+    location="bottom end"
+    @update:model-value="(open) => open && refreshCaptureState()"
+  >
     <template #activator="{ props }">
       <v-btn
         v-bind="props"
@@ -102,12 +161,37 @@ function volumeIcon() {
               <template v-if="radio.frequencyMhz"> · {{ radio.frequencyMhz }} MHz</template>
             </v-list-item-subtitle>
             <template #append>
-              <v-progress-circular
-                v-if="audio.radioId === radio.id && audio.state === 'connecting'"
-                indeterminate
-                size="16"
-                width="2"
-              />
+              <div class="d-flex align-center ga-1">
+                <v-progress-circular
+                  v-if="audio.radioId === radio.id && audio.state === 'connecting'"
+                  indeterminate
+                  size="16"
+                  width="2"
+                />
+                <!-- Live RX/TX from the modemLevel stream, so you can tell at a
+                     glance which radio is worth listening to. -->
+                <v-chip
+                  v-else-if="activityFor(radio.id)"
+                  :color="activityFor(radio.id)!.color"
+                  size="x-small"
+                  variant="tonal"
+                  label
+                >
+                  {{ activityFor(radio.id)!.label }}
+                </v-chip>
+                <!-- Recording is independent of listening: you can record a
+                     radio you are not monitoring. -->
+                <v-btn
+                  :icon="isRecording(radio.id) ? 'mdi-stop-circle' : 'mdi-record-circle-outline'"
+                  :color="isRecording(radio.id) ? 'error' : undefined"
+                  variant="text"
+                  size="x-small"
+                  :aria-label="
+                    isRecording(radio.id) ? 'Stop recording audio' : 'Record raw audio for analysis'
+                  "
+                  @click.stop="toggleRecording(radio.id)"
+                />
+              </div>
             </template>
           </v-list-item>
         </v-list>
@@ -174,6 +258,33 @@ function volumeIcon() {
 
         <div v-if="audio.droppedFrames > 0" class="text-caption text-medium-emphasis mt-2 ml-1">
           {{ audio.droppedFrames }} frame(s) dropped to hold latency down.
+        </div>
+
+        <v-divider class="my-2" />
+
+        <!-- Capture is the diagnostic half of this menu: recordings are raw
+             48 kHz audio for replaying through the demodulator offline. -->
+        <div class="text-caption text-medium-emphasis ml-1">
+          <v-alert
+            v-if="recordError"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            class="mb-2 text-caption"
+          >
+            {{ recordError }}
+          </v-alert>
+
+          <template v-if="captures.length > 0">
+            {{ captures.length }} capture{{ captures.length === 1 ? '' : 's' }} saved<template
+              v-if="missedCaptureCount > 0"
+            >
+              · {{ missedCaptureCount }} from failed decodes</template
+            >.
+          </template>
+          <template v-else>
+            No captures yet. Transmissions that fail to decode are saved automatically.
+          </template>
         </div>
       </v-card-text>
     </v-card>

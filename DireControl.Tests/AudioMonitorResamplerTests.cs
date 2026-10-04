@@ -117,6 +117,19 @@ public sealed class AudioMonitorResamplerTests
     }
 
     [Test]
+    public void Gain_ScalesTheInputBeforeConversion()
+    {
+        var resampler = new AudioMonitorResampler(SampleRate);
+        var frames = new List<byte[]>();
+
+        // Transmit audio is monitored at a fixed level rather than its own drive
+        // level, so the gain path has to actually attenuate.
+        resampler.Process(Tone(1000f, 1.0f, SampleRate), frames.Add, 0.2f);
+
+        Assert.That(Rms(frames), Is.EqualTo(0.7071f * 0.2f).Within(0.01f));
+    }
+
+    [Test]
     public void Reset_DiscardsPartialFrame()
     {
         var resampler = new AudioMonitorResampler(SampleRate);

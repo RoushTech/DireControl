@@ -55,9 +55,28 @@ public sealed class SoundModemService(
     RfFrameIngestService ingestService,
     ModemRestartTrigger restartTrigger,
     RadioAudioBroker audioBroker,
+    ModemAudioCaptureService captureService,
     ILogger<SoundModemService> logger) : BackgroundService
 {
-    private const int SampleRate = 48000;
+    /// <summary>
+    /// The rate every modem instance captures and transmits at.  Public so
+    /// audio capture and replay use exactly the rate the demodulator saw.
+    /// </summary>
+    public const int SampleRate = 48000;
+
+    /// <summary>
+    /// Peak sample level transmit audio is normalised to for monitoring, chosen
+    /// to sit in the same range as typical receive audio off a data jack.
+    /// </summary>
+    private const float TxMonitorPeak = 0.2f;
+
+    /// <summary>
+    /// Minimum burst peak level before a failed decode is worth capturing.
+    /// Set above the level at which carrier detect is known to false-arm on
+    /// band noise, but below a genuinely weak packet.
+    /// </summary>
+    private const float MinCaptureAudioLevel = 0.04f;
+
     private const int RetryDelaySeconds = 10;
     private const int TxQueueCapacity = 64;
     private const int PriorityTxQueueCapacity = 32;
@@ -449,7 +468,13 @@ public sealed class SoundModemService(
         var buffer = new float[1024];
         var monitor = new AudioMonitorResampler(SampleRate);
         var radioId = instance.Radio.Id;
-        var wasListening = false;
+        var wasPublishing = false;
+        var wasCarrier = false;
+        var validAtCarrierStart = 0L;
+        var invalidAtCarrierStart = 0L;
+        var burstStartSample = 0L;
+        var burstPeakLevel = 0f;
+        var samplesSeen = 0L;
 
         while (!ct.IsCancellationRequested)
         {
@@ -459,21 +484,79 @@ public sealed class SoundModemService(
 
             var samples = buffer.AsSpan(0, read);
             receiver.ProcessSamples(samples);
+            captureService.Append(radioId, samples, SampleRate);
+            samplesSeen += read;
+
+            // Every carrier burst is reported once it ends — what the channel
+            // did, how strong it was, and whether anything came of it.  This is
+            // the only way to tell "nothing was transmitted" apart from "a
+            // transmission arrived and we failed to decode it", which look
+            // identical from the packet log alone.
+            var carrierNow = receiver.CarrierDetected;
+            if (carrierNow)
+            {
+                if (!wasCarrier)
+                {
+                    validAtCarrierStart = receiver.ValidFrameCount;
+                    invalidAtCarrierStart = receiver.Demodulators.Sum(d => d.InvalidFrameCount);
+                    burstStartSample = samplesSeen;
+                    burstPeakLevel = 0f;
+                }
+
+                // Peak is a ~100 ms rolling window, so it has to be tracked
+                // across the burst — by the time carrier drops it reflects the
+                // silence afterwards, not the transmission.
+                burstPeakLevel = MathF.Max(burstPeakLevel, receiver.PeakAudioLevel);
+            }
+            else if (wasCarrier)
+            {
+                var decoded = receiver.ValidFrameCount - validAtCarrierStart;
+                var failed = receiver.Demodulators.Sum(d => d.InvalidFrameCount)
+                    - invalidAtCarrierStart;
+
+                // Burst length includes the demodulator's carrier hold, so a
+                // very short transmission still reports at least that long.
+                logger.LogInformation(
+                    "{Radio} channel activity: {Ms} ms, peak {Peak:F3}, "
+                    + "{Decoded} decoded, {Failed} CRC failure(s) — {Verdict}.",
+                    instance.Radio.FullCallsign,
+                    (samplesSeen - burstStartSample) * 1000 / SampleRate,
+                    burstPeakLevel,
+                    decoded,
+                    failed,
+                    BurstVerdict(decoded, failed, burstPeakLevel));
+
+                if (decoded == 0)
+                {
+                    // Carrier detect can arm on band noise, so require some real
+                    // signal before spending a capture — otherwise a quiet band
+                    // with an open squelch fills the corpus with hiss.
+                    if (burstPeakLevel >= MinCaptureAudioLevel)
+                        captureService.CaptureMissedDecode(
+                            radioId, instance.Radio.FullCallsign, SampleRate);
+                }
+            }
+            wasCarrier = carrierNow;
 
             // Demodulation always runs; the monitor stream only costs anything
-            // while somebody is actually listening. A newly arrived listener
-            // starts from clean filter history rather than stale samples.
-            var listening = audioBroker.HasListeners(radioId);
-            if (listening)
+            // while somebody is actually listening.  Receive audio also stands
+            // down while the radio is keyed: this is a half-duplex radio, so
+            // there is nothing real to hear, and TX monitoring publishes to the
+            // same listener — interleaving both would land two unrelated audio
+            // sources in one playback cursor.
+            var publishing = audioBroker.HasListeners(radioId) && !instance.Transmitting;
+            if (publishing)
             {
-                if (!wasListening)
+                // A newly arrived listener — or one resuming after a keyup —
+                // starts from clean filter history rather than stale samples.
+                if (!wasPublishing)
                     monitor.Reset();
 
                 var carrier = receiver.CarrierDetected;
                 monitor.Process(samples, frame => audioBroker.PublishReceive(radioId, frame, carrier));
             }
 
-            wasListening = listening;
+            wasPublishing = publishing;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -611,15 +694,44 @@ public sealed class SoundModemService(
     /// is published in one go and reaches the client faster than real time —
     /// client-side buffering is what plays it back at the correct rate.
     /// </summary>
+    /// <summary>
+    /// Plain-language reading of one carrier burst.  The counters alone cannot
+    /// distinguish the three failure modes that matter — too weak to be real, a
+    /// frame that arrived corrupt, and a preamble that never produced a frame —
+    /// and those point at different fixes.
+    /// </summary>
+    internal static string BurstVerdict(long decoded, long failed, float peakLevel)
+    {
+        if (peakLevel < MinCaptureAudioLevel)
+            return "noise or a very weak signal, probably not a real transmission";
+        if (decoded > 0)
+            return failed == 0 ? "decoded cleanly" : "partially decoded";
+        if (failed > 0)
+            return "a frame arrived but failed CRC — audio quality or level";
+        return "heard a preamble but never found a complete frame";
+    }
+
     private void PublishTransmitAudio(string radioId, float[] audio)
     {
         if (!audioBroker.HasTxListeners(radioId))
             return;
 
+        // Transmit audio is rendered at the radio's TX drive level, which exists
+        // to set deviation — not loudness — so it arrives far hotter than
+        // receive audio off the data jack.  Normalising to a fixed monitor peak
+        // keeps the two at a comparable volume, and means changing TX drive no
+        // longer changes how loud the monitor is.
+        var peak = 0f;
+        foreach (var sample in audio)
+            peak = MathF.Max(peak, MathF.Abs(sample));
+        if (peak <= 0f)
+            return;
+
         // A fresh resampler per burst: transmissions are discontinuous, so
         // carrying filter history between them would be meaningless.
         var monitor = new AudioMonitorResampler(SampleRate);
-        monitor.Process(audio, frame => audioBroker.PublishTransmit(radioId, frame));
+        monitor.Process(
+            audio, frame => audioBroker.PublishTransmit(radioId, frame), TxMonitorPeak / peak);
     }
 
     /// <summary>
