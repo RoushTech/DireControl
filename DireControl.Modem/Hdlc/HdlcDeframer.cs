@@ -37,12 +37,39 @@ public sealed class HdlcDeframer
     public long InvalidFrameCount { get; private set; }
 
     /// <summary>
+    /// Runs of consecutive opening flags seen — one per transmission whose
+    /// preamble arrived, whether or not a frame came out of it.  Unlike audio
+    /// level this distinguishes a real transmission from noise on any channel,
+    /// including an open squelch where noise is as loud as a signal.
+    /// </summary>
+    public long PreambleCount { get; private set; }
+
+    /// <summary>
+    /// Longest run of consecutive opening flags seen.  A direct measure of how
+    /// much of the TXDelay preamble is surviving the audio path: transmitters
+    /// send 32-45, so a much smaller number means the start of every
+    /// transmission is being lost before the demodulator sees it.
+    /// </summary>
+    public int LongestFlagRun { get; private set; }
+
+    /// <summary>
     /// Opening flags required before a bad-CRC candidate counts as a damaged
     /// packet.  Real transmissions start with a TXDelay preamble of many
     /// flags; random noise essentially never produces two in a row, so this
     /// keeps the damaged-packet counter meaningful on a noisy channel.
     /// </summary>
     private const int MinOpeningFlagsForDamageCount = 2;
+
+    /// <summary>
+    /// Consecutive opening flags that mark a genuine transmission for
+    /// <see cref="PreambleCount"/>.  Two in a row — enough to qualify a
+    /// bad-CRC frame as damaged, since that also requires a plausible frame to
+    /// have assembled — turns up in random noise every few seconds on its own,
+    /// which is far too often to drive automatic capture.  A real TXDelay
+    /// preamble runs 32–45 flags, so eight is well under any true preamble and
+    /// astronomically unlikely from noise.
+    /// </summary>
+    private const int MinFlagsForTransmission = 8;
 
     // 8-bit delay line; newest bit enters at bit 7, the matured bit leaves from bit 0.
     private byte _delayLine;
@@ -85,6 +112,12 @@ public sealed class HdlcDeframer
                 ConsumeMaturedBit(maturedBit);
             EndFrame();
             _flagRun = _dataSinceFlag ? 1 : _flagRun + 1;
+            // Counted once as the run crosses the threshold, so a long preamble
+            // of many flags still registers as one transmission.
+            if (_flagRun == MinFlagsForTransmission)
+                PreambleCount++;
+            if (_flagRun > LongestFlagRun)
+                LongestFlagRun = _flagRun;
             _dataSinceFlag = false;
             _delayCount = 0;
             _inFrame = true;

@@ -21,6 +21,8 @@ public sealed record ReplayResult
     // ── What the modem made of it ──
     public required double CarrierSeconds { get; init; }
     public required int CarrierBursts { get; init; }
+    public required long Preambles { get; init; }
+    public required int LongestFlagRun { get; init; }
     public required long ValidFrames { get; init; }
     public required long InvalidFrames { get; init; }
     public required IReadOnlyDictionary<string, long> ValidByProfile { get; init; }
@@ -97,6 +99,8 @@ public static class CorpusReplay
             DcOffset = dcOffset,
             CarrierSeconds = (double)carrierBlocks * BlockSamples / audio.SampleRate,
             CarrierBursts = bursts,
+            Preambles = receiver.Demodulators.Sum(d => d.PreambleCount),
+            LongestFlagRun = receiver.Demodulators.Max(d => d.LongestFlagRun),
             ValidFrames = receiver.ValidFrameCount,
             InvalidFrames = receiver.Demodulators.Sum(d => d.InvalidFrameCount),
             ValidByProfile = receiver.Demodulators.ToDictionary(
@@ -146,7 +150,8 @@ public static class CorpusReplay
             + $"peak {result.Peak:F3} rms {result.Rms:F3} "
             + $"clipped {result.ClippedPercent:F2}% dc {result.DcOffset:+0.000;-0.000}");
         report.AppendLine(
-            $"  carrier: {result.CarrierSeconds:F1}s over {result.CarrierBursts} burst(s)");
+            $"  carrier: {result.CarrierSeconds:F1}s over {result.CarrierBursts} burst(s) | "
+            + $"{result.Preambles} preamble(s), longest flag run {result.LongestFlagRun}");
 
         foreach (var (profile, valid) in result.ValidByProfile.OrderBy(p => p.Key))
         {
@@ -176,9 +181,9 @@ public static class CorpusReplay
                 + "the demodulator has almost nothing to work with, raise the capture gain.";
         if (MathF.Abs(result.DcOffset) > 0.02f)
             return $"DC OFFSET {result.DcOffset:+0.000;-0.000} — a biased input can skew the comparator.";
-        if (result.CarrierBursts == 0)
-            return "no carrier ever armed — no HDLC flags found, so either there is no packet "
-                + "traffic here or the audio is too far gone to find a preamble.";
+        if (result.Preambles == 0)
+            return "NO PREAMBLE: carrier armed but no run of opening flags — either nothing was "
+                + "transmitted, or the preamble was lost before the demodulator could see it.";
         if (result.ValidFrames == 0)
             return $"HEARD BUT NOT DECODED: {result.CarrierBursts} burst(s), "
                 + $"{result.InvalidFrames} CRC failure(s), 0 valid frames — this is the case worth tuning.";

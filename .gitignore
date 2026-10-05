@@ -490,3 +490,4 @@ appsettings.local.json
 RawPackets.txt
 # Captured off-air audio — a local diagnostic workspace, ~1.4 MB per capture
 recordings/
+direcontrol-logpack-*.zip

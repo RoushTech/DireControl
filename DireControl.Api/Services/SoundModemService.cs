@@ -80,13 +80,6 @@ public sealed class SoundModemService(
     /// </summary>
     private const float TxMonitorPeak = 0.2f;
 
-    /// <summary>
-    /// Minimum burst peak level before a failed decode is worth capturing.
-    /// Set above the level at which carrier detect is known to false-arm on
-    /// band noise, but below a genuinely weak packet.
-    /// </summary>
-    private const float MinCaptureAudioLevel = 0.04f;
-
     private const int RetryDelaySeconds = 10;
     private const int TxQueueCapacity = 64;
     private const int PriorityTxQueueCapacity = 32;
@@ -482,6 +475,7 @@ public sealed class SoundModemService(
         var wasCarrier = false;
         var validAtCarrierStart = 0L;
         var invalidAtCarrierStart = 0L;
+        var preamblesAtCarrierStart = 0L;
         var burstStartSample = 0L;
         var burstPeakLevel = 0f;
         var samplesSeen = 0L;
@@ -509,6 +503,7 @@ public sealed class SoundModemService(
                 {
                     validAtCarrierStart = receiver.ValidFrameCount;
                     invalidAtCarrierStart = receiver.Demodulators.Sum(d => d.InvalidFrameCount);
+                    preamblesAtCarrierStart = receiver.Demodulators.Sum(d => d.PreambleCount);
                     burstStartSample = samplesSeen;
                     burstPeakLevel = 0f;
                 }
@@ -523,28 +518,35 @@ public sealed class SoundModemService(
                 var decoded = receiver.ValidFrameCount - validAtCarrierStart;
                 var failed = receiver.Demodulators.Sum(d => d.InvalidFrameCount)
                     - invalidAtCarrierStart;
+                var preambles = receiver.Demodulators.Sum(d => d.PreambleCount)
+                    - preamblesAtCarrierStart;
 
                 // Burst length includes the demodulator's carrier hold, so a
                 // very short transmission still reports at least that long.
+                // The longest flag run is a running high-water mark, not a
+                // per-burst figure: transmitters send 32-45 opening flags, so a
+                // number stuck in the low single digits means the start of
+                // every transmission is being lost before the demodulator.
                 _channelActivity.LogInformation(
-                    "{Radio} channel activity: {Ms} ms, peak {Peak:F3}, "
-                    + "{Decoded} decoded, {Failed} CRC failure(s) — {Verdict}.",
+                    "{Radio} channel activity: {Ms} ms, peak {Peak:F3}, {Preambles} preamble(s), "
+                    + "{Decoded} decoded, {Failed} CRC failure(s), longest flag run {FlagRun} "
+                    + "— {Verdict}.",
                     instance.Radio.FullCallsign,
                     (samplesSeen - burstStartSample) * 1000 / SampleRate,
                     burstPeakLevel,
+                    preambles,
                     decoded,
                     failed,
-                    BurstVerdict(decoded, failed, burstPeakLevel));
+                    receiver.Demodulators.Max(d => d.LongestFlagRun),
+                    BurstVerdict(decoded, failed, preambles));
 
-                if (decoded == 0)
-                {
-                    // Carrier detect can arm on band noise, so require some real
-                    // signal before spending a capture — otherwise a quiet band
-                    // with an open squelch fills the corpus with hiss.
-                    if (burstPeakLevel >= MinCaptureAudioLevel)
-                        captureService.CaptureMissedDecode(
-                            radioId, instance.Radio.FullCallsign, SampleRate);
-                }
+                // Captured on evidence a transmission actually happened — a
+                // TXDelay preamble — rather than on audio level.  Level cannot
+                // tell signal from noise on an open squelch, where the two sit
+                // at similar levels, and carrier detect alone arms on noise.
+                if (decoded == 0 && preambles > 0)
+                    captureService.CaptureMissedDecode(
+                        radioId, instance.Radio.FullCallsign, SampleRate);
             }
             wasCarrier = carrierNow;
 
@@ -710,15 +712,18 @@ public sealed class SoundModemService(
     /// frame that arrived corrupt, and a preamble that never produced a frame —
     /// and those point at different fixes.
     /// </summary>
-    internal static string BurstVerdict(long decoded, long failed, float peakLevel)
+    internal static string BurstVerdict(long decoded, long failed, long preambles)
     {
-        if (peakLevel < MinCaptureAudioLevel)
-            return "noise or a very weak signal, probably not a real transmission";
+        // Judged on preambles rather than level: with the squelch open, channel
+        // noise is as loud as a signal, so level says nothing about whether a
+        // transmission occurred.  A run of opening flags does.
+        if (preambles == 0)
+            return "no preamble — carrier detect tripped on noise, not a transmission";
         if (decoded > 0)
             return failed == 0 ? "decoded cleanly" : "partially decoded";
         if (failed > 0)
             return "a frame arrived but failed CRC — audio quality or level";
-        return "heard a preamble but never found a complete frame";
+        return "preamble arrived but no frame formed — cut short, or too damaged to assemble";
     }
 
     private void PublishTransmitAudio(string radioId, float[] audio)

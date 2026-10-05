@@ -285,8 +285,14 @@ function volumeIcon() {
           class="ml-1"
         />
 
-        <div v-if="audio.droppedFrames > 0" class="text-caption text-medium-emphasis mt-2 ml-1">
-          {{ audio.droppedFrames }} frame(s) dropped to hold latency down.
+        <!-- Only shown while audio is actually breaking up. Isolated dropped
+             frames are routine and saying so just looks like a fault. -->
+        <div
+          v-if="audio.audioSkipping"
+          class="d-flex align-center text-caption text-warning mt-2 ml-1"
+        >
+          <v-icon size="14" class="mr-1">mdi-wifi-alert</v-icon>
+          Audio is breaking up — the connection can't keep up.
         </div>
 
         <v-divider class="my-2" />

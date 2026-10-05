@@ -35,6 +35,18 @@ const MAX_BUFFER_RX_SEC = 0.6
 const MAX_BUFFER_TX_SEC = 2.5
 
 /**
+ * How many discarded frames within SKIP_WINDOW_MS count as audibly skipping.
+ * Isolated drops are routine — one happens whenever playback re-primes, and
+ * transmit bursts cause them by design — so a single drop is not worth telling
+ * anyone about. A run of them inside a few seconds is the audible kind.
+ */
+const SKIP_THRESHOLD = 3
+const SKIP_WINDOW_MS = 5000
+
+/** Quiet period after which the skipping warning clears itself. */
+const SKIP_CLEAR_MS = 5000
+
+/**
  * Live "listen to the radio" audio, available from anywhere in the app.
  *
  * Audio rides its own connection to /hubs/audio rather than the shared packet
@@ -49,8 +61,11 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
   const radioId = ref<string | null>(null)
   /** Peak sample level of the most recent frame, 0..1 — a listening-side meter. */
   const level = ref(0)
-  /** Frames discarded to keep latency bounded; a hint that the link is struggling. */
-  const droppedFrames = ref(0)
+  /**
+   * True while audio is dropping out often enough to actually hear. Isolated
+   * drops are normal and deliberately not surfaced.
+   */
+  const audioSkipping = ref(false)
   const errorMessage = ref<string | null>(null)
 
   /**
@@ -70,6 +85,39 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
   let format: AudioStreamFormat = { sampleRate: 8000, frameSamples: 512, encoding: 'pcm_s16le' }
   /** Frames scheduled but not yet played, so a re-prime can cancel them. */
   const scheduled = new Set<AudioBufferSourceNode>()
+
+  let dropWindowStart = 0
+  let dropsInWindow = 0
+  let skipClearTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Records a discarded frame and decides whether it amounts to audible
+   * skipping — a sustained run inside a short window, not one lost chunk.
+   */
+  function noteDroppedFrame() {
+    const now = Date.now()
+    if (now - dropWindowStart > SKIP_WINDOW_MS) {
+      dropWindowStart = now
+      dropsInWindow = 0
+    }
+
+    if (++dropsInWindow < SKIP_THRESHOLD) return
+
+    audioSkipping.value = true
+    if (skipClearTimer) clearTimeout(skipClearTimer)
+    skipClearTimer = setTimeout(() => {
+      audioSkipping.value = false
+      skipClearTimer = null
+    }, SKIP_CLEAR_MS)
+  }
+
+  function resetSkipTracking() {
+    if (skipClearTimer) clearTimeout(skipClearTimer)
+    skipClearTimer = null
+    dropWindowStart = 0
+    dropsInWindow = 0
+    audioSkipping.value = false
+  }
 
   function readStoredVolume(): number {
     try {
@@ -158,7 +206,7 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
     } else if (nextStartAt > now + maxBuffer) {
       // Frames are arriving faster than real time. Dropping without advancing
       // the cursor lets the already-scheduled audio drain and the depth shrink.
-      droppedFrames.value++
+      noteDroppedFrame()
       return
     }
 
@@ -218,7 +266,7 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
     radioId.value = id
     state.value = 'connecting'
     errorMessage.value = null
-    droppedFrames.value = 0
+    resetSkipTracking()
 
     try {
       ctx = new AudioContext()
@@ -258,6 +306,8 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
     }
     nextStartAt = 0
     level.value = 0
+    // Also cancels the pending clear timer, so it cannot fire after stopping.
+    resetSkipTracking()
   }
 
   async function stop() {
@@ -276,7 +326,7 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
     state,
     radioId,
     level,
-    droppedFrames,
+    audioSkipping,
     errorMessage,
     squelchGated,
     includeTx,

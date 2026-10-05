@@ -73,6 +73,12 @@ public sealed class AfskDemodulator
     /// <summary>Frames that failed the FCS/length checks.</summary>
     public long InvalidFrameCount => _deframer.InvalidFrameCount;
 
+    /// <summary>Transmission preambles seen, whether or not a frame resulted.</summary>
+    public long PreambleCount => _deframer.PreambleCount;
+
+    /// <summary>Longest run of consecutive opening flags seen.</summary>
+    public int LongestFlagRun => _deframer.LongestFlagRun;
+
     /// <summary>
     /// Data-carrier detect: true while consecutive HDLC flags (a real preamble,
     /// not a lone noise-decoded flag) have been seen recently. The sentinel check
