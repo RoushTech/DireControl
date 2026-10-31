@@ -72,6 +72,13 @@ export const useMessagesStore = defineStore('messages', () => {
     if (!exists) inboxMessages.value.unshift(message)
   }
 
+  /** Called when an existing message changes server-side (e.g. a retransmission was heard). */
+  function onMessageUpdated(message: InboxMessageDto) {
+    const idx = inboxMessages.value.findIndex((m) => m.id === message.id)
+    if (idx !== -1) inboxMessages.value[idx] = message
+    else inboxMessages.value.unshift(message)
+  }
+
   /** Called when SignalR delivers an ACK for one of our sent messages. */
   function onMessageAcked(ack: MessageAckDto) {
     const msg = inboxMessages.value.find((m) => m.id === ack.id)
@@ -121,6 +128,7 @@ export const useMessagesStore = defineStore('messages', () => {
   // stay live on every screen, not just while the Messages view is open.
   const hub = usePacketHubStore()
   hub.on('messageReceived', (message: InboxMessageDto) => onMessageReceived(message))
+  hub.on('messageUpdated', (message: InboxMessageDto) => onMessageUpdated(message))
   hub.on('messageAcked', (ack: MessageAckDto) => onMessageAcked(ack))
   hub.on('messageRetried', (data: MessageRetriedDto) => onMessageRetried(data))
   hub.on('messageAcknowledged', (data: MessageAcknowledgedDto) => onMessageAcknowledged(data))
@@ -137,6 +145,7 @@ export const useMessagesStore = defineStore('messages', () => {
     resetRetry,
     cancelRetry,
     onMessageReceived,
+    onMessageUpdated,
     onMessageAcked,
     onMessageRetried,
     onMessageAcknowledged,

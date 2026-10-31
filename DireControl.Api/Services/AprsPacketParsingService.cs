@@ -198,30 +198,21 @@ public sealed class AprsPacketParsingService(
     {
         foreach (var effect in effects)
         {
-            if (effect.IsNewInboxMessage)
+            if (effect.IsNewInboxMessage && effect.InboxMessage is { } msg)
             {
-                // Send auto-ACK and mark AckSent = true
-                messageSendingService.SendAck(effect.PeerCallsign, effect.MessageId);
-
-                var msg = db.Messages.Local.FirstOrDefault(m =>
-                    m.FromCallsign == effect.PeerCallsign &&
-                    m.MessageId == effect.MessageId &&
-                    m.ToCallsign.Equals(ourCallsign, StringComparison.OrdinalIgnoreCase));
-
-                if (msg is not null)
+                // ID-less messages cannot be ACKed; everything else gets an auto-ACK.
+                if (!string.IsNullOrWhiteSpace(effect.MessageId))
                 {
+                    await messageSendingService.SendAckAsync(
+                        effect.PeerCallsign, effect.MessageId, effect.ArrivedVia, ct);
                     msg.AckSent = true;
                     await db.SaveChangesAsync(ct);
                 }
 
-                // Broadcast to frontend
-                if (msg is not null)
-                {
-                    await hubContext.Clients.All.SendAsync(
-                        PacketHub.MessageReceivedMethod,
-                        ToInboxDto(msg),
-                        ct);
-                }
+                await hubContext.Clients.All.SendAsync(
+                    PacketHub.MessageReceivedMethod,
+                    ToInboxDto(msg),
+                    ct);
             }
             else if (effect.IsAckReceived && effect.OriginalMsgId is not null)
             {
@@ -242,11 +233,19 @@ public sealed class AprsPacketParsingService(
                         ct);
                 }
             }
-            else if (effect.IsDuplicateInboxMessage)
+            else if (effect.IsDuplicateInboxMessage && effect.InboxMessage is { } dup)
             {
                 // Remote station retransmitted because our earlier ACK was lost.
-                // Re-send the ACK so it stops retrying; no new inbox entry is created.
-                messageSendingService.SendAck(effect.PeerCallsign, effect.MessageId);
+                // Re-send the ACK so it stops retrying; no new inbox entry is created,
+                // but the UI is told the attempt count went up.
+                if (!string.IsNullOrWhiteSpace(effect.MessageId))
+                    await messageSendingService.SendAckAsync(
+                        effect.PeerCallsign, effect.MessageId, effect.ArrivedVia, ct);
+
+                await hubContext.Clients.All.SendAsync(
+                    PacketHub.MessageUpdatedMethod,
+                    ToInboxDto(dup),
+                    ct);
             }
         }
     }
@@ -730,8 +729,8 @@ public sealed class AprsPacketParsingService(
     {
         var fromCallsign = senderCallsignOverride ?? packet.StationCallsign;
         var addressee = info.Addressee ?? string.Empty;
-        var body = info.Content ?? string.Empty;
-        var messageId = info.Id ?? string.Empty;
+        var (body, messageId, replyAck) =
+            MessageHandlingLogic.NormalizeMessageText(info.Content ?? string.Empty, info.Id);
 
         packet.MessageData = new MessageData
         {
@@ -764,28 +763,39 @@ public sealed class AprsPacketParsingService(
             return;
         }
 
-        // Dedup: if we already have a message from this sender with this ID, the
-        // remote station is retransmitting because our ACK never reached it.
-        // Re-queue an ACK but skip adding a duplicate inbox entry.
-        if (!string.IsNullOrWhiteSpace(messageId))
+        // A reply-ack ({MM}AA) piggybacks an ACK for our message AA.
+        if (replyAck is not null)
         {
-            var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-                fromCallsign, messageId, db, ct);
+            effects.Add(new MessageEffect(
+                IsNewInboxMessage: false,
+                IsAckReceived: true,
+                PeerCallsign: fromCallsign,
+                MessageId: messageId,
+                OriginalMsgId: replyAck));
+        }
 
-            if (isDuplicate)
-            {
-                effects.Add(new MessageEffect(
-                    IsNewInboxMessage: false,
-                    IsAckReceived: false,
-                    PeerCallsign: fromCallsign,
-                    MessageId: messageId,
-                    IsDuplicateInboxMessage: true));
-                return;
-            }
+        // Dedup: the same text and ID from this sender heard again recently is a
+        // retransmission (our ACK never reached it).  Count the attempt on the
+        // existing row and re-ACK instead of adding another inbox entry.
+        var duplicate = await MessageHandlingLogic.FindDuplicateAsync(
+            fromCallsign, messageId, body, packet.ReceivedAt, db, ct);
+
+        if (duplicate is not null)
+        {
+            MessageHandlingLogic.RecordRetransmission(duplicate, packet.ReceivedAt);
+            effects.Add(new MessageEffect(
+                IsNewInboxMessage: false,
+                IsAckReceived: false,
+                PeerCallsign: fromCallsign,
+                MessageId: messageId,
+                IsDuplicateInboxMessage: true,
+                InboxMessage: duplicate,
+                ArrivedVia: packet.Source));
+            return;
         }
 
         // Regular message addressed to us — add to inbox.
-        db.Messages.Add(new Message
+        var message = new Message
         {
             FromCallsign = fromCallsign,
             ToCallsign = addressee.Trim(),
@@ -795,16 +805,16 @@ public sealed class AprsPacketParsingService(
             IsRead = false,
             AckSent = false,
             ReplySent = false,
-        });
+        };
+        db.Messages.Add(message);
 
-        if (!string.IsNullOrWhiteSpace(messageId))
-        {
-            effects.Add(new MessageEffect(
-                IsNewInboxMessage: true,
-                IsAckReceived: false,
-                PeerCallsign: fromCallsign,
-                MessageId: messageId));
-        }
+        effects.Add(new MessageEffect(
+            IsNewInboxMessage: true,
+            IsAckReceived: false,
+            PeerCallsign: fromCallsign,
+            MessageId: messageId,
+            InboxMessage: message,
+            ArrivedVia: packet.Source));
     }
 
     // -------------------------------------------------------------------------
@@ -911,6 +921,8 @@ public sealed class AprsPacketParsingService(
         Body = m.Body,
         MessageId = m.MessageId,
         ReceivedAt = m.ReceivedAt,
+        ReceiveCount = m.ReceiveCount,
+        LastReceivedAt = m.LastReceivedAt,
         IsRead = m.IsRead,
         AckSent = m.AckSent,
         ReplySent = m.ReplySent,
@@ -1295,4 +1307,6 @@ internal sealed record MessageEffect(
     string PeerCallsign,
     string MessageId,
     string? OriginalMsgId = null,
-    bool IsDuplicateInboxMessage = false);
+    bool IsDuplicateInboxMessage = false,
+    Message? InboxMessage = null,
+    PacketSource ArrivedVia = PacketSource.Rf);

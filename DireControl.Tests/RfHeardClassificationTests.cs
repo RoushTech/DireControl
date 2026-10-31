@@ -274,6 +274,7 @@ public sealed class RfHeardClassificationTests
         var options = Options.Create(new DireControlOptions { OurCallsign = "N0CALL-10" });
         var messageSending = new MessageSendingService(
             new NullFrameTransmitter(),
+            new AprsIsTxQueue(),
             new ThrowingScopeFactory(),
             options,
             NullLogger<MessageSendingService>.Instance);

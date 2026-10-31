@@ -65,6 +65,9 @@ public sealed class InboxMessageDto
     public string MessageId { get; init; } = string.Empty;
     public string? PathUsed { get; init; }
     public DateTime ReceivedAt { get; init; }
+    /// <summary>Inbound: copies heard (above 1 means the sender retransmitted).</summary>
+    public int ReceiveCount { get; init; }
+    public DateTime? LastReceivedAt { get; init; }
     public bool IsRead { get; init; }
     public bool AckSent { get; init; }
     public bool ReplySent { get; init; }

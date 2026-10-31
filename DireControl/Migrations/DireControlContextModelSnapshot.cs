@@ -222,6 +222,9 @@ namespace DireControl.Migrations
                     b.Property<bool>("IsRead")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("LastReceivedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("LastSentAt")
                         .HasColumnType("TEXT");
 
@@ -237,6 +240,11 @@ namespace DireControl.Migrations
 
                     b.Property<string>("PathUsed")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("ReceiveCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1);
 
                     b.Property<DateTime>("ReceivedAt")
                         .HasColumnType("TEXT");

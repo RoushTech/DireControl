@@ -14,6 +14,9 @@ export interface InboxMessageDto {
   messageId: string
   pathUsed: string | null
   receivedAt: string
+  /** Inbound: copies heard; above 1 means the sender retransmitted. */
+  receiveCount: number
+  lastReceivedAt: string | null
   isRead: boolean
   ackSent: boolean
   replySent: boolean

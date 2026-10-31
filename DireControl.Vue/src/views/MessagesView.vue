@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useDisplay } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { usePacketHubStore } from '@/stores/packetHub'
 import { getAllMessages } from '@/api/messagesApi'
@@ -49,7 +50,7 @@ function stationTypeName(t: StationType): string {
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
-const activeTab = ref<'inbox' | 'all' | 'outbox' | 'pms'>('inbox')
+const activeTab = ref<'threads' | 'all' | 'outbox' | 'pms'>('threads')
 
 // ─── All-messages state ──────────────────────────────────────────────────────
 const filterSender = ref('')
@@ -206,36 +207,130 @@ async function doPmsConfirm() {
   }
 }
 
-// ─── Inbox / Outbox ──────────────────────────────────────────────────────────
-// Sortable inbox columns (mock: clickable "From ▲" headers).
-type InboxSortKey = 'from' | 'receivedAt'
-const inboxSortKey = ref<InboxSortKey>('receivedAt')
-const inboxSortDesc = ref(true)
+// ─── Conversations ───────────────────────────────────────────────────────────
+// Inbox and sent messages grouped by the other station, chat-style.  Retried
+// copies are already folded server-side (receiveCount), so a thread shows one
+// bubble per real message.
+interface Conversation {
+  peer: string
+  messages: InboxMessageDto[]
+  last: InboxMessageDto
+  lastAt: string
+  unread: number
+}
 
-function toggleInboxSort(key: InboxSortKey) {
-  if (inboxSortKey.value === key) {
-    inboxSortDesc.value = !inboxSortDesc.value
-  } else {
-    inboxSortKey.value = key
-    inboxSortDesc.value = key === 'receivedAt'
+const { smAndDown } = useDisplay()
+
+function isOutbound(m: InboxMessageDto): boolean {
+  return !!ourCallsign.value && m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
+}
+
+function peerOf(m: InboxMessageDto): string {
+  return (isOutbound(m) ? m.toCallsign : m.fromCallsign).toUpperCase()
+}
+
+function lastActivityOf(m: InboxMessageDto): string {
+  return isOutbound(m) ? (m.lastSentAt ?? m.receivedAt) : (m.lastReceivedAt ?? m.receivedAt)
+}
+
+const conversations = computed<Conversation[]>(() => {
+  const byPeer = new Map<string, InboxMessageDto[]>()
+  for (const m of store.inboxMessages) {
+    const peer = peerOf(m)
+    const list = byPeer.get(peer)
+    if (list) list.push(m)
+    else byPeer.set(peer, [m])
+  }
+  return [...byPeer]
+    .map(([peer, messages]) => {
+      messages.sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
+      const lastAt = messages
+        .map(lastActivityOf)
+        .reduce((max, t) => (t.localeCompare(max) > 0 ? t : max))
+      return {
+        peer,
+        messages,
+        last: messages[messages.length - 1]!,
+        lastAt,
+        unread: messages.filter((m) => !isOutbound(m) && !m.isRead).length,
+      }
+    })
+    .sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+})
+
+const selectedPeer = ref<string | null>(null)
+
+const selectedConversation = computed(
+  () => conversations.value.find((c) => c.peer === selectedPeer.value) ?? null,
+)
+
+// Desktop opens the most recent thread; on phones the list stays in front
+// until a conversation is tapped.
+watch(
+  conversations,
+  (list) => {
+    if (!selectedPeer.value && !smAndDown.value && list.length > 0) {
+      selectedPeer.value = list[0]!.peer
+    }
+  },
+  { immediate: true },
+)
+
+function selectConversation(peer: string) {
+  selectedPeer.value = peer
+  replyBody.value = ''
+  replyError.value = ''
+}
+
+// Opening a thread (or a new message landing in the open one) marks it read.
+watch(
+  () => (activeTab.value === 'threads' ? selectedConversation.value : null),
+  async (conv) => {
+    if (!conv || conv.unread === 0) return
+    const unread = conv.messages.filter((m) => !isOutbound(m) && !m.isRead)
+    await Promise.allSettled(unread.map((m) => store.markRead(m.id)))
+  },
+)
+
+// Keep the thread pinned to the newest message.
+const threadEl = ref<HTMLElement | null>(null)
+watch(
+  () => [selectedPeer.value, selectedConversation.value?.messages.length],
+  async () => {
+    await nextTick()
+    if (threadEl.value) threadEl.value.scrollTop = threadEl.value.scrollHeight
+  },
+)
+
+function receiveCountTitle(m: InboxMessageDto): string {
+  const last = m.lastReceivedAt ? `, last ${timeAgo(m.lastReceivedAt, now.value)}` : ''
+  return `Heard ${m.receiveCount} times${last}. The sender retransmitted, usually because it missed our ACK.`
+}
+
+// Inline reply at the bottom of the thread.
+const replyBody = ref('')
+const replySending = ref(false)
+const replyError = ref('')
+
+async function sendReply() {
+  const peer = selectedPeer.value
+  const body = replyBody.value.trim()
+  if (!peer || !body || replySending.value) return
+  replySending.value = true
+  replyError.value = ''
+  try {
+    await store.send({
+      toCallsign: peer,
+      body: body.slice(0, MAX_BODY),
+      path: defaultOutboundPath.value || undefined,
+    })
+    replyBody.value = ''
+  } catch {
+    replyError.value = 'Failed to send. Is the radio connected?'
+  } finally {
+    replySending.value = false
   }
 }
-
-function inboxSortIcon(key: InboxSortKey): string {
-  if (inboxSortKey.value !== key) return 'mdi-unfold-more-horizontal'
-  return inboxSortDesc.value ? 'mdi-arrow-down' : 'mdi-arrow-up'
-}
-
-const inboundMessages = computed(() => {
-  const list = store.inboxMessages.filter(
-    (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase(),
-  )
-  const dir = inboxSortDesc.value ? -1 : 1
-  return [...list].sort((a, b) => {
-    if (inboxSortKey.value === 'from') return dir * a.fromCallsign.localeCompare(b.fromCallsign)
-    return dir * a.receivedAt.localeCompare(b.receivedAt)
-  })
-})
 
 const outboxMessages = computed(() =>
   store.inboxMessages.filter(
@@ -368,7 +463,8 @@ async function doSend() {
       path: composePath.value.trim() || undefined,
     })
     composeOpen.value = false
-    activeTab.value = 'outbox'
+    activeTab.value = 'threads'
+    selectedPeer.value = to
   } catch {
     sendError.value = 'Failed to send. Is Direwolf connected?'
   } finally {
@@ -400,14 +496,6 @@ watch(
     }
   },
 )
-
-// ─── Inbox actions ───────────────────────────────────────────────────────────
-async function onRowClick(message: InboxMessageDto) {
-  toggleExpand(message.id)
-  if (!message.isRead) {
-    await store.markRead(message.id)
-  }
-}
 
 // ─── Expandable message bodies ───────────────────────────────────────────────
 // APRS messages are ≤67 chars but "all messages" rows (telemetry defs, bulletins)
@@ -489,10 +577,6 @@ onUnmounted(() => {
   hub.off('messageReceived', onHubMessageReceived)
   hub.off('messageFailed', onHubMessageFailed)
 })
-
-function replyTo(message: InboxMessageDto) {
-  openCompose(message.fromCallsign)
-}
 </script>
 
 <template>
@@ -515,14 +599,14 @@ function replyTo(message: InboxMessageDto) {
       <div class="msg-tabs" role="tablist">
         <button
           class="msg-tab"
-          :class="{ 'msg-tab--active': activeTab === 'inbox' }"
+          :class="{ 'msg-tab--active': activeTab === 'threads' }"
           role="tab"
-          :aria-selected="activeTab === 'inbox'"
-          @click="activeTab = 'inbox'"
+          :aria-selected="activeTab === 'threads'"
+          @click="activeTab = 'threads'"
         >
-          Inbox
+          Conversations
           <v-chip size="x-small" variant="tonal" class="ml-1">
-            {{ inboundMessages.length.toLocaleString() }}
+            {{ conversations.length.toLocaleString() }}
           </v-chip>
           <v-chip v-if="store.unreadCount > 0" size="x-small" color="error" class="ml-1">
             {{ store.unreadCount }} unread
@@ -579,87 +663,190 @@ function replyTo(message: InboxMessageDto) {
       <v-divider />
 
       <v-window v-model="activeTab">
-        <!-- ── Inbox Tab ───────────────────────────────────────────────────────── -->
-        <v-window-item value="inbox">
-          <v-table density="compact" hover>
-            <thead>
-              <tr>
-                <th>
-                  <button class="sort-th" @click="toggleInboxSort('from')">
-                    From <v-icon size="12">{{ inboxSortIcon('from') }}</v-icon>
-                  </button>
-                </th>
-                <th>Message</th>
-                <th>
-                  <button class="sort-th" @click="toggleInboxSort('receivedAt')">
-                    Received <v-icon size="12">{{ inboxSortIcon('receivedAt') }}</v-icon>
-                  </button>
-                </th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="msg in inboundMessages"
-                :key="msg.id"
-                :class="{ 'msg-row-unread': !msg.isRead }"
-                style="cursor: pointer"
-                @click="onRowClick(msg)"
+        <!-- ── Conversations Tab ──────────────────────────────────────────────── -->
+        <v-window-item value="threads">
+          <div v-if="conversations.length === 0" class="text-center py-8">
+            <v-icon size="36" class="text-medium-emphasis mb-2">mdi-forum-outline</v-icon>
+            <div class="text-body-2 font-weight-medium mb-1">No conversations yet</div>
+            <div class="text-caption text-medium-emphasis mb-3">
+              Anything addressed to {{ ourCallsign || 'your station' }} lands here.
+            </div>
+            <v-btn
+              size="small"
+              color="primary"
+              variant="tonal"
+              prepend-icon="mdi-email-edit-outline"
+              @click="openCompose()"
+            >
+              Compose your first message
+            </v-btn>
+          </div>
+
+          <div
+            v-else
+            class="conv-layout"
+            :class="{ 'conv-layout--thread-open': smAndDown && selectedConversation }"
+          >
+            <!-- Conversation list -->
+            <div class="conv-list">
+              <button
+                v-for="conv in conversations"
+                :key="conv.peer"
+                class="conv-item"
+                :class="{
+                  'conv-item--active': conv.peer === selectedPeer,
+                  'conv-item--unread': conv.unread > 0,
+                }"
+                @click="selectConversation(conv.peer)"
               >
-                <td>
+                <div class="d-flex align-center ga-2">
+                  <span class="callsign-plain conv-peer">{{ conv.peer }}</span>
+                  <v-spacer />
+                  <span class="mono-time text-medium-emphasis" :title="formatUtc(conv.lastAt)">
+                    {{ timeAgo(conv.lastAt, now) }}
+                  </span>
+                </div>
+                <div class="d-flex align-center ga-2">
+                  <span class="conv-snippet">
+                    <span v-if="isOutbound(conv.last)" class="text-medium-emphasis">You: </span
+                    >{{ conv.last.body }}
+                  </span>
+                  <v-spacer />
+                  <v-chip v-if="conv.unread > 0" size="x-small" color="primary">
+                    {{ conv.unread }}
+                  </v-chip>
+                </div>
+              </button>
+            </div>
+
+            <!-- Thread -->
+            <div class="conv-thread">
+              <template v-if="selectedConversation">
+                <div class="conv-thread-header">
+                  <v-btn
+                    v-if="smAndDown"
+                    icon="mdi-arrow-left"
+                    size="small"
+                    variant="text"
+                    aria-label="Back to conversations"
+                    @click="selectedPeer = null"
+                  />
                   <a
                     href="#"
-                    class="callsign-link text-decoration-none"
-                    @click.stop.prevent="goToStation(msg.fromCallsign)"
-                    >{{ msg.fromCallsign }}</a
+                    class="callsign-link text-decoration-none callsign-plain"
+                    @click.prevent="goToStation(selectedConversation.peer)"
+                    >{{ selectedConversation.peer }}</a
                   >
-                </td>
-                <td
-                  class="msg-body"
-                  :class="{ 'msg-body--open': isExpanded(msg.id) }"
-                  :title="isExpanded(msg.id) ? undefined : msg.body"
-                >
-                  {{ msg.body }}
-                </td>
-                <td class="text-no-wrap mono-time">
-                  <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt, now) }}</span>
-                </td>
-                <td>
-                  <v-chip v-if="!msg.isRead" color="primary" size="x-small" variant="tonal">
-                    unread
-                  </v-chip>
-                  <v-chip v-else size="x-small" variant="tonal" class="msg-chip-read">read</v-chip>
-                </td>
-                <td>
-                  <v-btn
-                    icon="mdi-reply"
-                    size="x-small"
-                    variant="text"
-                    @click.stop="replyTo(msg)"
-                  />
-                </td>
-              </tr>
-              <tr v-if="inboundMessages.length === 0">
-                <td colspan="5" class="text-center py-8">
-                  <v-icon size="36" class="text-medium-emphasis mb-2">mdi-email-outline</v-icon>
-                  <div class="text-body-2 font-weight-medium mb-1">No messages yet</div>
-                  <div class="text-caption text-medium-emphasis mb-3">
-                    Anything addressed to {{ ourCallsign || 'your station' }} lands here.
+                  <span class="text-caption text-medium-emphasis">
+                    {{ selectedConversation.messages.length }} messages
+                  </span>
+                </div>
+
+                <div ref="threadEl" class="conv-messages">
+                  <div
+                    v-for="msg in selectedConversation.messages"
+                    :key="msg.id"
+                    class="bubble-row"
+                    :class="isOutbound(msg) ? 'bubble-row--out' : 'bubble-row--in'"
+                  >
+                    <div class="bubble" :class="isOutbound(msg) ? 'bubble--out' : 'bubble--in'">
+                      <div class="bubble-body">{{ msg.body }}</div>
+                      <div class="bubble-meta">
+                        <span class="mono-time" :title="formatUtc(msg.receivedAt)">
+                          {{ timeAgo(msg.receivedAt, now) }}
+                        </span>
+
+                        <!-- Inbound: how many copies we heard -->
+                        <v-chip
+                          v-if="!isOutbound(msg) && msg.receiveCount > 1"
+                          size="x-small"
+                          variant="tonal"
+                          color="warning"
+                          prepend-icon="mdi-repeat"
+                          :title="receiveCountTitle(msg)"
+                        >
+                          ×{{ msg.receiveCount }}
+                        </v-chip>
+
+                        <!-- Outbound: delivery state -->
+                        <template v-if="isOutbound(msg)">
+                          <v-chip :color="retryBadge(msg).color" size="x-small" variant="tonal">
+                            {{ retryBadge(msg).text }}
+                          </v-chip>
+                          <span
+                            v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
+                            class="text-caption text-medium-emphasis"
+                          >
+                            next in {{ secondsUntilRetry(msg) }}s
+                          </span>
+                        </template>
+                      </div>
+                      <div
+                        v-if="
+                          isOutbound(msg) &&
+                          (msg.retryState === RetryState.Failed ||
+                            msg.retryState === RetryState.Retrying)
+                        "
+                        class="d-flex ga-1 mt-1 justify-end"
+                      >
+                        <v-btn
+                          size="x-small"
+                          variant="text"
+                          color="primary"
+                          :loading="actionLoading[msg.id] === 'retry'"
+                          :disabled="!!actionLoading[msg.id]"
+                          @click="doRetryNow(msg)"
+                        >
+                          Retry now
+                        </v-btn>
+                        <v-btn
+                          v-if="msg.retryState === RetryState.Retrying"
+                          size="x-small"
+                          variant="text"
+                          color="error"
+                          :loading="actionLoading[msg.id] === 'cancel'"
+                          :disabled="!!actionLoading[msg.id]"
+                          @click="doCancel(msg)"
+                        >
+                          Cancel
+                        </v-btn>
+                      </div>
+                    </div>
                   </div>
-                  <v-btn
-                    size="small"
-                    color="primary"
-                    variant="tonal"
-                    prepend-icon="mdi-email-edit-outline"
-                    @click="openCompose()"
+                </div>
+
+                <div class="conv-reply">
+                  <v-text-field
+                    v-model="replyBody"
+                    :placeholder="`Message ${selectedConversation.peer}`"
+                    density="compact"
+                    variant="outlined"
+                    :maxlength="MAX_BODY"
+                    :counter="MAX_BODY"
+                    :error-messages="replyError"
+                    hide-details="auto"
+                    @keydown.enter.prevent="sendReply"
                   >
-                    Compose your first message
-                  </v-btn>
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
+                    <template #append-inner>
+                      <v-btn
+                        icon="mdi-send"
+                        size="small"
+                        variant="text"
+                        color="primary"
+                        aria-label="Send"
+                        :loading="replySending"
+                        :disabled="!replyBody.trim()"
+                        @click="sendReply"
+                      />
+                    </template>
+                  </v-text-field>
+                </div>
+              </template>
+              <div v-else class="conv-empty text-medium-emphasis text-body-2">
+                Pick a conversation.
+              </div>
+            </div>
+          </div>
         </v-window-item>
 
         <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
@@ -1285,12 +1472,6 @@ function replyTo(message: InboxMessageDto) {
   background: rgba(var(--v-theme-primary), 0.08);
 }
 
-/* Unread rows: bold + theme-token tint (mock's highlight, dark-mode safe). */
-.msg-row-unread td {
-  background: rgba(var(--v-theme-primary), 0.08);
-  font-weight: 600;
-}
-
 .msg-chip-read {
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
@@ -1304,22 +1485,6 @@ function replyTo(message: InboxMessageDto) {
 .callsign-plain {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 600;
-}
-
-.sort-th {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-}
-
-.sort-th:hover {
-  color: rgba(var(--v-theme-primary), 1);
 }
 
 /* Clipped by default; click expands to the full text. */
@@ -1339,6 +1504,162 @@ function replyTo(message: InboxMessageDto) {
   overflow: visible;
   text-overflow: clip;
   word-break: break-word;
+}
+
+/* ── Conversations ─────────────────────────────────────────────────────── */
+.conv-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  height: max(360px, calc(100vh - 190px));
+}
+
+.conv-list {
+  overflow-y: auto;
+  border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.conv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.conv-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.conv-item--active {
+  background: rgba(var(--v-theme-primary), 0.12);
+}
+
+.conv-item--unread .conv-snippet {
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.conv-peer {
+  color: rgb(var(--v-theme-primary));
+}
+
+.conv-snippet {
+  min-width: 0;
+  font-size: 0.82rem;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conv-thread {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.conv-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.conv-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-row--out {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: min(520px, 80%);
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.bubble--in {
+  background: rgba(var(--v-theme-on-surface), 0.07);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble--out {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-bottom-right-radius: 4px;
+}
+
+.bubble-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.bubble-row--out .bubble-meta {
+  justify-content: flex-end;
+}
+
+.conv-reply {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.conv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+}
+
+/* Phones: one pane at a time — list, or the open thread. */
+@media (max-width: 959px) {
+  .conv-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .conv-list {
+    border-right: none;
+  }
+
+  .conv-layout .conv-thread {
+    display: none;
+  }
+
+  .conv-layout--thread-open .conv-list {
+    display: none;
+  }
+
+  .conv-layout--thread-open .conv-thread {
+    display: flex;
+  }
 }
 
 .messages-view {

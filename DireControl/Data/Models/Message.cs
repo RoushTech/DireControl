@@ -13,6 +13,13 @@ public class Message : IEntityTypeConfiguration<Message>
     /// <summary>APRS message number.</summary>
     public string MessageId { get; set; } = string.Empty;
     public DateTime ReceivedAt { get; set; }
+    /// <summary>
+    /// Inbound only: how many copies of this message we have heard.  Values
+    /// above 1 mean the sender retransmitted (usually because our ACK was lost).
+    /// </summary>
+    public int ReceiveCount { get; set; } = 1;
+    /// <summary>Inbound only: UTC time the most recent copy was heard. Null until a retransmission arrives.</summary>
+    public DateTime? LastReceivedAt { get; set; }
     public bool IsRead { get; set; }
     public bool AckSent { get; set; }
     public bool ReplySent { get; set; }
@@ -38,6 +45,7 @@ public class Message : IEntityTypeConfiguration<Message>
     public void Configure(EntityTypeBuilder<Message> builder)
     {
         builder.HasIndex(m => m.ReceivedAt);
+        builder.Property(m => m.ReceiveCount).HasDefaultValue(1);
         builder.HasIndex(m => new { m.RetryState, m.NextRetryAt });
     }
 }

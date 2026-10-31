@@ -7,6 +7,13 @@ namespace DireControl.Api.Services;
 public static class IgateLogic
 {
     /// <summary>
+    /// Builds the APRS-IS line for a packet <em>we</em> originate directly on
+    /// APRS-IS (not gated from RF): <c>CALL&gt;APRS,TCPIP*:info</c>.
+    /// </summary>
+    public static string BuildIsOriginatedLine(string ourCallsign, string info)
+        => $"{ourCallsign.Trim().ToUpperInvariant()}>APRS,TCPIP*:{info}";
+
+    /// <summary>
     /// Builds the APRS-IS line for an RF-received packet, appending the
     /// <c>qAR</c> construct and gate callsign.  Returns <see langword="null"/>
     /// when the packet must not be gated:

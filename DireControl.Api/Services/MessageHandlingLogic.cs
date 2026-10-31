@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using DireControl.Data;
+using DireControl.Data.Models;
 using DireControl.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,18 +10,57 @@ namespace DireControl.Api.Services;
 /// Pure message-handling helpers extracted from <see cref="AprsPacketParsingService"/>
 /// so the core logic can be unit-tested without constructing the full background service.
 /// </summary>
-internal static class MessageHandlingLogic
+internal static partial class MessageHandlingLogic
 {
+    /// <summary>
+    /// How long after the last copy of a message a byte-identical retransmission
+    /// is still treated as a retry rather than a new message.  Message IDs are
+    /// short and wrap, so an unbounded match would swallow a genuinely new
+    /// message that happens to reuse an old ID and text.
+    /// </summary>
+    internal static readonly TimeSpan DuplicateWindow = TimeSpan.FromHours(1);
+
+    // APRS 1.1 reply-ack suffix: "text{MM}AA" where MM is this message's ID and
+    // the optional AA piggybacks an ACK for a message the sender received from us.
+    [GeneratedRegex(@"^(?<body>.*)\{(?<id>[A-Za-z0-9]{1,5})\}(?<ack>[A-Za-z0-9]{0,5})$", RegexOptions.Singleline)]
+    private static partial Regex ReplyAckSuffix();
+
+    /// <summary>
+    /// Splits an APRS 1.1 reply-ack suffix (<c>{MM}</c> or <c>{MM}AA</c>) off a
+    /// message body.  AprsSharp only understands the classic <c>{MM</c> form and
+    /// otherwise leaves the suffix in the content with an empty ID, which breaks
+    /// both auto-ACK and retransmission dedup (APRSdroid sends reply-acks).
+    /// When <paramref name="parsedId"/> is already populated the input is
+    /// returned unchanged.
+    /// </summary>
+    internal static (string Body, string MessageId, string? ReplyAck) NormalizeMessageText(
+        string content,
+        string? parsedId)
+    {
+        if (!string.IsNullOrEmpty(parsedId))
+            return (content, parsedId, null);
+
+        var match = ReplyAckSuffix().Match(content);
+        if (!match.Success)
+            return (content, string.Empty, null);
+
+        var ack = match.Groups["ack"].Value;
+        return (match.Groups["body"].Value, match.Groups["id"].Value, ack.Length > 0 ? ack : null);
+    }
+
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="body"/> is an APRS ACK packet.
     /// Sets <paramref name="originalMsgId"/> to the message number echoed by the remote
-    /// station (the text after "ack").
+    /// station (the text after "ack", minus any reply-ack <c>}AA</c> tail).
     /// </summary>
     internal static bool TryParseAck(string body, out string originalMsgId)
     {
         if (body.StartsWith("ack", StringComparison.OrdinalIgnoreCase) && body.Length > 3)
         {
             var id = body[3..].Trim();
+            var brace = id.IndexOf('}');
+            if (brace >= 0)
+                id = id[..brace];
             if (id.Length > 0)
             {
                 originalMsgId = id;
@@ -32,19 +73,94 @@ internal static class MessageHandlingLogic
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> if the inbox already contains a message from
-    /// <paramref name="fromCallsign"/> with the given <paramref name="messageId"/>.
-    /// A <see langword="true"/> result means the remote station is retransmitting
-    /// because our earlier ACK was lost.
+    /// Finds the inbox row that an incoming message is a retransmission of: same
+    /// sender, same message ID (empty for ID-less messages), same text, last
+    /// heard within <see cref="DuplicateWindow"/> of <paramref name="receivedAt"/>.
+    /// A match means the remote station is retrying because our ACK was lost
+    /// (or, for ID-less messages, the sender is simply repeating itself).
     /// </summary>
-    internal static Task<bool> IsMessageDuplicateAsync(
+    internal static Task<Message?> FindDuplicateAsync(
         string fromCallsign,
         string messageId,
+        string body,
+        DateTime receivedAt,
         DireControlContext db,
         CancellationToken ct)
-        => db.Messages.AnyAsync(
-            m => m.FromCallsign == fromCallsign && m.MessageId == messageId,
-            ct);
+    {
+        var cutoff = receivedAt - DuplicateWindow;
+        return db.Messages
+            .Where(m => m.FromCallsign == fromCallsign
+                     && m.MessageId == messageId
+                     && m.Body == body
+                     && (m.LastReceivedAt ?? m.ReceivedAt) >= cutoff)
+            .OrderByDescending(m => m.ReceivedAt)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    /// <summary>Records another received copy of <paramref name="existing"/>.</summary>
+    internal static void RecordRetransmission(Message existing, DateTime receivedAt)
+    {
+        existing.ReceiveCount++;
+        if (existing.LastReceivedAt is null || receivedAt > existing.LastReceivedAt)
+            existing.LastReceivedAt = receivedAt;
+    }
+
+    /// <summary>
+    /// One-shot repair for inbox rows stored before reply-ack parsing existed:
+    /// strips the <c>{MM}</c> suffix out of bodies that still carry it, then
+    /// folds retransmitted copies (same sender, ID and text, each within
+    /// <see cref="DuplicateWindow"/> of the previous copy) into the earliest row,
+    /// summing <see cref="Message.ReceiveCount"/>.  Idempotent.
+    /// </summary>
+    /// <returns>The number of duplicate rows removed.</returns>
+    internal static async Task<int> RepairInboxAsync(
+        DireControlContext db,
+        string ourCallsign,
+        CancellationToken ct)
+    {
+        var ucOur = ourCallsign.Trim().ToUpperInvariant();
+
+        // Only inbound rows: outbound rows are ours and already carry their ID.
+        var inbound = await db.Messages
+            .Where(m => m.FromCallsign != ucOur)
+            .OrderBy(m => m.ReceivedAt)
+            .ToListAsync(ct);
+
+        foreach (var m in inbound.Where(m => m.MessageId.Length == 0))
+        {
+            var (body, id, _) = NormalizeMessageText(m.Body, null);
+            m.Body = body;
+            m.MessageId = id;
+        }
+
+        var removed = 0;
+        foreach (var group in inbound.GroupBy(m => (m.FromCallsign, m.MessageId, m.Body)))
+        {
+            Message? keeper = null;
+            foreach (var m in group)
+            {
+                var keeperLast = keeper is null ? (DateTime?)null : keeper.LastReceivedAt ?? keeper.ReceivedAt;
+                if (keeper is null || m.ReceivedAt - keeperLast > DuplicateWindow)
+                {
+                    keeper = m;
+                    continue;
+                }
+
+                keeper.ReceiveCount += m.ReceiveCount;
+                var mLast = m.LastReceivedAt ?? m.ReceivedAt;
+                if (keeper.LastReceivedAt is null || mLast > keeper.LastReceivedAt)
+                    keeper.LastReceivedAt = mLast;
+                keeper.IsRead |= m.IsRead;
+                keeper.AckSent |= m.AckSent;
+                keeper.ReplySent |= m.ReplySent;
+                db.Messages.Remove(m);
+                removed++;
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+        return removed;
+    }
 
     /// <summary>
     /// For a third-party APRS packet (info field starts with <c>}</c>), extracts

@@ -98,6 +98,9 @@ public sealed class MessageHandlingTests
     [TestCase("Hello", false, "")]       // plain message body
     [TestCase("", false, "")]       // empty
     [TestCase("ack ", false, "")]       // "ack " — body.Length == 4 but ID is whitespace; trims to ""
+    [TestCase("ack87}", true, "87")]     // reply-ack capable ACK
+    [TestCase("ack87}AB", true, "87")]   // reply-ack ACK carrying a piggybacked ACK
+    [TestCase("ack}", false, "")]        // brace but no ID
     public void TryParseAck_ClassifiesBodyCorrectly(string body, bool expectedIsAck, string expectedId)
     {
         var isAck = MessageHandlingLogic.TryParseAck(body, out var id);
@@ -107,66 +110,198 @@ public sealed class MessageHandlingTests
     }
 
     // =========================================================================
-    // IsMessageDuplicateAsync — dedup query
+    // NormalizeMessageText — APRS 1.1 reply-ack suffix ({MM} / {MM}AA)
+    // AprsSharp leaves these in the content with an empty ID (APRSdroid sends them).
+    // =========================================================================
+
+    [TestCase("Should be off now?{87}", null, "Should be off now?", "87", null)]
+    [TestCase("Hello{AB}CD", null, "Hello", "AB", "CD")]
+    [TestCase("Turned off radio now. (2/2){89}", null, "Turned off radio now. (2/2)", "89", null)]
+    [TestCase("Plain message", null, "Plain message", "", null)]
+    [TestCase("Classic", "42", "Classic", "42", null)]           // parser already found the ID
+    [TestCase("Braces {in} the middle", null, "Braces {in} the middle", "", null)]
+    [TestCase("Too long{123456}", null, "Too long{123456}", "", null)] // IDs are at most 5 chars
+    public void NormalizeMessageText_SplitsReplyAckSuffix(
+        string content, string? parsedId, string expectedBody, string expectedId, string? expectedAck)
+    {
+        var (body, id, ack) = MessageHandlingLogic.NormalizeMessageText(content, parsedId);
+
+        Assert.That(body, Is.EqualTo(expectedBody));
+        Assert.That(id, Is.EqualTo(expectedId));
+        Assert.That(ack, Is.EqualTo(expectedAck));
+    }
+
+    [Test]
+    public void ReplyAckMessage_RealPacket_ParsesIdAfterNormalization()
+    {
+        var packet = new AprsSharp.AprsParser.Packet(
+            "K4DDA-7>APDR16,WIDE1-1::W3UWU    :Should be off now? Are you still seeing it?{87}");
+        var info = (AprsSharp.AprsParser.MessageInfo)packet.InfoField!;
+
+        var (body, id, ack) = MessageHandlingLogic.NormalizeMessageText(info.Content ?? "", info.Id);
+
+        Assert.That(body, Is.EqualTo("Should be off now? Are you still seeing it?"));
+        Assert.That(id, Is.EqualTo("87"));
+        Assert.That(ack, Is.Null);
+    }
+
+    // =========================================================================
+    // FindDuplicateAsync — retransmission dedup query
+    // =========================================================================
+
+    private static readonly DateTime T0 = new(2026, 10, 19, 20, 0, 0, DateTimeKind.Utc);
+
+    [Test]
+    public async Task FindDuplicate_ReturnsNull_WhenNoMatchingMessageExists()
+    {
+        var dup = await MessageHandlingLogic.FindDuplicateAsync("W1ABC", "42", "Test", T0, _db, default);
+
+        Assert.That(dup, Is.Null);
+    }
+
+    [Test]
+    public async Task FindDuplicate_ReturnsRow_WhenSameSenderIdAndBodyWithinWindow()
+    {
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42", receivedAt: T0);
+        await _db.SaveChangesAsync();
+
+        var dup = await MessageHandlingLogic.FindDuplicateAsync(
+            "W1ABC", "42", "Test", T0.AddMinutes(5), _db, default);
+
+        Assert.That(dup, Is.Not.Null);
+    }
+
+    [TestCase("W9XYZ", "42", "Test")]  // different sender
+    [TestCase("W1ABC", "99", "Test")]  // different ID
+    [TestCase("W1ABC", "42", "Other")] // ID reused for different text
+    public async Task FindDuplicate_ReturnsNull_WhenKeyDiffers(string from, string id, string body)
+    {
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42", receivedAt: T0);
+        await _db.SaveChangesAsync();
+
+        var dup = await MessageHandlingLogic.FindDuplicateAsync(from, id, body, T0.AddMinutes(1), _db, default);
+
+        Assert.That(dup, Is.Null);
+    }
+
+    [Test]
+    public async Task FindDuplicate_ReturnsNull_OutsideWindow()
+    {
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42", receivedAt: T0);
+        await _db.SaveChangesAsync();
+
+        var dup = await MessageHandlingLogic.FindDuplicateAsync(
+            "W1ABC", "42", "Test", T0 + MessageHandlingLogic.DuplicateWindow + TimeSpan.FromMinutes(1), _db, default);
+
+        Assert.That(dup, Is.Null);
+    }
+
+    [Test]
+    public async Task FindDuplicate_WindowSlides_WithLastReceivedAt()
+    {
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42", receivedAt: T0);
+        await _db.SaveChangesAsync();
+        var row = await _db.Messages.SingleAsync();
+        MessageHandlingLogic.RecordRetransmission(row, T0.AddMinutes(50));
+        await _db.SaveChangesAsync();
+
+        // 90 min after the first copy but only 40 after the latest retry.
+        var dup = await MessageHandlingLogic.FindDuplicateAsync(
+            "W1ABC", "42", "Test", T0.AddMinutes(90), _db, default);
+
+        Assert.That(dup, Is.Not.Null);
+        Assert.That(dup!.ReceiveCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task FindDuplicate_MatchesIdLessMessagesByText()
+    {
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "", body: "no id here", receivedAt: T0);
+        await _db.SaveChangesAsync();
+
+        var dup = await MessageHandlingLogic.FindDuplicateAsync(
+            "W1ABC", "", "no id here", T0.AddMinutes(2), _db, default);
+
+        Assert.That(dup, Is.Not.Null);
+    }
+
+    [Test]
+    public void RecordRetransmission_IncrementsCountAndTracksLatest()
+    {
+        var m = new Message { FromCallsign = "W1ABC", ToCallsign = "W3UWU", ReceivedAt = T0 };
+
+        MessageHandlingLogic.RecordRetransmission(m, T0.AddMinutes(3));
+        MessageHandlingLogic.RecordRetransmission(m, T0.AddMinutes(1)); // out of order
+
+        Assert.That(m.ReceiveCount, Is.EqualTo(3));
+        Assert.That(m.LastReceivedAt, Is.EqualTo(T0.AddMinutes(3)));
+    }
+
+    // =========================================================================
+    // RepairInboxAsync — folds rows stored before reply-ack parsing existed
     // =========================================================================
 
     [Test]
-    public async Task IsMessageDuplicate_ReturnsFalse_WhenNoMatchingMessageExists()
+    public async Task RepairInbox_StripsSuffixAndMergesRetransmissions()
     {
-        var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-            "W1ABC", "42", _db, default);
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "Should be off now?{87}", receivedAt: T0, isRead: true);
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "Should be off now?{87}", receivedAt: T0.AddMinutes(2));
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "Should be off now?{87}", receivedAt: T0.AddMinutes(4));
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "Turned off radio now.{89}", receivedAt: T0.AddMinutes(5));
+        await _db.SaveChangesAsync();
 
-        Assert.That(isDuplicate, Is.False);
+        var removed = await MessageHandlingLogic.RepairInboxAsync(_db, "W3UWU", default);
+
+        var rows = await _db.Messages.OrderBy(m => m.ReceivedAt).ToListAsync();
+        Assert.That(removed, Is.EqualTo(2));
+        Assert.That(rows, Has.Count.EqualTo(2));
+        Assert.That(rows[0].Body, Is.EqualTo("Should be off now?"));
+        Assert.That(rows[0].MessageId, Is.EqualTo("87"));
+        Assert.That(rows[0].ReceiveCount, Is.EqualTo(3));
+        Assert.That(rows[0].ReceivedAt, Is.EqualTo(T0));
+        Assert.That(rows[0].LastReceivedAt, Is.EqualTo(T0.AddMinutes(4)));
+        Assert.That(rows[0].IsRead, Is.True);
+        Assert.That(rows[1].MessageId, Is.EqualTo("89"));
+        Assert.That(rows[1].ReceiveCount, Is.EqualTo(1));
     }
 
     [Test]
-    public async Task IsMessageDuplicate_ReturnsTrue_WhenExactMatchExists()
+    public async Task RepairInbox_KeepsCopiesSeparatedByMoreThanWindow()
     {
-        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42");
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "1", body: "ok", receivedAt: T0);
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "1", body: "ok", receivedAt: T0.AddDays(3));
         await _db.SaveChangesAsync();
 
-        var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-            "W1ABC", "42", _db, default);
+        var removed = await MessageHandlingLogic.RepairInboxAsync(_db, "W3UWU", default);
 
-        Assert.That(isDuplicate, Is.True);
+        Assert.That(removed, Is.Zero);
+        Assert.That(await _db.Messages.CountAsync(), Is.EqualTo(2));
     }
 
     [Test]
-    public async Task IsMessageDuplicate_ReturnsFalse_WhenFromCallsignDiffers()
+    public async Task RepairInbox_LeavesOutboundRowsAlone()
     {
-        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42");
+        SeedMessage(from: "W3UWU", to: "K4DDA-7", messageId: "5", body: "hi", receivedAt: T0);
+        SeedMessage(from: "W3UWU", to: "K4DDA-7", messageId: "5", body: "hi", receivedAt: T0.AddMinutes(1));
         await _db.SaveChangesAsync();
 
-        var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-            "W9XYZ", "42", _db, default);
+        var removed = await MessageHandlingLogic.RepairInboxAsync(_db, "w3uwu", default);
 
-        Assert.That(isDuplicate, Is.False);
+        Assert.That(removed, Is.Zero);
     }
 
     [Test]
-    public async Task IsMessageDuplicate_ReturnsFalse_WhenMessageIdDiffers()
+    public async Task RepairInbox_IsIdempotent()
     {
-        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "42");
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "x{1}", receivedAt: T0);
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "x{1}", receivedAt: T0.AddMinutes(1));
         await _db.SaveChangesAsync();
 
-        var isDuplicate = await MessageHandlingLogic.IsMessageDuplicateAsync(
-            "W1ABC", "99", _db, default);
+        await MessageHandlingLogic.RepairInboxAsync(_db, "W3UWU", default);
+        var second = await MessageHandlingLogic.RepairInboxAsync(_db, "W3UWU", default);
 
-        Assert.That(isDuplicate, Is.False);
-    }
-
-    [Test]
-    public async Task IsMessageDuplicate_DoesNotMatchAcrossMultipleSenders()
-    {
-        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "1");
-        SeedMessage(from: "W2DEF", to: "W3UWU", messageId: "2");
-        await _db.SaveChangesAsync();
-
-        // Each callsign's message ID is independent.
-        Assert.That(await MessageHandlingLogic.IsMessageDuplicateAsync("W1ABC", "2", _db, default), Is.False);
-        Assert.That(await MessageHandlingLogic.IsMessageDuplicateAsync("W2DEF", "1", _db, default), Is.False);
-        Assert.That(await MessageHandlingLogic.IsMessageDuplicateAsync("W1ABC", "1", _db, default), Is.True);
-        Assert.That(await MessageHandlingLogic.IsMessageDuplicateAsync("W2DEF", "2", _db, default), Is.True);
+        Assert.That(second, Is.Zero);
+        Assert.That((await _db.Messages.SingleAsync()).ReceiveCount, Is.EqualTo(2));
     }
 
     // =========================================================================
@@ -336,7 +471,9 @@ public sealed class MessageHandlingTests
         string body = "Test",
         bool ackSent = false,
         RetryState retryState = RetryState.Pending,
-        DateTime? nextRetryAt = null)
+        DateTime? nextRetryAt = null,
+        DateTime? receivedAt = null,
+        bool isRead = false)
     {
         _db.Messages.Add(new Message
         {
@@ -344,8 +481,8 @@ public sealed class MessageHandlingTests
             ToCallsign = to,
             Body = body,
             MessageId = messageId,
-            ReceivedAt = DateTime.UtcNow,
-            IsRead = false,
+            ReceivedAt = receivedAt ?? DateTime.UtcNow,
+            IsRead = isRead,
             AckSent = ackSent,
             ReplySent = false,
             RetryState = retryState,

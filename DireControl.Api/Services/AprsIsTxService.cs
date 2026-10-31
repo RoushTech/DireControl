@@ -7,8 +7,8 @@ using Microsoft.Extensions.Options;
 namespace DireControl.Api.Services;
 
 /// <summary>
-/// Send-only APRS-IS connection that drains the RF→IS gate queue
-/// (<see cref="AprsIsTxQueue"/>).  Kept separate from the receive client —
+/// Send-only APRS-IS connection that drains <see cref="AprsIsTxQueue"/>:
+/// RF→IS gated packets plus our own APRS-IS-originated traffic (message ACKs).  Kept separate from the receive client —
 /// the AprsSharp client exposes no public send path — and logged in without a
 /// filter so the server pushes (almost) nothing back.  Standard practice for
 /// transmit-only igate/tracker connections.
@@ -37,9 +37,11 @@ public sealed class AprsIsTxService(
                     break;
 
                 var settings = await GetSettingsAsync(stoppingToken);
-                if (settings is not { AprsIsEnabled: true, RfToIsGatingEnabled: true })
+                // Gated lines are only queued while RF→IS gating is on; our own
+                // traffic (ACKs) only needs APRS-IS itself.
+                if (settings is not { AprsIsEnabled: true })
                 {
-                    // Gating switched off with lines still queued — drop them.
+                    // APRS-IS switched off with lines still queued — drop them.
                     while (txQueue.Reader.TryRead(out _)) { }
                     continue;
                 }
@@ -89,7 +91,7 @@ public sealed class AprsIsTxService(
             while (await reader.ReadLineAsync(ct) is { } line)
             {
                 if (line.Contains("unverified", StringComparison.OrdinalIgnoreCase))
-                    logger.LogError("APRS-IS TX login unverified — RF→IS gating will be ignored by the server.");
+                    logger.LogError("APRS-IS TX login unverified — the server will drop gated packets and ACKs. Check the passcode.");
             }
         }, ct);
 
@@ -112,7 +114,7 @@ public sealed class AprsIsTxService(
             {
                 await writer.WriteLineAsync(line.AsMemory(), ct);
                 txQueue.RecordSent();
-                logger.LogDebug("Gated RF→IS: {Line}", line);
+                logger.LogDebug("Sent to APRS-IS: {Line}", line);
             }
         }
 

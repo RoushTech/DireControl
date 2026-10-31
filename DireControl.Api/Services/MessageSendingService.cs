@@ -2,6 +2,7 @@ using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
 using DireControl.Modem.Ax25;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Services;
@@ -13,6 +14,7 @@ namespace DireControl.Api.Services;
 /// </summary>
 public sealed class MessageSendingService(
     IFrameTransmitter transmitter,
+    AprsIsTxQueue aprsIsTxQueue,
     IServiceScopeFactory scopeFactory,
     IOptions<DireControlOptions> options,
     ILogger<MessageSendingService> logger)
@@ -89,26 +91,61 @@ public sealed class MessageSendingService(
     }
 
     /// <summary>
-    /// Sends an ACK for a received message. ACKs are sent direct (no path).
-    /// Does not store anything new in the database; the caller is responsible
-    /// for setting <c>AckSent = true</c> on the corresponding
-    /// <see cref="Message"/> record.
+    /// Sends an ACK for a received message back the way the sender can hear it.
+    /// RF ACKs use the outbound digipeater path: a sender we heard through a
+    /// digipeater is usually out of direct range, and a digipeated ACK also
+    /// reaches iGates and therefore APRS-IS.  A message that arrived over
+    /// APRS-IS is also ACKed directly on APRS-IS, because the sender may not be
+    /// on our RF frequency at all; RF is added only when the sender was heard
+    /// on RF recently (the standard IS→RF rule).
+    /// Does not store anything; the caller sets <c>AckSent</c>.
     /// </summary>
-    public void SendAck(string toCallsign, string originalMessageId)
+    public async Task SendAckAsync(
+        string toCallsign,
+        string originalMessageId,
+        PacketSource arrivedVia,
+        CancellationToken ct = default)
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildAckInfo(toCallsign, originalMessageId);
-        var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, path: string.Empty);
 
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        var settings = await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct)
+                       ?? new UserSetting { Id = 1 };
+
+        var sendRf = true;
+        if (arrivedVia == PacketSource.AprsIs)
+        {
+            if (settings.AprsIsEnabled)
+            {
+                aprsIsTxQueue.Enqueue(IgateLogic.BuildIsOriginatedLine(ourCallsign, info));
+                logger.LogDebug("Queued APRS-IS ACK to {ToCallsign} for message id={MessageId}.",
+                    toCallsign, originalMessageId);
+
+                var heardCutoff = DateTime.UtcNow.AddMinutes(-Math.Max(1, settings.IsToRfRecentHeardMinutes));
+                var peer = toCallsign.Trim().ToUpperInvariant();
+                sendRf = await db.Stations.AnyAsync(
+                    s => s.Callsign == peer && s.LastHeardRf != null && s.LastHeardRf >= heardCutoff,
+                    ct);
+            }
+        }
+
+        if (!sendRf)
+            return;
+
+        var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, settings.OutboundPath ?? string.Empty);
         if (!transmitter.TrySend(frame))
         {
             logger.LogWarning(
-                "Cannot send ACK to {ToCallsign}: no RF transmit backend available.",
+                "Cannot send RF ACK to {ToCallsign}: no RF transmit backend available.",
                 toCallsign);
             return;
         }
 
-        logger.LogDebug("Sent ACK to {ToCallsign} for message id={MessageId}.", toCallsign, originalMessageId);
+        logger.LogDebug("Sent RF ACK to {ToCallsign} for message id={MessageId} via {Path}.",
+            toCallsign, originalMessageId,
+            string.IsNullOrEmpty(settings.OutboundPath) ? "(direct)" : settings.OutboundPath);
     }
 
     /// <summary>
