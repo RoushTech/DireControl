@@ -123,17 +123,25 @@ public class MessagesController(
         return Ok(ToInboxDto(message));
     }
 
+    /// <summary>
+    /// Sends a message, splitting text longer than 67 characters into numbered
+    /// parts (see <see cref="MessageSplitter"/>).  Each part is its own APRS
+    /// message with its own ID, ACK and retry schedule.  Returns every part sent,
+    /// in order.
+    /// </summary>
     [HttpPost("send")]
-    public async Task<ActionResult<InboxMessageDto>> Send(
+    public async Task<ActionResult<IReadOnlyList<InboxMessageDto>>> Send(
         [FromBody] SendMessageRequest request,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.ToCallsign))
             return BadRequest("ToCallsign is required.");
 
-        var body = request.Body?.Trim() ?? string.Empty;
-        if (body.Length > 67)
-            body = body[..67];
+        var parts = MessageSplitter.Split(request.Body ?? string.Empty);
+        if (parts.Count == 0)
+            return BadRequest("Body is required.");
+        if (parts.Count > MessageSplitter.MaxParts)
+            return BadRequest($"Message too long: {parts.Count} parts (max {MessageSplitter.MaxParts}).");
 
         // Resolve path: per-message override takes precedence over the stored default.
         string path;
@@ -147,18 +155,28 @@ public class MessagesController(
             path = userSetting?.OutboundPath ?? "WIDE1-1,WIDE2-1";
         }
 
-        var messageId = MessageSendingService.GenerateMessageId();
-        var message = await messageSendingService.SendMessageAsync(
-            request.ToCallsign.Trim().ToUpperInvariant(),
-            body,
-            messageId,
-            path,
-            ct);
+        var toCallsign = request.ToCallsign.Trim().ToUpperInvariant();
+        var sent = new List<InboxMessageDto>(parts.Count);
+        foreach (var part in parts)
+        {
+            var message = await messageSendingService.SendMessageAsync(
+                toCallsign,
+                part,
+                MessageSendingService.GenerateMessageId(),
+                path,
+                ct);
 
-        if (message is null)
+            // The transmitter is all-or-nothing in practice; if it drops out
+            // mid-way, report what did go out rather than failing the whole send.
+            if (message is null)
+                break;
+            sent.Add(ToInboxDto(message));
+        }
+
+        if (sent.Count == 0)
             return StatusCode(503, "No active Direwolf connection.");
 
-        return Ok(ToInboxDto(message));
+        return Ok(sent);
     }
 
     /// <summary>

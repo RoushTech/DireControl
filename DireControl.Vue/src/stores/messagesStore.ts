@@ -40,11 +40,10 @@ export const useMessagesStore = defineStore('messages', () => {
     if (idx !== -1) inboxMessages.value[idx] = updated
   }
 
-  async function send(request: SendMessageRequest): Promise<InboxMessageDto> {
+  async function send(request: SendMessageRequest): Promise<InboxMessageDto[]> {
     const sent = await sendMessage(request)
-    // Sent messages that are TO us appear in inbox; others go to "all messages" eventually,
-    // but we optimistically add them to inbox as outbound records.
-    inboxMessages.value.unshift(sent)
+    // Outbound records live alongside the inbox (threads pair them by peer).
+    inboxMessages.value.unshift(...[...sent].reverse())
     return sent
   }
 

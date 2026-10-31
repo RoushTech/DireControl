@@ -33,8 +33,9 @@ export async function markMessageRead(id: number): Promise<InboxMessageDto> {
   return data
 }
 
-export async function sendMessage(request: SendMessageRequest): Promise<InboxMessageDto> {
-  const { data } = await http.post<InboxMessageDto>('/api/v0/messages/send', request)
+/** Sends a message; long text is split server-side, so every part sent comes back. */
+export async function sendMessage(request: SendMessageRequest): Promise<InboxMessageDto[]> {
+  const { data } = await http.post<InboxMessageDto[]>('/api/v0/messages/send', request)
   return data
 }
 

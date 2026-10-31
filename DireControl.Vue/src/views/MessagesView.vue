@@ -17,6 +17,7 @@ import {
 import { apiErrorDetail } from '@/api/axios'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
+import { APRS_MAX_PARTS, aprsPartCount } from '@/utils/aprsMessage'
 import type { AllMessagePacketDto, InboxMessageDto, MessageFailedDto } from '@/types/message'
 import { RetryState } from '@/types/message'
 import { type StationDto, StationType } from '@/types/station'
@@ -315,13 +316,13 @@ const replyError = ref('')
 async function sendReply() {
   const peer = selectedPeer.value
   const body = replyBody.value.trim()
-  if (!peer || !body || replySending.value) return
+  if (!peer || !body || replySending.value || replyParts.value > APRS_MAX_PARTS) return
   replySending.value = true
   replyError.value = ''
   try {
     await store.send({
       toCallsign: peer,
-      body: body.slice(0, MAX_BODY),
+      body,
       path: defaultOutboundPath.value || undefined,
     })
     replyBody.value = ''
@@ -424,7 +425,14 @@ const composeAdvancedOpen = ref(false)
 const defaultOutboundPath = ref('')
 const sending = ref(false)
 const sendError = ref('')
-const MAX_BODY = 67
+// Long text is split server-side into numbered 67-char APRS messages.
+const replyParts = computed(() => aprsPartCount(replyBody.value))
+const composeParts = computed(() => aprsPartCount(composeBody.value))
+
+function partsHint(parts: number): string {
+  if (parts > APRS_MAX_PARTS) return `Too long: ${parts} messages (max ${APRS_MAX_PARTS})`
+  return parts > 1 ? `Sends as ${parts} messages` : ''
+}
 
 const PATH_REGEX = /^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$/
 
@@ -454,12 +462,13 @@ async function doSend() {
   if (!to || !composeBody.value.trim()) return
   if (to.length > 9 || !/^[A-Z0-9-]+$/.test(to)) return
   if (composePathError.value) return
+  if (composeParts.value > APRS_MAX_PARTS) return
   sending.value = true
   sendError.value = ''
   try {
     await store.send({
       toCallsign: to,
-      body: composeBody.value.trim().slice(0, MAX_BODY),
+      body: composeBody.value.trim(),
       path: composePath.value.trim() || undefined,
     })
     composeOpen.value = false
@@ -821,9 +830,11 @@ onUnmounted(() => {
                     :placeholder="`Message ${selectedConversation.peer}`"
                     density="compact"
                     variant="outlined"
-                    :maxlength="MAX_BODY"
-                    :counter="MAX_BODY"
-                    :error-messages="replyError"
+                    :error-messages="
+                      replyError || (replyParts > APRS_MAX_PARTS ? partsHint(replyParts) : '')
+                    "
+                    :hint="partsHint(replyParts)"
+                    persistent-hint
                     hide-details="auto"
                     @keydown.enter.prevent="sendReply"
                   >
@@ -835,7 +846,7 @@ onUnmounted(() => {
                         color="primary"
                         aria-label="Send"
                         :loading="replySending"
-                        :disabled="!replyBody.trim()"
+                        :disabled="!replyBody.trim() || replyParts > APRS_MAX_PARTS"
                         @click="sendReply"
                       />
                     </template>
@@ -1330,9 +1341,10 @@ onUnmounted(() => {
             density="compact"
             variant="outlined"
             rows="3"
-            :maxlength="MAX_BODY"
-            :counter="MAX_BODY"
-            :hint="`${MAX_BODY - composeBody.length} characters remaining`"
+            :error-messages="composeParts > APRS_MAX_PARTS ? partsHint(composeParts) : ''"
+            :hint="
+              partsHint(composeParts) || `${67 - composeBody.length} characters left in one message`
+            "
             persistent-hint
             hide-details="auto"
             no-resize
@@ -1389,7 +1401,7 @@ onUnmounted(() => {
           <v-btn
             color="primary"
             :loading="sending"
-            :disabled="!composeTo?.trim() || !composeBody.trim()"
+            :disabled="!composeTo?.trim() || !composeBody.trim() || composeParts > APRS_MAX_PARTS"
             @click="doSend"
           >
             Send
