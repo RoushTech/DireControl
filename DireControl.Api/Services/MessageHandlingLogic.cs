@@ -106,11 +106,52 @@ internal static partial class MessageHandlingLogic
     }
 
     /// <summary>
+    /// Finds the packets that carried <paramref name="message"/>: the linked
+    /// first copy plus every packet from the sender, between the first and last
+    /// copy, whose addressee, ID and (normalized) text match.  Queried live from
+    /// the packet log, so copies purged by packet cleanup simply drop out.
+    /// </summary>
+    internal static async Task<List<Packet>> FindCopiesAsync(
+        Message message,
+        DireControlContext db,
+        CancellationToken ct)
+    {
+        var slack = TimeSpan.FromMinutes(1);
+        var from = message.ReceivedAt - slack;
+        var to = (message.LastReceivedAt ?? message.ReceivedAt) + slack;
+
+        var candidates = await db.Packets
+            .AsNoTracking()
+            .Where(p => (p.Id == message.PacketId)
+                     || (p.StationCallsign == message.FromCallsign
+                         && p.ParsedType == PacketType.Message
+                         && p.ReceivedAt >= from
+                         && p.ReceivedAt <= to))
+            .OrderBy(p => p.ReceivedAt)
+            .ToListAsync(ct);
+
+        return candidates
+            .Where(p => p.Id == message.PacketId || IsCopyOf(p, message))
+            .ToList();
+    }
+
+    private static bool IsCopyOf(Packet packet, Message message)
+    {
+        if (packet.MessageData is not { } data)
+            return false;
+        if (!data.Addressee.Trim().Equals(message.ToCallsign, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var (body, id, _) = NormalizeMessageText(data.Text, data.MessageId);
+        return id == message.MessageId && body == message.Body;
+    }
+
+    /// <summary>
     /// One-shot repair for inbox rows stored before reply-ack parsing existed:
-    /// strips the <c>{MM}</c> suffix out of bodies that still carry it, then
-    /// folds retransmitted copies (same sender, ID and text, each within
+    /// strips the <c>{MM}</c> suffix out of bodies that still carry it, folds
+    /// retransmitted copies (same sender, ID and text, each within
     /// <see cref="DuplicateWindow"/> of the previous copy) into the earliest row,
-    /// summing <see cref="Message.ReceiveCount"/>.  Idempotent.
+    /// summing <see cref="Message.ReceiveCount"/>, and links unlinked rows to
+    /// the packet of their first copy.  Idempotent.
     /// </summary>
     /// <returns>The number of duplicate rows removed.</returns>
     internal static async Task<int> RepairInboxAsync(
@@ -156,6 +197,15 @@ internal static partial class MessageHandlingLogic
                 db.Messages.Remove(m);
                 removed++;
             }
+        }
+
+        // Link surviving rows to the packet of their first copy so the UI can
+        // show how they arrived.  Rows whose packets were purged stay unlinked.
+        foreach (var m in inbound.Where(m => m.PacketId is null && db.Entry(m).State != EntityState.Deleted))
+        {
+            var copies = await FindCopiesAsync(m, db, ct);
+            if (copies.Count > 0)
+                m.PacketId = copies[0].Id;
         }
 
         await db.SaveChangesAsync(ct);

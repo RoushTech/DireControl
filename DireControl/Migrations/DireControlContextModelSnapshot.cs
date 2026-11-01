@@ -238,6 +238,9 @@ namespace DireControl.Migrations
                     b.Property<DateTime?>("NextRetryAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("PacketId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("PathUsed")
                         .HasColumnType("TEXT");
 
@@ -263,6 +266,8 @@ namespace DireControl.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("PacketId");
 
                     b.HasIndex("ReceivedAt");
 
@@ -1151,6 +1156,16 @@ namespace DireControl.Migrations
                         .IsRequired();
 
                     b.Navigation("OwnBeacon");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.Message", b =>
+                {
+                    b.HasOne("DireControl.Data.Models.Packet", "Packet")
+                        .WithMany()
+                        .HasForeignKey("PacketId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Packet");
                 });
 
             modelBuilder.Entity("DireControl.Data.Models.OwnBeacon", b =>

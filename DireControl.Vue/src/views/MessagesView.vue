@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDisplay } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { usePacketHubStore } from '@/stores/packetHub'
-import { getAllMessages } from '@/api/messagesApi'
+import { getAllMessages, getMessageCopies } from '@/api/messagesApi'
 import {
   createPmsMessage,
   deletePmsMessage,
@@ -18,9 +18,15 @@ import { apiErrorDetail } from '@/api/axios'
 import { getSettings, getStations } from '@/api/stationsApi'
 import { formatUtc, timeAgo } from '@/utils/time'
 import { APRS_MAX_PARTS, aprsPartCount } from '@/utils/aprsMessage'
-import type { AllMessagePacketDto, InboxMessageDto, MessageFailedDto } from '@/types/message'
+import type {
+  AllMessagePacketDto,
+  InboxMessageDto,
+  MessageCopyDto,
+  MessageFailedDto,
+} from '@/types/message'
 import { RetryState } from '@/types/message'
-import { type StationDto, StationType } from '@/types/station'
+import { HeardVia, type StationDto, StationType } from '@/types/station'
+import { PacketSource } from '@/types/packet'
 import { useUiStore } from '@/stores/uiStore'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRouter } from 'vue-router'
@@ -306,6 +312,58 @@ watch(
 function receiveCountTitle(m: InboxMessageDto): string {
   const last = m.lastReceivedAt ? `, last ${timeAgo(m.lastReceivedAt, now.value)}` : ''
   return `Heard ${m.receiveCount} times${last}. The sender retransmitted, usually because it missed our ACK.`
+}
+
+// ─── Message routes ──────────────────────────────────────────────────────────
+// Inbound bubbles show how the first copy arrived (RF / APRS-IS + via-path);
+// the ×N chip expands every copy, since retries often take different routes.
+const HEARD_VIA_LABELS: Partial<Record<HeardVia, string>> = {
+  [HeardVia.Direct]: 'direct',
+  [HeardVia.Digi]: 'via digipeater',
+  [HeardVia.DirectAndDigi]: 'direct & digi',
+  [HeardVia.IgateRf]: 'RF → iGate',
+  [HeardVia.IgateRfDigi]: 'RF → digi → iGate',
+  [HeardVia.Internet]: 'internet',
+}
+
+function routeSource(source: PacketSource | null): { label: string; color: string } | null {
+  if (source === null) return null
+  return source === PacketSource.AprsIs
+    ? { label: 'IS', color: 'is' }
+    : { label: 'RF', color: 'rf' }
+}
+
+function heardViaText(hv: HeardVia | null): string {
+  return (hv !== null && HEARD_VIA_LABELS[hv]) || ''
+}
+
+function formatPath(path: string | null): string {
+  return path ? path.split(',').join(' › ') : 'direct'
+}
+
+const copiesOpen = ref(new Set<number>())
+const copiesById = ref<Record<number, MessageCopyDto[]>>({})
+const copiesLoading = ref<Record<number, boolean>>({})
+
+async function toggleCopies(msg: InboxMessageDto) {
+  const next = new Set(copiesOpen.value)
+  if (next.has(msg.id)) {
+    next.delete(msg.id)
+    copiesOpen.value = next
+    return
+  }
+  next.add(msg.id)
+  copiesOpen.value = next
+  // Refetch when more copies have been heard since the last load.
+  if ((copiesById.value[msg.id]?.length ?? 0) >= msg.receiveCount) return
+  copiesLoading.value[msg.id] = true
+  try {
+    copiesById.value[msg.id] = await getMessageCopies(msg.id)
+  } catch {
+    copiesById.value[msg.id] = []
+  } finally {
+    delete copiesLoading.value[msg.id]
+  }
 }
 
 // Inline reply at the bottom of the thread.
@@ -765,14 +823,18 @@ onUnmounted(() => {
                           {{ timeAgo(msg.receivedAt, now) }}
                         </span>
 
-                        <!-- Inbound: how many copies we heard -->
+                        <!-- Inbound: how many copies we heard; click for each copy's route -->
                         <v-chip
                           v-if="!isOutbound(msg) && msg.receiveCount > 1"
                           size="x-small"
                           variant="tonal"
                           color="warning"
                           prepend-icon="mdi-repeat"
+                          :append-icon="
+                            copiesOpen.has(msg.id) ? 'mdi-chevron-up' : 'mdi-chevron-down'
+                          "
                           :title="receiveCountTitle(msg)"
+                          @click="toggleCopies(msg)"
                         >
                           ×{{ msg.receiveCount }}
                         </v-chip>
@@ -790,6 +852,61 @@ onUnmounted(() => {
                           </span>
                         </template>
                       </div>
+                      <!-- Route: how it reached us, or how we sent it -->
+                      <div v-if="!isOutbound(msg) && msg.source !== null" class="bubble-route">
+                        <v-chip
+                          :color="routeSource(msg.source)!.color"
+                          size="x-small"
+                          variant="flat"
+                          label
+                          >{{ routeSource(msg.source)!.label }}</v-chip
+                        >
+                        <span v-if="heardViaText(msg.heardVia)">{{
+                          heardViaText(msg.heardVia)
+                        }}</span>
+                        <span class="route-path" :title="msg.path ?? ''">{{
+                          formatPath(msg.path)
+                        }}</span>
+                      </div>
+                      <div v-else-if="isOutbound(msg)" class="bubble-route">
+                        <span>sent via</span>
+                        <span class="route-path">{{ formatPath(msg.pathUsed) }}</span>
+                      </div>
+
+                      <div v-if="copiesOpen.has(msg.id)" class="bubble-copies">
+                        <div v-if="copiesLoading[msg.id]" class="text-caption">Loading…</div>
+                        <div
+                          v-else-if="(copiesById[msg.id] ?? []).length === 0"
+                          class="text-caption text-medium-emphasis"
+                        >
+                          The packets for these copies are no longer in the log.
+                        </div>
+                        <template v-else>
+                          <div
+                            v-for="copy in copiesById[msg.id] ?? []"
+                            :key="copy.packetId"
+                            class="bubble-route"
+                          >
+                            <span class="mono-time" :title="formatUtc(copy.receivedAt)">{{
+                              timeAgo(copy.receivedAt, now)
+                            }}</span>
+                            <v-chip
+                              :color="routeSource(copy.source)!.color"
+                              size="x-small"
+                              variant="flat"
+                              label
+                              >{{ routeSource(copy.source)!.label }}</v-chip
+                            >
+                            <span v-if="heardViaText(copy.heardVia)">{{
+                              heardViaText(copy.heardVia)
+                            }}</span>
+                            <span class="route-path" :title="copy.path">{{
+                              formatPath(copy.path)
+                            }}</span>
+                          </div>
+                        </template>
+                      </div>
+
                       <div
                         v-if="
                           isOutbound(msg) &&
@@ -1633,6 +1750,31 @@ onUnmounted(() => {
   margin-top: 4px;
   font-size: 0.75rem;
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.bubble-route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.route-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.bubble-copies {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.bubble-row--out .bubble-route {
+  justify-content: flex-end;
 }
 
 .bubble-row--out .bubble-meta {

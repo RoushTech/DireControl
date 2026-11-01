@@ -20,6 +20,13 @@ public class Message : IEntityTypeConfiguration<Message>
     public int ReceiveCount { get; set; } = 1;
     /// <summary>Inbound only: UTC time the most recent copy was heard. Null until a retransmission arrives.</summary>
     public DateTime? LastReceivedAt { get; set; }
+    /// <summary>
+    /// Inbound only: the packet the first copy arrived in (source and via-path).
+    /// Null for outbound messages, rows stored before this link existed, or once
+    /// packet cleanup has purged the packet.
+    /// </summary>
+    public int? PacketId { get; set; }
+    public Packet? Packet { get; set; }
     public bool IsRead { get; set; }
     public bool AckSent { get; set; }
     public bool ReplySent { get; set; }
@@ -46,6 +53,10 @@ public class Message : IEntityTypeConfiguration<Message>
     {
         builder.HasIndex(m => m.ReceivedAt);
         builder.Property(m => m.ReceiveCount).HasDefaultValue(1);
+        builder.HasOne(m => m.Packet)
+               .WithMany()
+               .HasForeignKey(m => m.PacketId)
+               .OnDelete(DeleteBehavior.SetNull);
         builder.HasIndex(m => new { m.RetryState, m.NextRetryAt });
     }
 }

@@ -41,6 +41,9 @@ public class MessagesController(
                 ReceivedAt = m.ReceivedAt,
                 ReceiveCount = m.ReceiveCount,
                 LastReceivedAt = m.LastReceivedAt,
+                Source = m.Packet != null ? m.Packet.Source : null,
+                HeardVia = m.Packet != null ? m.Packet.HeardVia : null,
+                Path = m.Packet != null ? m.Packet.Path : null,
                 IsRead = m.IsRead,
                 AckSent = m.AckSent,
                 ReplySent = m.ReplySent,
@@ -110,7 +113,7 @@ public class MessagesController(
     [HttpPut("{id:int}/read")]
     public async Task<ActionResult<InboxMessageDto>> MarkRead(int id, CancellationToken ct)
     {
-        var message = await db.Messages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        var message = await db.Messages.Include(m => m.Packet).FirstOrDefaultAsync(m => m.Id == id, ct);
         if (message is null)
             return NotFound();
 
@@ -121,6 +124,30 @@ public class MessagesController(
         }
 
         return Ok(ToInboxDto(message));
+    }
+
+    /// <summary>
+    /// Every received copy of an inbound message, oldest first, with the route
+    /// each took.  Retransmissions often arrive by different paths (direct,
+    /// via a digipeater, or through APRS-IS).
+    /// </summary>
+    [HttpGet("{id:int}/copies")]
+    public async Task<ActionResult<IReadOnlyList<MessageCopyDto>>> GetCopies(int id, CancellationToken ct)
+    {
+        var message = await db.Messages.AsNoTracking().FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (message is null)
+            return NotFound();
+
+        var copies = await MessageHandlingLogic.FindCopiesAsync(message, db, ct);
+        return Ok(copies.Select(p => new MessageCopyDto
+        {
+            PacketId = p.Id,
+            ReceivedAt = p.ReceivedAt,
+            Source = p.Source,
+            HeardVia = p.HeardVia,
+            Path = p.Path,
+            HopCount = p.HopCount,
+        }).ToList());
     }
 
     /// <summary>
@@ -280,6 +307,9 @@ public class MessagesController(
         ReceivedAt = m.ReceivedAt,
         ReceiveCount = m.ReceiveCount,
         LastReceivedAt = m.LastReceivedAt,
+        Source = m.Packet?.Source,
+        HeardVia = m.Packet?.HeardVia,
+        Path = m.Packet?.Path,
         IsRead = m.IsRead,
         AckSent = m.AckSent,
         ReplySent = m.ReplySent,

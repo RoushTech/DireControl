@@ -68,6 +68,11 @@ public sealed class InboxMessageDto
     /// <summary>Inbound: copies heard (above 1 means the sender retransmitted).</summary>
     public int ReceiveCount { get; init; }
     public DateTime? LastReceivedAt { get; init; }
+    /// <summary>Inbound: how the first copy reached us. Null when the packet is unknown.</summary>
+    public PacketSource? Source { get; init; }
+    public HeardVia? HeardVia { get; init; }
+    /// <summary>Inbound: via-path of the first copy, tocall excluded (e.g. "K4ABC-1*,WIDE2-1,qAR,N4WR-2").</summary>
+    public string? Path { get; init; }
     public bool IsRead { get; init; }
     public bool AckSent { get; init; }
     public bool ReplySent { get; init; }
@@ -809,4 +814,15 @@ public sealed class AudioCaptureSettingsDto
 public sealed class SetAudioCaptureRequest
 {
     public bool Enabled { get; init; }
+}
+
+/// <summary>One received copy of an inbound message — a retransmission may arrive by a different route.</summary>
+public sealed class MessageCopyDto
+{
+    public int PacketId { get; init; }
+    public DateTime ReceivedAt { get; init; }
+    public PacketSource Source { get; init; }
+    public HeardVia HeardVia { get; init; }
+    public string Path { get; init; } = string.Empty;
+    public int HopCount { get; init; }
 }

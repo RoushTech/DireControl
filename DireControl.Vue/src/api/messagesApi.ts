@@ -2,6 +2,7 @@ import http from './axios'
 import type {
   AllMessagePacketDto,
   InboxMessageDto,
+  MessageCopyDto,
   PaginatedResponse,
   SendMessageRequest,
 } from '@/types/message'
@@ -25,6 +26,12 @@ export async function getAllMessages(
   const { data } = await http.get<PaginatedResponse<AllMessagePacketDto>>('/api/v0/messages/all', {
     params,
   })
+  return data
+}
+
+/** Every received copy of an inbound message, oldest first, with its route. */
+export async function getMessageCopies(id: number): Promise<MessageCopyDto[]> {
+  const { data } = await http.get<MessageCopyDto[]>(`/api/v0/messages/${id}/copies`)
   return data
 }
 

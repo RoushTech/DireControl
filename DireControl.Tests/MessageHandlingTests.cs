@@ -305,6 +305,82 @@ public sealed class MessageHandlingTests
     }
 
     // =========================================================================
+    // FindCopiesAsync — every packet that carried an inbound message
+    // =========================================================================
+
+    private Packet SeedMessagePacket(
+        string from, string addressee, string text, string? id, DateTime at,
+        PacketSource source = PacketSource.Rf, string path = "WIDE1-1")
+    {
+        if (_db.Stations.Local.All(st => st.Callsign != from) && !_db.Stations.Any(st => st.Callsign == from))
+            _db.Stations.Add(new Station { Callsign = from, Symbol = "/[" });
+        var packet = new Packet
+        {
+            StationCallsign = from,
+            ReceivedAt = at,
+            RawPacket = $"{from}>APDR16,{path}::{addressee,-9}:{text}",
+            ParsedType = PacketType.Message,
+            Source = source,
+            Path = path,
+            MessageData = new MessageData { Addressee = addressee, Text = text, MessageId = id },
+        };
+        _db.Packets.Add(packet);
+        return packet;
+    }
+
+    [Test]
+    public async Task FindCopies_ReturnsEveryMatchingPacketInOrder_IncludingRawReplyAckRows()
+    {
+        // Older packet rows stored the reply-ack suffix in the text with no ID.
+        var first = SeedMessagePacket("K4DDA-7", "W3UWU", "Hi{87}", null, T0, PacketSource.AprsIs, "TCPIP*,qAC,T2TEST");
+        SeedMessagePacket("K4DDA-7", "W3UWU", "Hi", "87", T0.AddMinutes(2), PacketSource.Rf, "K4ABC-1*,WIDE2-1");
+        SeedMessagePacket("K4DDA-7", "W3UWU", "Different", "88", T0.AddMinutes(3));     // other message
+        SeedMessagePacket("K4DDA-7", "N0CALL", "Hi", "87", T0.AddMinutes(3));           // other addressee
+        SeedMessagePacket("K4DDA-7", "W3UWU", "Hi", "87", T0.AddHours(3));              // outside the window
+        await _db.SaveChangesAsync();
+        var message = new Message
+        {
+            FromCallsign = "K4DDA-7", ToCallsign = "W3UWU", Body = "Hi", MessageId = "87",
+            ReceivedAt = T0, LastReceivedAt = T0.AddMinutes(2), ReceiveCount = 2, PacketId = first.Id,
+        };
+
+        var copies = await MessageHandlingLogic.FindCopiesAsync(message, _db, default);
+
+        Assert.That(copies.Select(c => c.Source), Is.EqualTo(new[] { PacketSource.AprsIs, PacketSource.Rf }));
+        Assert.That(copies[1].Path, Is.EqualTo("K4ABC-1*,WIDE2-1"));
+    }
+
+    [Test]
+    public async Task RepairInbox_LinksUnlinkedRowsToFirstCopy()
+    {
+        var packet = SeedMessagePacket("K4DDA-7", "W3UWU", "Hi{87}", null, T0);
+        SeedMessage(from: "K4DDA-7", to: "W3UWU", body: "Hi{87}", receivedAt: T0);
+        await _db.SaveChangesAsync();
+
+        await MessageHandlingLogic.RepairInboxAsync(_db, "W3UWU", default);
+
+        Assert.That((await _db.Messages.SingleAsync()).PacketId, Is.EqualTo(packet.Id));
+    }
+
+    [Test]
+    public async Task DeletingPacket_UnlinksMessage()
+    {
+        var packet = SeedMessagePacket("K4DDA-7", "W3UWU", "Hi", "87", T0);
+        await _db.SaveChangesAsync();
+        _db.Messages.Add(new Message
+        {
+            FromCallsign = "K4DDA-7", ToCallsign = "W3UWU", Body = "Hi", MessageId = "87",
+            ReceivedAt = T0, PacketId = packet.Id,
+        });
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+
+        await _db.Packets.Where(p => p.Id == packet.Id).ExecuteDeleteAsync();
+
+        Assert.That((await _db.Messages.SingleAsync()).PacketId, Is.Null);
+    }
+
+    // =========================================================================
     // TryApplyAckAsync — marks sent message acknowledged
     // =========================================================================
 
