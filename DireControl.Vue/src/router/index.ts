@@ -29,11 +29,16 @@ const router = createRouter({
       name: 'terminal',
       component: () => import('@/views/TerminalView.vue'),
     },
-    {
-      path: '/aprs-icon-test',
-      name: 'aprs-icon-test',
-      component: () => import('@/views/AprsIconTest.vue'),
-    },
+    // Developer-only symbol sheet: not routed in production builds.
+    ...(import.meta.env.DEV
+      ? [
+          {
+            path: '/aprs-icon-test',
+            name: 'aprs-icon-test',
+            component: () => import('@/views/AprsIconTest.vue'),
+          },
+        ]
+      : []),
     {
       path: '/alerts',
       name: 'alerts',

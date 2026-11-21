@@ -10,6 +10,7 @@ public sealed class Cm108Ptt : IPttController
 {
     private readonly FileStream _hid;
     private readonly int _pin;
+    private readonly Lock _lock = new(); // the TX watchdog may unkey from another thread
 
     /// <param name="hidrawPath">hidraw device node, e.g. /dev/hidraw0.</param>
     /// <param name="pin">CM108 GPIO pin 1–8; virtually all interfaces use 3.</param>
@@ -26,8 +27,11 @@ public sealed class Cm108Ptt : IPttController
     public void SetPtt(bool transmit)
     {
         var report = BuildPttReport(_pin, transmit);
-        _hid.Write(report);
-        _hid.Flush();
+        lock (_lock)
+        {
+            _hid.Write(report);
+            _hid.Flush();
+        }
     }
 
     /// <summary>
@@ -44,6 +48,7 @@ public sealed class Cm108Ptt : IPttController
     public void Dispose()
     {
         try { SetPtt(false); } catch { /* device may already be gone */ }
-        _hid.Dispose();
+        lock (_lock)
+            _hid.Dispose();
     }
 }

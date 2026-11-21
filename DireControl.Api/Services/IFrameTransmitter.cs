@@ -11,6 +11,12 @@ public enum TxPriority
     /// so acks and retransmits are not stuck behind a beacon backlog.
     /// </summary>
     Session,
+
+    /// <summary>
+    /// Digipeats — drained ahead of beacons and other normal traffic, since a
+    /// late digipeat behaves like a duplicate on the network.
+    /// </summary>
+    Digipeat,
 }
 
 /// <summary>
@@ -57,9 +63,25 @@ public interface IFrameTransmitter
 /// </remarks>
 public sealed class FrameTransmitService(
     IServiceProvider services,
-    KissConnectionHolder kissConnectionHolder) : IFrameTransmitter
+    KissConnectionHolder kissConnectionHolder,
+    ILogger<FrameTransmitService> logger) : IFrameTransmitter
 {
+    /// <summary>
+    /// Largest AX.25 frame we will key up for: 70 bytes of addresses (source,
+    /// destination, 8 digipeaters), 2 control, 1 PID, 256 info — rounded up.
+    /// A 64 KiB KISS frame otherwise became 444 s of audio.
+    /// </summary>
+    public const int MaxFrameBytes = 330;
+
     private SoundModemService? _modemService;
+
+    /// <summary>
+    /// The single choke point every producer (KISS, AGWPE, beacons, messages,
+    /// digipeater, LAPB) passes through: reject frames that are oversized or
+    /// do not decode as AX.25 before they can reach a transmitter.
+    /// </summary>
+    internal static bool IsTransmittable(byte[] ax25Frame) =>
+        ax25Frame.Length <= MaxFrameBytes && Modem.Ax25.Ax25Decoder.TryDecode(ax25Frame, out _);
 
     public bool TrySend(byte[] ax25Frame, int channel = 0) =>
         TrySend(ax25Frame, channel, TxPriority.Normal, txCompletion: null);
@@ -71,6 +93,15 @@ public sealed class FrameTransmitService(
         TaskCompletionSource<bool>? txCompletion,
         bool exactChannelOnly = false)
     {
+        if (!IsTransmittable(ax25Frame))
+        {
+            logger.LogWarning(
+                "Refusing to transmit a {Bytes}-byte frame: over {Max} bytes or not valid AX.25.",
+                ax25Frame.Length, MaxFrameBytes);
+            txCompletion?.TrySetCanceled();
+            return false;
+        }
+
         _modemService ??= services.GetRequiredService<SoundModemService>();
 
         if (_modemService.TryEnqueueTransmit(ax25Frame, channel, priority, txCompletion, exactChannelOnly))

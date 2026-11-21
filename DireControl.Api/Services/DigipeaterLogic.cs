@@ -9,6 +9,9 @@ namespace DireControl.Api.Services;
 /// </summary>
 public static class DigipeaterLogic
 {
+    /// <summary>AX.25 2.2 limit on digipeater addresses in a path.</summary>
+    public const int MaxDigipeaters = 8;
+
     /// <summary>
     /// Decides whether <paramref name="frame"/> should be digipeated by
     /// <paramref name="myCallsign"/>, and if so returns the rewritten frame to
@@ -26,8 +29,11 @@ public static class DigipeaterLogic
     ///   alias is replaced by our callsign (callsign substitution), otherwise
     ///   our callsign is inserted before the decremented alias.  Both carry
     ///   the H bit.</item>
-    /// <item><c>WIDEn</c> with n &gt; <paramref name="maxWideN"/> is trapped:
-    ///   digipeated once with our callsign substituted, killing the path.</item>
+    /// <item><c>WIDEn-N</c> with n &gt; <paramref name="maxWideN"/>, N &gt; n or
+    ///   N &gt; <paramref name="maxWideN"/> is trapped: digipeated once with our
+    ///   callsign substituted, killing the path.</item>
+    /// <item>A path already holding <see cref="MaxDigipeaters"/> entries is only
+    ///   decremented — inserting our callsign would make it illegal.</item>
     /// <item><paramref name="fillInOnly"/> restricts service to
     ///   <c>WIDE1-1</c> — classic fill-in digi behaviour.</item>
     /// </list>
@@ -67,9 +73,10 @@ public static class DigipeaterLogic
         }
         else if (TryParseWide(hop, out var n) && !fillInOnly)
         {
-            if (n > maxWideN)
+            if (n > maxWideN || hop.Ssid > n || hop.Ssid > maxWideN)
             {
-                // Abusive path (e.g. WIDE7-7) — trap it: one hop, path dead.
+                // Abusive path — WIDE7-7, or a hop count above its own n
+                // (WIDE2-7, WIDE1-7) or our limit: trap it, one hop, path dead.
                 newPath[index] = my with { HasBeenRepeated = true };
             }
             else if (hop.Ssid <= 1)
@@ -77,11 +84,17 @@ public static class DigipeaterLogic
                 // Last hop of this alias — callsign substitution.
                 newPath[index] = my with { HasBeenRepeated = true };
             }
-            else
+            else if (newPath.Count < MaxDigipeaters)
             {
                 // Decrement and insert ourselves in front.
                 newPath[index] = hop with { Ssid = hop.Ssid - 1 };
                 newPath.Insert(index, my with { HasBeenRepeated = true });
+            }
+            else
+            {
+                // AX.25 allows at most 8 digipeaters: with the path full there is
+                // no room to trace ourselves, so only decrement (Dire Wolf does the same).
+                newPath[index] = hop with { Ssid = hop.Ssid - 1 };
             }
         }
         else if (fillInOnly && IsWide1Hop(hop))

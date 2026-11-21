@@ -37,11 +37,24 @@ export interface ModemStatusDto {
   carrierDetected: boolean
   carrierStuck: boolean
   csmaTimeouts: number
+  ingestDropped: number
+  txError: string | null
+  pttStuck: boolean
+  pttWatchdogTrips: number
+  txDropped: number
+  txQueueDepth: number
+  captureOverruns: number
   decodedFrames: number
+  lastDecodedAt: string | null
+  runningSince: string | null
   invalidFrames: number
   txEnabled: boolean
   transmitting: boolean
   transmittedFrames: number
+  /** End of the last keyup that actually went to air. */
+  lastTxAt: string | null
+  /** Set while frames wait for a clear channel. */
+  csmaWaitingSince: string | null
   rigFrequencyHz: number | null
   decodedByProfile: Record<string, number> | null
 }
@@ -52,6 +65,7 @@ export interface RfServicesPayload {
   digipeaterFillInOnly: boolean
   kissServerEnabled: boolean
   kissServerPort: number
+  kissServerBindAddress: string
   rfToIsGatingEnabled: boolean
   isToRfGatingEnabled: boolean
   isToRfPath: string
@@ -133,6 +147,8 @@ export const TestToneKinds = {
   Mark: 1,
   Space: 2,
   Alternating: 3,
+  /** Keys PTT over silence — a wiring check with no tone. */
+  PttOnly: 4,
 } as const
 export type TestToneKind = (typeof TestToneKinds)[keyof typeof TestToneKinds]
 
@@ -167,10 +183,6 @@ export async function stopAudioRecording(radioId: string): Promise<void> {
 export async function getAudioCaptures(): Promise<AudioCaptureDto[]> {
   const { data } = await http.get<AudioCaptureDto[]>('/api/v0/modem/captures')
   return data
-}
-
-export async function deleteAudioCapture(name: string): Promise<void> {
-  await http.delete(`/api/v0/modem/captures/${encodeURIComponent(name)}`)
 }
 
 /** Radio IDs with a manual recording in progress, per the server. */

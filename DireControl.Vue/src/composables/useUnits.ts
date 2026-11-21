@@ -15,10 +15,20 @@ export function useUnits() {
     return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`
   }
 
+  /**
+   * Altitude follows the distance preference: feet with miles, metres with
+   * kilometres.  Input is feet — what APRS carries (`/A=`).
+   */
+  function formatAltitude(feet: number): string {
+    return distanceUnit.value === 'mi'
+      ? `${Math.round(feet).toLocaleString()} ft`
+      : `${Math.round(feet * 0.3048).toLocaleString()} m`
+  }
+
   function setDistanceUnit(unit: 'km' | 'mi') {
     distanceUnit.value = unit
     localStorage.setItem(UNIT_STORAGE_KEY, unit)
   }
 
-  return { distanceUnit, formatDistance, setDistanceUnit }
+  return { distanceUnit, formatDistance, formatAltitude, setDistanceUnit }
 }

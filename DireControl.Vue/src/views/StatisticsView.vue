@@ -11,13 +11,8 @@ import {
 } from 'chart.js'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { getStatistics, getDigipeaterAnalysis, getStationFrequencies } from '@/api/statisticsApi'
-import {
-  StationType,
-  type StatisticsDto,
-  type DigipeaterAnalysisEntry,
-  type StationFrequencyDto,
-} from '@/types/station'
+import { getStatistics, getStationFrequencies } from '@/api/statisticsApi'
+import { StationType, type StatisticsDto, type StationFrequencyDto } from '@/types/station'
 import { timeAgo } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
@@ -29,7 +24,6 @@ const theme = useTheme()
 const { now } = useTick(5000)
 
 const stats = ref<StatisticsDto | null>(null)
-const digiAnalysis = ref<DigipeaterAnalysisEntry[]>([])
 const frequencies = ref<StationFrequencyDto[]>([])
 const loading = ref(false)
 const error = ref(false)
@@ -50,13 +44,8 @@ async function load() {
   loading.value = true
   error.value = false
   try {
-    const [statsResult, digiResult, freqResult] = await Promise.all([
-      getStatistics(),
-      getDigipeaterAnalysis(),
-      getStationFrequencies(),
-    ])
+    const [statsResult, freqResult] = await Promise.all([getStatistics(), getStationFrequencies()])
     stats.value = statsResult
-    digiAnalysis.value = digiResult
     frequencies.value = freqResult
     loadedAt.value = serverNow()
   } catch {
@@ -308,44 +297,7 @@ onUnmounted(() => {
     </v-card>
 
     <v-row class="mb-4">
-      <!-- Busiest digipeaters -->
-      <v-col cols="12" md="6">
-        <v-card variant="outlined" height="100%">
-          <v-card-title class="text-body-2 font-weight-medium pa-3 pb-1">
-            Busiest digipeaters
-          </v-card-title>
-          <v-card-text class="pa-0">
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th class="text-caption">#</th>
-                  <th class="text-caption">Callsign</th>
-                  <th class="text-caption text-right">Total</th>
-                  <th class="text-caption text-right">24h</th>
-                  <th class="text-caption text-right">Avg hops</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="digiAnalysis.length === 0">
-                  <td colspan="5" class="text-center text-caption text-medium-emphasis py-3">
-                    No data
-                  </td>
-                </tr>
-                <tr v-for="(d, i) in digiAnalysis" :key="d.callsign">
-                  <td class="text-caption text-medium-emphasis">{{ i + 1 }}</td>
-                  <td class="text-body-2 font-weight-medium">{{ d.callsign }}</td>
-                  <td class="text-body-2 text-right">
-                    {{ d.totalPacketsForwarded.toLocaleString() }}
-                  </td>
-                  <td class="text-body-2 text-right">{{ d.last24h.toLocaleString() }}</td>
-                  <td class="text-body-2 text-right">{{ d.averageHopsFromUs.toFixed(1) }}</td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-card-text>
-        </v-card>
-      </v-col>
-
+      <!-- Busiest digipeaters lives on the Network view. -->
       <!-- Busiest stations by beacon rate -->
       <v-col cols="12" md="6">
         <v-card variant="outlined" height="100%">

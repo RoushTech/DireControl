@@ -59,8 +59,19 @@ public sealed class KissDecoder
 {
     private enum State { Hunting, InFrame, InFrameEscaped }
 
+    /// <summary>
+    /// Largest KISS frame accepted (type byte + payload).  Comfortably above an
+    /// AX.25 maximum (~330 bytes); anything larger is garbage or hostile, and
+    /// without a cap a client that never sends a closing FEND grew the buffer
+    /// without bound.
+    /// </summary>
+    public const int MaxFrameBytes = 2048;
+
     private State _state = State.Hunting;
     private readonly List<byte> _buffer = new(512);
+
+    /// <summary>Frames discarded for exceeding <see cref="MaxFrameBytes"/>.</summary>
+    public long OversizeFrames { get; private set; }
 
     /// <summary>(command nibble, channel/port nibble, payload bytes).</summary>
     public event Action<byte, byte, byte[]>? FrameReceived;
@@ -94,19 +105,32 @@ public sealed class KissDecoder
                 break;
 
             case State.InFrame:
-                _buffer.Add(b);
+                Append(b);
                 break;
 
             case State.InFrameEscaped:
-                _buffer.Add(b switch
+                _state = State.InFrame;
+                Append(b switch
                 {
                     KissCodec.Tfend => KissCodec.Fend,
                     KissCodec.Tfesc => KissCodec.Fesc,
                     _ => b, // invalid escape — pass through, frame will fail downstream
                 });
-                _state = State.InFrame;
                 break;
         }
+    }
+
+    private void Append(byte b)
+    {
+        if (_buffer.Count >= MaxFrameBytes)
+        {
+            // Overflow: drop what we have and hunt for the next FEND to resync.
+            OversizeFrames++;
+            _buffer.Clear();
+            _state = State.Hunting;
+            return;
+        }
+        _buffer.Add(b);
     }
 
     private void EmitFrame()

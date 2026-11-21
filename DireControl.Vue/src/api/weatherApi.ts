@@ -31,12 +31,12 @@ export interface WeatherManifest {
 }
 
 export async function getWeatherManifest(): Promise<WeatherManifest> {
-  const { data } = await http.get<WeatherManifest>('/api/weather/radar/manifest')
+  const { data } = await http.get<WeatherManifest>('/api/v0/weather/radar/manifest')
   return data
 }
 
 export async function getWeatherStatus(): Promise<WeatherStatus> {
-  const { data } = await http.get<WeatherStatus>('/api/weather/status')
+  const { data } = await http.get<WeatherStatus>('/api/v0/weather/status')
   return data
 }
 
@@ -58,7 +58,7 @@ export async function getLightningStrikes(bounds: {
   minLon: number
   maxLon: number
 }): Promise<LightningStrikes> {
-  const { data } = await http.get<LightningStrikes>('/api/weather/lightning/strikes', {
+  const { data } = await http.get<LightningStrikes>('/api/v0/weather/lightning/strikes', {
     params: bounds,
   })
   return data
@@ -85,6 +85,6 @@ export async function getLightningHistory(params: {
   fromSeconds: number
   toSeconds: number
 }): Promise<LightningHistory> {
-  const { data } = await http.get<LightningHistory>('/api/weather/lightning/history', { params })
+  const { data } = await http.get<LightningHistory>('/api/v0/weather/lightning/history', { params })
   return data
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
@@ -25,7 +26,7 @@ public sealed class AgwpeTcpServerService(
     IServiceScopeFactory scopeFactory,
     IFrameTransmitter transmitter,
     Ax25SessionManager sessionManager,
-    PacketServicesRestartTrigger restartTrigger,
+    [FromKeyedServices(RestartSignals.PacketServices)] RestartSignal restartTrigger,
     ILogger<AgwpeTcpServerService> logger) : BackgroundService
 {
     private sealed record PortInfo(int Channel, string Description, Radio Radio);
@@ -144,6 +145,10 @@ public sealed class AgwpeTcpServerService(
             while (!ct.IsCancellationRequested)
             {
                 var tcp = await listener.AcceptTcpClientAsync(ct);
+                // Broadcast writes synchronously from the ingest consumer; a
+                // client that stops reading is dropped after this long instead
+                // of stalling every other client and the ingest pipeline.
+                tcp.SendTimeout = 2000;
                 var client = new AgwpeClient(tcp);
                 lock (_clientsLock)
                     _clients.Add(client);

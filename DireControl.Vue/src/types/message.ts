@@ -58,11 +58,6 @@ export interface SendMessageRequest {
   path?: string
 }
 
-export interface MessageAckDto {
-  id: number
-  messageId: string
-}
-
 export interface MessageRetriedDto {
   id: number
   retryCount: number

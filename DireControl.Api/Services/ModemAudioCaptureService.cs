@@ -56,7 +56,8 @@ public sealed class ModemAudioCaptureService(
     /// buffer would mean a ~23 MB copy on the audio thread.
     /// </summary>
     private sealed record PendingWrite(
-        string Name, float[] Samples, int Count, int SampleRate, string Reason);
+        string Name, float[] Samples, int Count, int SampleRate, string Reason,
+        RadioBuffers? ReturnSpareTo = null);
 
     /// <summary>Per-radio buffers.  Only the radio's capture thread appends.</summary>
     private sealed class RadioBuffers
@@ -64,6 +65,14 @@ public sealed class ModemAudioCaptureService(
         public float[] Ring = [];
         public int RingWritePos;
         public bool RingWrapped;
+
+        /// <summary>
+        /// Preallocated snapshot target, the same size as <see cref="Ring"/>.
+        /// A missed-decode capture copies into it instead of allocating ~2.9 MB
+        /// on the large-object heap from the audio thread; the writer hands it
+        /// back once the file is on disk.  Null while a snapshot is out.
+        /// </summary>
+        public float[]? Spare;
 
         /// <summary>Non-null while a manual recording is in progress.</summary>
         public float[]? Manual;
@@ -146,6 +155,7 @@ public sealed class ModemAudioCaptureService(
         if (state.Ring.Length != wanted)
         {
             state.Ring = wanted == 0 ? [] : new float[wanted];
+            Volatile.Write(ref state.Spare, wanted == 0 ? null : new float[wanted]);
             state.RingWritePos = 0;
             state.RingWrapped = false;
         }
@@ -213,7 +223,8 @@ public sealed class ModemAudioCaptureService(
 
     /// <summary>
     /// Saves the rolling buffer because a transmission was heard but did not
-    /// decode.  Rate-limited, and the snapshot copy is the only allocation.
+    /// decode.  Rate-limited, and allocation-free: the snapshot goes into the
+    /// preallocated spare buffer.
     /// </summary>
     public void CaptureMissedDecode(string radioId, string label, int sampleRate)
     {
@@ -227,11 +238,41 @@ public sealed class ModemAudioCaptureService(
             return;
         Volatile.Write(ref state.LastCaptureTicks, now);
 
-        var snapshot = SnapshotRing(state);
-        if (snapshot.Length == 0)
+        // The spare is out while the previous capture is still being written;
+        // skip rather than allocate on the audio thread.
+        var spare = Interlocked.Exchange(ref state.Spare, null);
+        if (spare is null || spare.Length != state.Ring.Length)
             return;
 
-        Enqueue(FileName(label, "missed"), snapshot, snapshot.Length, sampleRate, "missed-decode");
+        var count = SnapshotRingInto(state, spare);
+        if (count == 0)
+        {
+            Volatile.Write(ref state.Spare, spare);
+            return;
+        }
+
+        if (!_writes.Writer.TryWrite(new PendingWrite(
+                FileName(label, "missed"), spare, count, sampleRate, "missed-decode", state)))
+        {
+            Volatile.Write(ref state.Spare, spare);
+            _logger.LogWarning("Audio capture dropped — write queue is full.");
+        }
+    }
+
+    /// <summary>Unwraps the ring, oldest sample first, into <paramref name="target"/>.</summary>
+    private static int SnapshotRingInto(RadioBuffers state, float[] target)
+    {
+        var ring = state.Ring;
+        if (!state.RingWrapped)
+        {
+            ring.AsSpan(0, state.RingWritePos).CopyTo(target);
+            return state.RingWritePos;
+        }
+
+        var tail = ring.Length - state.RingWritePos;
+        ring.AsSpan(state.RingWritePos).CopyTo(target);
+        ring.AsSpan(0, state.RingWritePos).CopyTo(target.AsSpan(tail));
+        return ring.Length;
     }
 
     /// <summary>Starts a manual recording. False if one is already running.</summary>
@@ -280,23 +321,6 @@ public sealed class ModemAudioCaptureService(
 
         if (count > 0)
             Enqueue(FileName(label, "rec"), manual, count, sampleRate, reason);
-    }
-
-    private static float[] SnapshotRing(RadioBuffers state)
-    {
-        var ring = state.Ring;
-        if (ring.Length == 0)
-            return [];
-
-        if (!state.RingWrapped)
-            return ring[..state.RingWritePos];
-
-        // Unwrap: oldest samples sit after the write cursor.
-        var snapshot = new float[ring.Length];
-        var tail = ring.Length - state.RingWritePos;
-        ring.AsSpan(state.RingWritePos).CopyTo(snapshot);
-        ring.AsSpan(0, state.RingWritePos).CopyTo(snapshot.AsSpan(tail));
-        return snapshot;
     }
 
     private void Enqueue(string name, float[] samples, int count, int sampleRate, string reason)
@@ -373,24 +397,6 @@ public sealed class ModemAudioCaptureService(
         return File.Exists(path) ? path : null;
     }
 
-    public bool Delete(string name)
-    {
-        var path = ResolvePath(name);
-        if (path is null)
-            return false;
-
-        try
-        {
-            File.Delete(path);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Could not delete audio capture \"{Name}\".", name);
-            return false;
-        }
-    }
-
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         await foreach (var write in _writes.Reader.ReadAllAsync(ct))
@@ -410,6 +416,13 @@ public sealed class ModemAudioCaptureService(
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to write audio capture \"{Name}\".", write.Name);
+            }
+            finally
+            {
+                // Hand the snapshot buffer back for the next capture, unless the
+                // ring was resized meanwhile (a fresh spare came with it).
+                if (write.ReturnSpareTo is { } owner && owner.Ring.Length == write.Samples.Length)
+                    Interlocked.CompareExchange(ref owner.Spare, write.Samples, null);
             }
         }
     }

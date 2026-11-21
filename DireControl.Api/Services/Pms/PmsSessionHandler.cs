@@ -1,3 +1,4 @@
+using DireControl.PathParsing;
 using System.Text;
 using DireControl.Api.Services.Ax25;
 using DireControl.Api.Services.Terminal;
@@ -25,7 +26,7 @@ public sealed class PmsSessionHandler(
 
     public async Task HandleSessionAsync(IAx25Session session, CancellationToken ct)
     {
-        var stationBase = StripSsid(options.Value.OurCallsign);
+        var stationBase = CallsignMatcher.BaseCallsign(options.Value.OurCallsign);
         var origin = session.Channel < 0 ? TerminalSessionOrigin.LocalPms : TerminalSessionOrigin.Inbound;
         var processor = new PmsCommandProcessor(
             store,
@@ -123,11 +124,5 @@ public sealed class PmsSessionHandler(
             .Take(10)
             .Select(s => new HeardStation(s.Callsign, s.LastHeardRf!.Value))
             .ToListAsync(ct);
-    }
-
-    private static string StripSsid(string callsign)
-    {
-        var dash = callsign.IndexOf('-');
-        return (dash > 0 ? callsign[..dash] : callsign).ToUpperInvariant();
     }
 }

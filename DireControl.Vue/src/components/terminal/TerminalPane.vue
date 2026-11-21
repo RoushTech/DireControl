@@ -14,9 +14,12 @@ const props = withDefaults(
     sessionId: string
     localEcho?: boolean
     phosphorTheme?: TerminalPhosphorTheme
+    /** The session has ended: keystrokes go nowhere, so they are not accepted. */
+    readOnly?: boolean
   }>(),
   {
     localEcho: false,
+    readOnly: false,
     phosphorTheme: 'classic',
   },
 )
@@ -123,6 +126,7 @@ onMounted(() => {
   // default: connected-mode remotes echo; the optional toggle covers those
   // that don't.
   term.onData((data) => {
+    if (props.readOnly) return
     if (props.localEcho && term) {
       let echo = ''
       for (const ch of data) {

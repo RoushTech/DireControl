@@ -16,8 +16,12 @@ public sealed class HdlcDeframer
     /// <summary>Smallest valid AX.25 frame: 14 address + 1 control + 2 FCS bytes.</summary>
     private const int MinFrameLengthWithFcs = 17;
 
-    /// <summary>Sanity cap well above the AX.25 maximum (256-byte info field).</summary>
-    private const int MaxFrameLengthWithFcs = 400;
+    /// <summary>
+    /// Sanity cap on a frame being assembled.  Well above the AX.25 maximum
+    /// (256-byte info field), because some stacks send oversized I-frames —
+    /// dropping those at 400 bytes cost connected-mode data for no APRS benefit.
+    /// </summary>
+    private const int MaxFrameLengthWithFcs = 2048;
 
     private const byte FlagPattern = 0x7E;
 
@@ -94,7 +98,7 @@ public sealed class HdlcDeframer
     private int _onesCount;
     private byte _currentByte;
     private int _bitPosition;
-    private readonly List<byte> _frame = new(MaxFrameLengthWithFcs);
+    private readonly List<byte> _frame = new(512);
 
     /// <summary>
     /// Processes one NRZI-decoded data bit.

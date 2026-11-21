@@ -1,3 +1,4 @@
+using DireControl.PathParsing;
 using DireControl.Data.Models;
 using DireControl.Enums;
 
@@ -22,7 +23,7 @@ public sealed class PmsCommandProcessor(
     public const string Version = "DireControl-1.0-PMS";
 
     /// <summary>Base callsign of the connected user — mail matches on this, SSID stripped.</summary>
-    private readonly string _caller = StripSsid(callerCallsign);
+    private readonly string _caller = CallsignMatcher.BaseCallsign(callerCallsign);
 
     private Mode _mode = Mode.Command;
     private PmsMessageType _composeType;
@@ -225,10 +226,4 @@ public sealed class PmsCommandProcessor(
         message.Type == PmsMessageType.Bulletin
         || string.Equals(message.ToCallsign, _caller, StringComparison.OrdinalIgnoreCase)
         || string.Equals(message.FromCallsign, _caller, StringComparison.OrdinalIgnoreCase);
-
-    private static string StripSsid(string callsign)
-    {
-        var dash = callsign.IndexOf('-');
-        return (dash > 0 ? callsign[..dash] : callsign).ToUpperInvariant();
-    }
 }

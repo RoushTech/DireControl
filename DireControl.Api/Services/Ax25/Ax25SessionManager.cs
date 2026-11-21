@@ -205,7 +205,10 @@ public sealed class Ax25SessionManager(
             DestCommandBit = false,
             SourceCommandBit = true,
         };
-        transmitter.TrySend(Ax25Encoder.Encode(dm), kissChannel);
+        // Connected-mode control traffic: the session lane, and only on the
+        // frequency the SABM was heard on — never the any-radio fallback.
+        transmitter.TrySend(
+            Ax25Encoder.Encode(dm), kissChannel, TxPriority.Session, txCompletion: null, exactChannelOnly: true);
     }
 
     private async Task<(LapbConfig Config, bool InboundEnabled, int MaxSessions)> GetDefaultsAsync(

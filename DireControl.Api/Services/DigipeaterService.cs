@@ -68,7 +68,7 @@ public sealed class DigipeaterService(
         }
 
         var encoded = Ax25Encoder.Encode(rewritten);
-        if (!transmitter.TrySend(encoded, channel))
+        if (!transmitter.TrySend(encoded, channel, TxPriority.Digipeat, txCompletion: null))
         {
             logger.LogWarning("Cannot digipeat {Source}: no RF transmit backend available.", frame.Source);
             return;

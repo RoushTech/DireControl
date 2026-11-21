@@ -7,6 +7,8 @@ export interface RadioModemConfig {
   modemPlaybackDevice: string
   txEnabled: boolean
   txAudioLevelPct: number
+  /** Space (2200 Hz) tone boost over mark, dB 0–6; 0 = equal levels. */
+  txSpaceBoostDb: number
   txDelayMs: number
   txTailMs: number
   txPersistence: number
@@ -31,6 +33,7 @@ export function defaultRadioModemConfig(): RadioModemConfig {
     modemPlaybackDevice: 'default',
     txEnabled: false,
     txAudioLevelPct: 80,
+    txSpaceBoostDb: 0,
     txDelayMs: 300,
     txTailMs: 50,
     txPersistence: 63,

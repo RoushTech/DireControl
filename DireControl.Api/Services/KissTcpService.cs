@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using AprsSharp.KissTnc;
 using AprsSharp.Shared;
 using DireControl.Data;
@@ -12,20 +13,20 @@ namespace DireControl.Api.Services;
 /// and hands them to the shared <see cref="RfFrameIngestService"/>.
 /// Reconnects automatically.  Enabled and configured from the DB-backed
 /// <see cref="UserSetting"/> (External TNC settings), and re-reads them whenever
-/// <see cref="KissReconnectTrigger"/> fires.
+/// the <c>KissClient</c> restart signal fires.
 /// </summary>
 public sealed class KissTcpService(
     IServiceScopeFactory scopeFactory,
     RfFrameIngestService ingestService,
     KissConnectionHolder connectionHolder,
-    KissReconnectTrigger reconnectTrigger,
+    [FromKeyedServices(RestartSignals.KissClient)] RestartSignal reconnectTrigger,
     ILogger<KissTcpService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            // Per-iteration linked token so a settings change (KissReconnectTrigger)
+            // Per-iteration linked token so a settings change (KissClient restart signal)
             // tears down the current connection and re-reads configuration.
             using var iterCts = CancellationTokenSource.CreateLinkedTokenSource(
                 stoppingToken, reconnectTrigger.Token);

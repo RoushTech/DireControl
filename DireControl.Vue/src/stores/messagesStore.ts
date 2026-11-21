@@ -11,19 +11,24 @@ import {
 import type {
   InboxMessageDto,
   MessageAcknowledgedDto,
-  MessageAckDto,
   MessageFailedDto,
   MessageRetriedDto,
   SendMessageRequest,
 } from '@/types/message'
 import { RetryState } from '@/types/message'
 import { usePacketHubStore } from '@/stores/packetHub'
+import { useToastStore } from '@/stores/toastStore'
 
 export const useMessagesStore = defineStore('messages', () => {
   const inboxMessages = ref<InboxMessageDto[]>([])
   const loading = ref(false)
 
   const unreadCount = computed(() => inboxMessages.value.filter((m) => !m.isRead).length)
+  /** Outbound messages that gave up without an ACK — badged on the Comms nav. */
+  const failedCount = computed(
+    () => inboxMessages.value.filter((m) => m.retryState === RetryState.Failed).length,
+  )
+  const toastStore = useToastStore()
 
   async function fetchInbox() {
     loading.value = true
@@ -78,12 +83,6 @@ export const useMessagesStore = defineStore('messages', () => {
     else inboxMessages.value.unshift(message)
   }
 
-  /** Called when SignalR delivers an ACK for one of our sent messages. */
-  function onMessageAcked(ack: MessageAckDto) {
-    const msg = inboxMessages.value.find((m) => m.id === ack.id)
-    if (msg) msg.ackSent = true
-  }
-
   /** Called when the retry service retransmits a message. Updates attempt info. */
   function onMessageRetried(data: MessageRetriedDto) {
     const msg = inboxMessages.value.find((m) => m.id === data.id)
@@ -114,6 +113,13 @@ export const useMessagesStore = defineStore('messages', () => {
       msg.nextRetryAt = null
       msg.retryCount = data.retryCount
     }
+    // Announced app-wide: a give-up matters on whatever screen is open.
+    toastStore.toast(
+      `Message to ${data.toCallsign} failed after ${data.retryCount} attempt(s) — no ACK received.`,
+      'error',
+      10000,
+      { label: 'View', to: '/messages' },
+    )
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
@@ -128,15 +134,16 @@ export const useMessagesStore = defineStore('messages', () => {
   const hub = usePacketHubStore()
   hub.on('messageReceived', (message: InboxMessageDto) => onMessageReceived(message))
   hub.on('messageUpdated', (message: InboxMessageDto) => onMessageUpdated(message))
-  hub.on('messageAcked', (ack: MessageAckDto) => onMessageAcked(ack))
   hub.on('messageRetried', (data: MessageRetriedDto) => onMessageRetried(data))
   hub.on('messageAcknowledged', (data: MessageAcknowledgedDto) => onMessageAcknowledged(data))
   hub.on('messageFailed', (data: MessageFailedDto) => onMessageFailed(data))
+  hub.onReconnected(() => fetchInbox())
 
   return {
     inboxMessages,
     loading,
     unreadCount,
+    failedCount,
     fetchInbox,
     markRead,
     send,
@@ -145,7 +152,6 @@ export const useMessagesStore = defineStore('messages', () => {
     cancelRetry,
     onMessageReceived,
     onMessageUpdated,
-    onMessageAcked,
     onMessageRetried,
     onMessageAcknowledged,
     onMessageFailed,

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { audioLevelColor } from '@/utils/audioLevel'
+import { useOwnCallsign } from '@/composables/useOwnCallsign'
+import { sourceChip, isOwnCallsign, type SourceChip } from '@/types/packet'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 
 // Named so <keep-alive include="RadioView"> in App.vue keeps this view (and its
@@ -18,7 +21,7 @@ import {
   type ModemStatusDto,
 } from '@/api/modemApi'
 import { usePacketHubStore } from '@/stores/packetHub'
-import { useRadiosStore } from '@/stores/radiosStore'
+import { useRadiosStore, LEVEL_STALE_MS } from '@/stores/radiosStore'
 import { useToastStore } from '@/stores/toastStore'
 import { getStatus, type StatusDto } from '@/api/statusApi'
 import { getSettings, getPacketsSince } from '@/api/stationsApi'
@@ -34,8 +37,9 @@ import {
 } from '@/types/packet'
 import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
+import CaptureDiagnostics from '@/components/CaptureDiagnostics.vue'
 import BeaconHistoryModal from '@/components/BeaconHistoryModal.vue'
-import { timeAgo, formatUtc } from '@/utils/time'
+import { timeAgo, formatDateTime } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
 
@@ -54,6 +58,10 @@ const packets = ref<PacketBroadcastDto[]>([])
 
 // Live meters per radio — updated at 10 Hz over SignalR, keyed by radio id.
 const levels = ref<Record<string, ModemLevelDto>>({})
+// When each radio's last level frame arrived; a meter with nothing recent is
+// greyed out rather than frozen on its last reading.
+const levelsAt = ref<Record<string, number>>({})
+const { now: levelClock } = useTick(1000)
 
 type WaterfallInstance = InstanceType<typeof WaterfallCanvas>
 const waterfalls = new Map<string, WaterfallInstance>()
@@ -89,7 +97,8 @@ async function doBeaconNow(m: ModemStatusDto) {
   beaconing[m.radioId] = true
   try {
     await beaconNow(m.radioId)
-    toastStore.toast(`Beacon sent for ${m.fullCallsign}.`, 'success')
+    // Queued, not sent: the TX rows below show when it actually goes out.
+    toastStore.toast(`Beacon queued for ${m.fullCallsign}.`, 'info')
     void radiosStore.fetchLastBeacon(m.radioId)
   } catch {
     toastStore.toast(
@@ -119,7 +128,21 @@ function goToStation(callsign: string) {
 
 // ── Shared hub handlers (named so they can be unregistered on unmount) ───────
 function onHubModemLevel(batch: ModemLevelDto[]) {
-  for (const level of batch) levels.value[level.radioId] = level
+  const at = serverNow()
+  for (const level of batch) {
+    levels.value[level.radioId] = level
+    levelsAt.value[level.radioId] = at
+  }
+}
+
+function csmaWaitSeconds(m: ModemStatusDto): number | null {
+  if (!m.csmaWaitingSince) return null
+  return Math.max(0, Math.round((levelClock.value - new Date(m.csmaWaitingSince).getTime()) / 1000))
+}
+
+function levelStale(m: ModemStatusDto): boolean {
+  const at = levelsAt.value[m.radioId]
+  return at === undefined || levelClock.value - at > LEVEL_STALE_MS
 }
 
 function onHubModemSpectrum(batch: ModemSpectrumDto[]) {
@@ -146,7 +169,7 @@ const radiosWithoutModem = computed(() =>
   radios.value.filter((r) => !modemStatuses.value.some((m) => m.radioId === r.id)),
 )
 
-/** Mock wording: a running modem is "Receiving". */
+/** a running modem is "Receiving". */
 function stateLabel(m: ModemStatusDto): string {
   if (m.state === ModemStates.Running) return 'Receiving'
   return modemStateLabels[m.state] ?? 'Unknown'
@@ -167,7 +190,7 @@ function radioFor(m: ModemStatusDto): RadioDto | undefined {
   return radios.value.find((r) => r.id === m.radioId)
 }
 
-/** One compact identity line, mock-style: "W3UWU · ch 0 · 144.390 MHz FM". */
+/** One compact identity line: "W3UWU · ch 0 · 144.390 MHz FM". */
 function identityLabel(m: ModemStatusDto): string {
   const parts = [m.fullCallsign, `ch ${m.channel}`]
   const freq = frequencyLabel(m)
@@ -176,7 +199,7 @@ function identityLabel(m: ModemStatusDto): string {
 }
 
 /** Rigctld live frequency wins; manual radio frequency is the fallback.
- *  Mock format: "144.390 FM" — the MHz unit is implied. */
+ *  Format: "144.390 FM" — the MHz unit is implied. */
 function frequencyLabel(m: ModemStatusDto): string | null {
   if (m.rigFrequencyHz) return (m.rigFrequencyHz / 1_000_000).toFixed(4)
   const radio = radioFor(m)
@@ -187,7 +210,7 @@ function frequencyLabel(m: ModemStatusDto): string | null {
   return null
 }
 
-// Short labels — the kv column is narrow and the mock shows "RTS/DTR ttyUSB0".
+// Short labels — the kv column is narrow and the layout shows "RTS/DTR ttyUSB0".
 const PTT_LABELS: Record<number, string> = {
   [PttMethods.None]: 'VOX / none',
   [PttMethods.SerialRtsDtr]: 'RTS/DTR',
@@ -206,7 +229,7 @@ function pttLabel(m: ModemStatusDto): string | null {
   return label
 }
 
-// Mock feed times are bare ("now", "28s", "1m") — no " ago" suffix.
+// feed times are bare ("now", "28s", "1m") — no " ago" suffix.
 function feedTime(receivedAt: string): string {
   const diff = Math.max(0, Math.floor((now.value - new Date(receivedAt).getTime()) / 1000))
   if (diff < 10) return 'now'
@@ -235,18 +258,22 @@ function levelFor(m: ModemStatusDto): ModemLevelDto {
   )
 }
 
-function levelColor(level: number): string {
-  if (level > 0.9) return 'error'
-  if (level > 0.05) return 'success'
-  return 'grey'
-}
+const levelColor = audioLevelColor
 
 function typeLabel(p: PacketBroadcastDto): string {
   return PACKET_TYPE_LABELS[parsedTypeFromString(p.parsedType)] ?? 'Unknown'
 }
 
-function sourceLabel(p: PacketBroadcastDto): string {
-  return p.source === PacketSource.AprsIs ? 'IS' : 'RF'
+const { ownCallsign } = useOwnCallsign()
+
+const feedFilter = ref<'rf' | 'all'>('rf')
+const feedPackets = computed(() =>
+  feedFilter.value === 'all'
+    ? packets.value
+    : packets.value.filter((p) => p.source !== PacketSource.AprsIs),
+)
+function feedSource(p: PacketBroadcastDto): SourceChip {
+  return sourceChip(p.source, isOwnCallsign(p.callsign, ownCallsign.value))
 }
 
 // Staleness tracking: the page keeps showing last-known data on failure, but
@@ -277,12 +304,14 @@ async function refresh() {
   }
 }
 
-// RF stack entries as name + chip + caption, mock-style.
+// RF stack entries as name + chip + caption.
 interface RfStackEntry {
   name: string
   chip: string
   color: string
   note: string
+  /** Settings tab to fix this entry, when it is off or unconfigured. */
+  to?: string
 }
 
 const rfStack = computed<RfStackEntry[]>(() => {
@@ -312,7 +341,8 @@ const rfStack = computed<RfStackEntry[]>(() => {
         : s?.aprsIsState === 'Disabled'
           ? 'grey'
           : 'warning',
-    note: s?.aprsIsServerName ?? 'enable in Settings → APRS-IS',
+    note: s?.aprsIsServerName ?? 'not connected',
+    to: s?.aprsIsState === 'Connected' ? undefined : '/settings?tab=aprsis',
   })
 
   entries.push({
@@ -347,8 +377,8 @@ const rfStack = computed<RfStackEntry[]>(() => {
 
   entries.push({
     name: 'External TNC (KISS)',
-    chip: s?.direwolfConnected ? 'connected' : cfg?.direwolfEnabled ? 'disconnected' : 'off',
-    color: s?.direwolfConnected ? 'success' : cfg?.direwolfEnabled ? 'warning' : 'grey',
+    chip: s?.externalTncConnected ? 'connected' : cfg?.direwolfEnabled ? 'disconnected' : 'off',
+    color: s?.externalTncConnected ? 'success' : cfg?.direwolfEnabled ? 'warning' : 'grey',
     note: cfg?.direwolfEnabled
       ? `${cfg.direwolfHost ?? 'localhost'}:${cfg.direwolfPort ?? 8001}`
       : 'native modem carries RF',
@@ -453,10 +483,42 @@ onUnmounted(() => {
             </v-alert>
 
             <template v-if="m.state === ModemStates.Running">
+              <v-alert
+                v-if="m.pttStuck"
+                type="error"
+                density="compact"
+                variant="tonal"
+                class="mb-3"
+                icon="mdi-alert-octagon"
+              >
+                PTT could not be released — the radio may still be transmitting. Check the PTT
+                interface and the radio now.
+              </v-alert>
+              <v-alert
+                v-else-if="m.txError"
+                type="warning"
+                density="compact"
+                variant="tonal"
+                class="mb-3"
+              >
+                Last transmit failed: {{ m.txError }}. Receive is unaffected; TX retries shortly.
+              </v-alert>
+              <v-alert
+                v-if="radiosStore.carrierHeldSeconds(m.radioId) !== null"
+                type="warning"
+                density="compact"
+                variant="tonal"
+                class="mb-3"
+              >
+                Carrier detect has been on for
+                {{ radiosStore.carrierHeldSeconds(m.radioId) }} s without decoding anything, so
+                transmissions are waiting for a clear channel. Usually an open squelch or receive
+                audio set too high — close the squelch or lower the input level.
+              </v-alert>
               <div class="modem-body">
                 <!-- Left: meters + waterfall -->
                 <div class="modem-meters">
-                  <!-- Mock style: labeled thin meter, value right -->
+                  <!-- style: labeled thin meter, value right -->
                   <div class="d-flex align-center justify-space-between mb-1">
                     <span class="text-caption text-medium-emphasis">Audio level</span>
                     <span class="text-caption text-medium-emphasis meter-pct">
@@ -464,12 +526,22 @@ onUnmounted(() => {
                     </span>
                   </div>
                   <v-progress-linear
-                    :model-value="Math.min(100, levelFor(m).audioLevel * 100)"
-                    :color="levelColor(levelFor(m).audioLevel)"
+                    :model-value="levelStale(m) ? 0 : Math.min(100, levelFor(m).audioLevel * 100)"
+                    :color="levelStale(m) ? 'grey' : levelColor(levelFor(m).audioLevel)"
                     height="6"
                     rounded
                     class="mb-3"
                   />
+                  <v-chip
+                    v-if="levelStale(m)"
+                    size="x-small"
+                    variant="tonal"
+                    color="grey"
+                    prepend-icon="mdi-signal-off"
+                    class="mb-3"
+                  >
+                    no level data
+                  </v-chip>
 
                   <div class="text-caption text-medium-emphasis mt-1 mb-1">Waterfall</div>
                   <WaterfallCanvas :ref="(el) => setWaterfallRef(m.radioId, el)" :height="100" />
@@ -481,18 +553,72 @@ onUnmounted(() => {
                   <dd>{{ m.decodedFrames.toLocaleString() }}</dd>
                   <dt>Bad CRC</dt>
                   <dd>{{ m.invalidFrames.toLocaleString() }}</dd>
+                  <template v-if="m.decodedByProfile && Object.keys(m.decodedByProfile).length > 1">
+                    <dt>By profile</dt>
+                    <dd class="kv-mono">
+                      {{
+                        Object.entries(m.decodedByProfile)
+                          .map(([name, n]) => `${name} ${n.toLocaleString()}`)
+                          .join(' · ')
+                      }}
+                    </dd>
+                  </template>
                   <template v-if="m.txEnabled">
                     <dt>Transmitted</dt>
                     <dd>{{ m.transmittedFrames.toLocaleString() }}</dd>
+                    <dt>TX</dt>
+                    <dd>
+                      <v-chip
+                        :color="levelFor(m).transmitting ? 'error' : 'grey'"
+                        size="x-small"
+                        variant="tonal"
+                      >
+                        {{ levelFor(m).transmitting ? 'transmitting' : 'idle' }}
+                      </v-chip>
+                    </dd>
+                    <dt>TX queue</dt>
+                    <dd>
+                      {{ m.txQueueDepth }} frame(s)
+                      <span v-if="m.txDropped > 0" class="text-warning">
+                        · {{ m.txDropped }} dropped
+                      </span>
+                    </dd>
+                    <dt>Last TX</dt>
+                    <dd>{{ m.lastTxAt ? timeAgo(m.lastTxAt, now) : 'never' }}</dd>
+                    <template v-if="csmaWaitSeconds(m) !== null">
+                      <dt>Channel</dt>
+                      <dd>
+                        <span class="text-warning">
+                          Waiting for clear channel {{ csmaWaitSeconds(m) }} s
+                        </span>
+                        <v-progress-linear indeterminate color="warning" height="2" class="mt-1" />
+                      </dd>
+                    </template>
                   </template>
                   <dt>Carrier</dt>
                   <dd>
                     <v-chip
-                      :color="levelFor(m).carrierDetected ? 'success' : 'grey'"
+                      v-if="radiosStore.carrierHeldSeconds(m.radioId) !== null"
+                      color="warning"
+                      size="x-small"
+                      variant="tonal"
+                      prepend-icon="mdi-alert"
+                    >
+                      Carrier held {{ radiosStore.carrierHeldSeconds(m.radioId) }} s · TX deferred
+                    </v-chip>
+                    <v-chip
+                      v-else
+                      :color="!levelStale(m) && levelFor(m).carrierDetected ? 'success' : 'grey'"
                       size="x-small"
                       variant="tonal"
                     >
-                      {{ levelFor(m).carrierDetected ? 'detected' : 'quiet' }}
+                      {{
+                        levelStale(m)
+                          ? 'unknown'
+                          : levelFor(m).carrierDetected
+                            ? 'detected'
+                            : 'quiet'
+                      }}
                     </v-chip>
                   </dd>
                   <template v-if="pttLabel(m)">
@@ -556,7 +682,8 @@ onUnmounted(() => {
             <v-btn size="small" color="primary" variant="tonal" @click="refresh">Retry</v-btn>
           </template>
           <div v-else class="text-caption text-medium-emphasis">
-            No radios have a modem audio feed configured — enable one in a radio's settings.
+            No radios have a modem audio feed configured.
+            <v-btn variant="text" size="small" to="/settings?tab=radios">Set up a radio</v-btn>
           </div>
         </v-card>
 
@@ -576,7 +703,19 @@ onUnmounted(() => {
                   entry.chip
                 }}</v-chip>
               </div>
-              <span class="rf-note">{{ entry.note }}</span>
+              <span class="rf-note">
+                {{ entry.note }}
+                <v-btn
+                  v-if="entry.to"
+                  :to="entry.to"
+                  variant="text"
+                  size="x-small"
+                  density="compact"
+                  class="px-1"
+                >
+                  Settings
+                </v-btn>
+              </span>
             </div>
           </div>
         </v-card>
@@ -607,15 +746,27 @@ onUnmounted(() => {
           <span class="card-title">Incoming packets</span>
           <v-chip size="x-small" variant="tonal" color="primary">live</v-chip>
           <v-spacer />
+          <!-- This page is about the radio: APRS-IS traffic is opt-in here. -->
+          <v-btn-toggle
+            v-model="feedFilter"
+            density="compact"
+            variant="outlined"
+            divided
+            mandatory
+            class="mr-2"
+          >
+            <v-btn value="rf" size="x-small">RF / Own</v-btn>
+            <v-btn value="all" size="x-small">All</v-btn>
+          </v-btn-toggle>
           <span class="text-caption text-medium-emphasis">click a row to inspect</span>
         </div>
         <v-divider />
         <div class="feed-scroll">
-          <div v-if="packets.length === 0" class="text-caption text-medium-emphasis pa-4">
+          <div v-if="feedPackets.length === 0" class="text-caption text-medium-emphasis pa-4">
             Waiting for packets…
           </div>
           <div
-            v-for="p in packets"
+            v-for="p in feedPackets"
             :key="p.id"
             class="feed-row"
             role="button"
@@ -623,10 +774,10 @@ onUnmounted(() => {
             @click="inspectedPacketId = p.id"
             @keydown.enter="inspectedPacketId = p.id"
           >
-            <!-- Mock format: time | "CALLSIGN · Type · summary" | source badge -->
+            <!-- Format: time | "CALLSIGN · Type · summary" | source badge -->
             <span
               class="text-caption text-medium-emphasis feed-time"
-              :title="formatUtc(p.receivedAt)"
+              :title="formatDateTime(p.receivedAt)"
               >{{ feedTime(p.receivedAt) }}</span
             >
             <span class="feed-summary text-body-2" :title="`${typeLabel(p)} · ${p.summary}`">
@@ -640,18 +791,27 @@ onUnmounted(() => {
                 · {{ typeLabel(p) }}<template v-if="p.summary"> · {{ p.summary }}</template>
               </span>
             </span>
-            <v-chip
-              size="x-small"
-              variant="tonal"
-              class="feed-source"
-              :color="sourceLabel(p) === 'RF' ? 'rf' : 'is'"
-            >
-              {{ sourceLabel(p) }}
+            <v-chip size="x-small" variant="tonal" class="feed-source" :color="feedSource(p).color">
+              {{ feedSource(p).label }}
             </v-chip>
           </div>
         </div>
       </v-card>
     </div>
+
+    <!-- Capture, auto-capture and the log pack: the tools for working out why
+         something heard did not decode. -->
+    <v-expansion-panels class="mt-4">
+      <v-expansion-panel>
+        <v-expansion-panel-title>
+          <v-icon start size="18">mdi-stethoscope</v-icon>
+          Diagnostics — audio capture &amp; log pack
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
+          <CaptureDiagnostics />
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
 
     <PacketInspectionDialog
       :packet-id="inspectedPacketId"
@@ -674,7 +834,7 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-/* Mock type scale: page h2 17px/650, card h3 14px/650, header pad 12px 16px. */
+/* Type scale: page h2 17px/650, card h3 14px/650, header pad 12px 16px. */
 .page-title {
   font-size: 17px;
   font-weight: 650;
@@ -690,7 +850,7 @@ onUnmounted(() => {
   font-weight: 650;
 }
 
-/* Mock proportions: the radio card is the dominant column (7:5). */
+/* proportions: the radio card is the dominant column (7:5). */
 .radio-layout {
   display: grid;
   grid-template-columns: minmax(420px, 7fr) minmax(320px, 5fr);
@@ -733,7 +893,7 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* Mock kv: fixed 190px column, 12.5px, labels muted, values right-aligned.
+/* kv: fixed 190px column, 12.5px, labels muted, values right-aligned.
    Wide enough that "6m ago · unconfirmed" and "RTS/DTR ttyUSB0" never wrap. */
 .modem-kv {
   flex: 0 0 190px;
@@ -788,7 +948,7 @@ onUnmounted(() => {
   }
 }
 
-/* Mock rfitem: 12.5px bold name, 11.5px muted note, 9px radius. */
+/* rfitem: 12.5px bold name, 11.5px muted note, 9px radius. */
 .rf-item {
   background: rgba(var(--v-theme-on-surface), 0.04);
   border-radius: 9px;
@@ -820,7 +980,7 @@ onUnmounted(() => {
   flex: 1;
 }
 
-/* Mock feed rows: 13px, mono 64px time column, 8px vertical rhythm. */
+/* feed rows: 13px, mono 64px time column, 8px vertical rhythm. */
 .feed-row {
   display: flex;
   align-items: center;

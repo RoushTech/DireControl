@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatTimeOfDay } from '@/utils/time'
 import { computed } from 'vue'
 import {
   terminalSessionOriginLabels,
@@ -86,7 +87,7 @@ function formatBytes(bytes: number): string {
         </tr>
         <tr>
           <td>Started</td>
-          <td class="text-right mono">{{ new Date(session.startedAt).toLocaleTimeString() }}</td>
+          <td class="text-right mono">{{ formatTimeOfDay(session.startedAt) }}</td>
         </tr>
         <tr v-if="session.endReason">
           <td>End reason</td>

@@ -12,6 +12,7 @@ public sealed class GpioPtt : IPttController
     private readonly GpioController _controller;
     private readonly int _line;
     private readonly bool _activeLow;
+    private readonly Lock _lock = new(); // the TX watchdog may unkey from another thread
 
     public GpioPtt(int chipNumber, int line, bool activeLow)
     {
@@ -25,7 +26,8 @@ public sealed class GpioPtt : IPttController
     public void SetPtt(bool transmit)
     {
         var asserted = transmit ^ _activeLow;
-        _controller.Write(_line, asserted ? PinValue.High : PinValue.Low);
+        lock (_lock)
+            _controller.Write(_line, asserted ? PinValue.High : PinValue.Low);
     }
 
     public void Dispose()

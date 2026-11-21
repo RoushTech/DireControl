@@ -23,7 +23,6 @@ public sealed class StatisticsService
         UniqueStationsThisWeek = 0,
         UniqueStationsAllTime = 0,
         PacketsPerHour = new int[24],
-        BusiestDigipeaters = [],
         BusiestStations = [],
         RecentlyFirstHeard = [],
         GridSquares = [],

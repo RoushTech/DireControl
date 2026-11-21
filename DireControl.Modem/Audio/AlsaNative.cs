@@ -30,6 +30,13 @@ internal static partial class AlsaNative
     [LibraryImport(Lib)]
     internal static partial int snd_pcm_close(IntPtr pcm);
 
+    /// <summary>SND_PCM_NONBLOCK open mode.</summary>
+    internal const int SndPcmNonblock = 1;
+
+    /// <summary>Switches an open PCM between blocking (0) and non-blocking (1) I/O.</summary>
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_nonblock(IntPtr pcm, int nonblock);
+
     /// <summary>
     /// One-call configuration: format, access, channels, rate, soft-resample,
     /// and required latency in microseconds.
@@ -37,6 +44,41 @@ internal static partial class AlsaNative
     [LibraryImport(Lib)]
     internal static partial int snd_pcm_set_params(
         IntPtr pcm, int format, int access, uint channels, uint rate, int softResample, uint latencyUs);
+
+    // ── Explicit hardware parameters (period/buffer sizing) ───────────────────
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_malloc(out IntPtr hwParams);
+
+    [LibraryImport(Lib)]
+    internal static partial void snd_pcm_hw_params_free(IntPtr hwParams);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_any(IntPtr pcm, IntPtr hwParams);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_access(IntPtr pcm, IntPtr hwParams, int access);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_format(IntPtr pcm, IntPtr hwParams, int format);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_channels(IntPtr pcm, IntPtr hwParams, uint channels);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_rate_resample(IntPtr pcm, IntPtr hwParams, uint enable);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_rate_near(IntPtr pcm, IntPtr hwParams, ref uint rate, ref int dir);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_buffer_time_near(IntPtr pcm, IntPtr hwParams, ref uint us, ref int dir);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params_set_period_time_near(IntPtr pcm, IntPtr hwParams, ref uint us, ref int dir);
+
+    [LibraryImport(Lib)]
+    internal static partial int snd_pcm_hw_params(IntPtr pcm, IntPtr hwParams);
 
     [LibraryImport(Lib)]
     internal static partial long snd_pcm_readi(IntPtr pcm, IntPtr buffer, ulong frames);

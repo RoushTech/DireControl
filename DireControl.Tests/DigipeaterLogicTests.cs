@@ -143,4 +143,40 @@ public sealed class DigipeaterLogicTests
         Assert.That(Ax25Decoder.TryDecode(bytes, out var decoded), Is.True);
         Assert.That(decoded.ToTnc2(), Is.EqualTo("KM4ABC-9>APRS,N4WR-2*,WIDE2-1:!3518.00N/08508.00W-test"));
     }
+
+    [TestCase("WIDE2-7")]
+    [TestCase("WIDE1-7")]
+    [TestCase("WIDE2-3", Description = "N above its own n")]
+    public void HopCountAboveN_IsTrapped(string path)
+    {
+        Assert.That(DigipeatedPath(MakeFrame(path), maxWideN: 2), Is.EqualTo("N4WR-2*"));
+    }
+
+    [Test]
+    public void HopCountAboveMax_IsTrapped()
+    {
+        Assert.That(DigipeatedPath(MakeFrame("WIDE3-3"), maxWideN: 2), Is.EqualTo("N4WR-2*"));
+    }
+
+    [Test]
+    public void FullEightEntryPath_StaysAtEight()
+    {
+        var path = new[]
+        {
+            new Ax25Address("K4AAA", 1) { HasBeenRepeated = true },
+            new Ax25Address("K4AAA", 2) { HasBeenRepeated = true },
+            new Ax25Address("K4AAA", 3) { HasBeenRepeated = true },
+            new Ax25Address("K4AAA", 4) { HasBeenRepeated = true },
+            new Ax25Address("K4AAA", 5) { HasBeenRepeated = true },
+            new Ax25Address("K4AAA", 6) { HasBeenRepeated = true },
+            new Ax25Address("K4AAA", 7) { HasBeenRepeated = true },
+            new Ax25Address("WIDE2", 2),
+        };
+
+        var result = DigipeaterLogic.TryBuildDigipeat(MakeFrameWithUsedHops(path), MyCall, 2, false);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Path, Has.Count.EqualTo(8));
+        Assert.That(result.Path[7].ToString(), Is.EqualTo("WIDE2-1"));
+    }
 }

@@ -1,3 +1,4 @@
+using DireControl.Api.Services;
 using DireControl.Api.Controllers.Models;
 using Microsoft.AspNetCore.Mvc;
 using System.Reflection;
@@ -11,10 +12,18 @@ public class AboutController : ControllerBase
     [HttpGet]
     public ActionResult<AboutDto> Get()
     {
-        var version = typeof(AboutController).Assembly
+        // Same version string the beacons transmit; the build's commit (the
+        // "+sha" metadata) is reported separately rather than glued on.
+        var informational = typeof(AboutController).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "unknown";
+            ?.InformationalVersion;
+        var plus = informational?.IndexOf('+') ?? -1;
 
-        return Ok(new AboutDto { Version = version, ServerTime = DateTime.UtcNow });
+        return Ok(new AboutDto
+        {
+            Version = BeaconService.ResolveVersion(informational),
+            Commit = plus >= 0 ? informational![(plus + 1)..] : null,
+            ServerTime = DateTime.UtcNow,
+        });
     }
 }

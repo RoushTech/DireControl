@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -13,15 +14,16 @@ public class StatusController(
     DigipeaterService digipeaterService,
     KissTcpServerService kissServer,
     AprsIsTxQueue aprsIsTxQueue,
-    AprsIsReconnectTrigger reconnectTrigger) : ControllerBase
+    [FromKeyedServices(RestartSignals.AprsIs)] RestartSignal reconnectTrigger) : ControllerBase
 {
     [HttpGet]
     public ActionResult<StatusDto> GetStatus()
     {
         var s = aprsIsStatus;
+        var running = modemService.Statuses.Where(m => m.State == Enums.ModemState.Running).ToList();
         return Ok(new StatusDto
         {
-            DirewolfConnected = connectionHolder.IsConnected,
+            ExternalTncConnected = connectionHolder.IsConnected,
             DigipeatedFrames = digipeaterService.DigipeatedFrames,
             KissServerClients = kissServer.ClientCount,
             RfToIsGatedLines = aprsIsTxQueue.SentCount,
@@ -34,7 +36,8 @@ public class StatusController(
             AprsIsFailedAttempts = s.FailedAttempts,
             AprsIsLastError = s.LastError,
             ModemState = modemService.AggregateState,
-            ModemCarrierDetected = modemService.AnyCarrierDetected,
+            ModemLastDecodedAt = running.Max(m => m.LastDecodedAt),
+            ModemRunningSince = running.Min(m => m.RunningSince),
         });
     }
 

@@ -2,8 +2,8 @@ import http from './axios'
 import type { ModemState } from './modemApi'
 
 export interface StatusDto {
-  direwolfConnected: boolean
-  apiOnline: boolean
+  /** The external KISS TCP TNC client (Direwolf etc.) is connected. */
+  externalTncConnected: boolean
   aprsIsState: string
   aprsIsServerName: string | null
   aprsIsFilter: string
@@ -13,7 +13,9 @@ export interface StatusDto {
   aprsIsFailedAttempts: number
   aprsIsLastError: string | null
   modemState: ModemState
-  modemCarrierDetected: boolean
+  /** Newest RF decode across running modems (APRS-IS traffic never sets this). */
+  modemLastDecodedAt: string | null
+  modemRunningSince: string | null
   digipeatedFrames: number
   kissServerClients: number
   rfToIsGatedLines: number

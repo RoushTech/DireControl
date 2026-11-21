@@ -28,4 +28,12 @@ public class ModemOptions
     /// CSMA.  Reported as <c>CarrierStuck</c> in the modem status.
     /// </summary>
     public int CarrierStuckSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Explicit ALSA capture period in milliseconds (about 20 is the target), or
+    /// 0 to keep ALSA's default of a quarter of the 500 ms buffer.  Off by
+    /// default until verified on the station's sound hardware; a device that
+    /// refuses falls back to the default automatically.
+    /// </summary>
+    public int CapturePeriodMs { get; set; }
 }

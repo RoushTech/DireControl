@@ -1,3 +1,4 @@
+using DireControl.PathParsing;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using DireControl.Data;
@@ -51,7 +52,7 @@ public class PmsController(
         if (request.Type is not (PmsMessageType.Private or PmsMessageType.Bulletin))
             return BadRequest("Type must be Private or Bulletin.");
 
-        var stationBase = options.Value.OurCallsign.Split('-')[0].ToUpperInvariant();
+        var stationBase = CallsignMatcher.BaseCallsign(options.Value.OurCallsign);
         var message = new PmsMessage
         {
             Type = request.Type,

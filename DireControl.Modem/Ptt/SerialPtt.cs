@@ -12,6 +12,7 @@ public sealed class SerialPtt : IPttController
     private readonly SerialPort _port;
     private readonly bool _useRts;
     private readonly bool _useDtr;
+    private readonly Lock _lock = new(); // the TX watchdog may unkey from another thread
 
     public SerialPtt(string portName, bool useRts, bool useDtr)
     {
@@ -30,15 +31,19 @@ public sealed class SerialPtt : IPttController
 
     public void SetPtt(bool transmit)
     {
-        if (_useRts)
-            _port.RtsEnable = transmit;
-        if (_useDtr)
-            _port.DtrEnable = transmit;
+        lock (_lock)
+        {
+            if (_useRts)
+                _port.RtsEnable = transmit;
+            if (_useDtr)
+                _port.DtrEnable = transmit;
+        }
     }
 
     public void Dispose()
     {
         try { SetPtt(false); } catch { /* port may already be gone */ }
-        _port.Dispose();
+        lock (_lock)
+            _port.Dispose();
     }
 }

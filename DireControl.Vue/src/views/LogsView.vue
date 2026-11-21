@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { formatTimeOfDay } from '@/utils/time'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { HubConnectionBuilder, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { useLogStreamStore } from '@/stores/logStream'
 import { LOG_LEVEL_COLORS, shortCategory, type LogEntryDto } from '@/types/log'
 import { getLogLevels, setLogLevel } from '@/api/loggingApi'
@@ -9,8 +9,7 @@ import { getLogLevels, setLogLevel } from '@/api/loggingApi'
 const route = useRoute()
 const store = useLogStreamStore()
 
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+const connectionStatus = computed(() => store.connectionStatus)
 
 const selectedEntry = ref<LogEntryDto | null>(null)
 const clearConfirmOpen = ref(false)
@@ -34,12 +33,7 @@ function levelColor(level: string): string {
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  const ss = String(d.getSeconds()).padStart(2, '0')
-  const ms = String(d.getMilliseconds()).padStart(3, '0')
-  return `${hh}:${mm}:${ss}.${ms}`
+  return formatTimeOfDay(iso, { millis: true })
 }
 
 function openDetail(entry: LogEntryDto) {
@@ -102,49 +96,14 @@ async function changeLevel(category: string, level: string) {
   }
 }
 
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/logs')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
-
-  connection.on('logBacklog', (entries: LogEntryDto[]) => {
-    store.seedBacklog(entries)
-  })
-
-  connection.on('logReceived', (entry: LogEntryDto) => {
-    store.addLog(entry)
-  })
-
-  connection.onreconnecting(() => {
-    connectionStatus.value = 'connecting'
-  })
-  connection.onreconnected(() => {
-    connectionStatus.value = 'connected'
-  })
-  connection.onclose(() => {
-    connectionStatus.value = 'disconnected'
-  })
-
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
-  }
-}
-
-onMounted(async () => {
-  await connectSignalR()
+// The logs hub connection lives in the logStream store; this view opens it
+// while mounted.
+onMounted(() => {
+  void store.connect()
 })
 
-onUnmounted(async () => {
-  if (connection) {
-    await connection.stop()
-    connection = null
-  }
+onUnmounted(() => {
+  void store.disconnect()
 })
 
 function openPopOut() {

@@ -193,3 +193,35 @@ export interface WeatherReadingDto {
   rainLast24h: number | null
   rainSinceMidnight: number | null
 }
+
+/** The RF / IS / OWN label shown on packets across the app. */
+export interface SourceChip {
+  label: string
+  color: string
+}
+
+/**
+ * One rule for labelling where a packet came from.  Our own transmissions are
+ * looped back and stored as RF, so callers pass `isOwn` (see
+ * {@link isOwnCallsign}) to tell them apart from stations we actually heard.
+ */
+export function sourceChip(source: PacketSource | null | undefined, isOwn = false): SourceChip {
+  if (isOwn || source === PacketSource.Own) return { label: 'OWN', color: 'primary' }
+  return source === PacketSource.AprsIs
+    ? { label: 'IS', color: 'is' }
+    : { label: 'RF', color: 'rf' }
+}
+
+/** True when `callsign` is our station under any SSID. */
+export function isOwnCallsign(
+  callsign: string | null | undefined,
+  ourCallsign: string | null,
+): boolean {
+  if (!callsign || !ourCallsign) return false
+  return baseCallsign(callsign) === baseCallsign(ourCallsign)
+}
+
+/** The callsign without its SSID, upper-cased: "w3uwu-10" → "W3UWU". */
+export function baseCallsign(callsign: string): string {
+  return callsign.trim().toUpperCase().split('-')[0] ?? ''
+}

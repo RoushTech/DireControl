@@ -37,9 +37,11 @@ public sealed class AfskReceiver
             var profile = profiles[i];
             demod.FrameDemodulated += frame =>
             {
-                if (_deduper.IsNewFrame(frame, DateTime.UtcNow))
+                var now = DateTime.UtcNow;
+                if (_deduper.IsNewFrame(frame, now))
                 {
                     ValidFrameCount++;
+                    LastFrameAt = now;
                     FrameReceived?.Invoke(frame, profile);
                 }
             };
@@ -56,6 +58,9 @@ public sealed class AfskReceiver
 
     /// <summary>Total unique valid frames emitted.</summary>
     public long ValidFrameCount { get; private set; }
+
+    /// <summary>UTC time of the last unique valid frame, or null before the first.</summary>
+    public DateTime? LastFrameAt { get; private set; }
 
     /// <summary>
     /// Peak absolute audio level (0–1) over roughly the last 100 ms — drives

@@ -86,27 +86,52 @@ public sealed class MessageHandlingTests
     }
 
     // =========================================================================
-    // TryParseAck — body → (isAck, originalMsgId)
+    // TryParseAckOrReject — body + message ID → (isAck/isReject, originalMsgId)
     // =========================================================================
 
-    [TestCase("ack42", true, "42")]
-    [TestCase("ACK42", true, "42")]     // case-insensitive
-    [TestCase("Ack42", true, "42")]     // mixed case
-    [TestCase("ack3DF4A", true, "3DF4A")] // alphanumeric ID (real-world example)
-    [TestCase("ack1", true, "1")]      // single-digit ID
-    [TestCase("ack", false, "")]       // "ack" alone — no ID follows, too short
-    [TestCase("Hello", false, "")]       // plain message body
-    [TestCase("", false, "")]       // empty
-    [TestCase("ack ", false, "")]       // "ack " — body.Length == 4 but ID is whitespace; trims to ""
-    [TestCase("ack87}", true, "87")]     // reply-ack capable ACK
-    [TestCase("ack87}AB", true, "87")]   // reply-ack ACK carrying a piggybacked ACK
-    [TestCase("ack}", false, "")]        // brace but no ID
-    public void TryParseAck_ClassifiesBodyCorrectly(string body, bool expectedIsAck, string expectedId)
+    [TestCase("ack42", "", true, "42")]
+    [TestCase("ACK42", "", false, "")]     // APRS101 §14: lowercase only
+    [TestCase("Ack42", "", false, "")]     // "Ack42" is a message, not an ACK
+    [TestCase("ack3DF4A", "", true, "3DF4A")] // alphanumeric ID (real-world example)
+    [TestCase("ack1", "", true, "1")]      // single-digit ID
+    [TestCase("ack", "", false, "")]       // "ack" alone — no ID follows
+    [TestCase("Hello", "", false, "")]     // plain message body
+    [TestCase("", "", false, "")]          // empty
+    [TestCase("ack ", "", false, "")]      // whitespace is not an ID
+    [TestCase("ack12", "", true, "12")]
+    [TestCase("ack12}34", "", true, "12")] // reply-ack ACK carrying a piggybacked ACK
+    [TestCase("ack87}", "", true, "87")]   // reply-ack capable ACK
+    [TestCase("ack}", "", false, "")]      // brace but no ID
+    [TestCase("ack123456", "", false, "")] // IDs are at most 5 characters
+    [TestCase("Acknowledged, see you", "12", false, "")] // the real-world false positive
+    [TestCase("Acknowledged", "", false, "")]
+    [TestCase("ack, got it", "", false, "")]
+    [TestCase("ack12", "7", false, "")]    // a numbered message is never an ACK
+    public void TryParseAckOrReject_ClassifiesAcks(string body, string messageId, bool expectedIsAck, string expectedId)
     {
-        var isAck = MessageHandlingLogic.TryParseAck(body, out var id);
+        var isAck = MessageHandlingLogic.TryParseAckOrReject(body, messageId, out var id, out var isReject);
 
         Assert.That(isAck, Is.EqualTo(expectedIsAck));
         Assert.That(id, Is.EqualTo(expectedId));
+        Assert.That(isReject, Is.False);
+    }
+
+    [TestCase("rej5", "5")]
+    [TestCase("rej5}AB", "5")]
+    public void TryParseAckOrReject_ClassifiesRejects(string body, string expectedId)
+    {
+        var matched = MessageHandlingLogic.TryParseAckOrReject(body, "", out var id, out var isReject);
+
+        Assert.That(matched, Is.True);
+        Assert.That(isReject, Is.True);
+        Assert.That(id, Is.EqualTo(expectedId));
+    }
+
+    [TestCase("REJ5")]
+    [TestCase("Rejected that")]
+    public void TryParseAckOrReject_LooseRejects_AreMessages(string body)
+    {
+        Assert.That(MessageHandlingLogic.TryParseAckOrReject(body, "", out _, out _), Is.False);
     }
 
     // =========================================================================
@@ -492,6 +517,79 @@ public sealed class MessageHandlingTests
 
         Assert.That(ackedId, Is.Null);
         Assert.That((await _db.Messages.SingleAsync()).AckSent, Is.False);
+    }
+
+    [Test]
+    public async Task TryApplyAck_PrefersRetryingRowOverOldAcknowledgedRowWithSameId()
+    {
+        // After a restart the ID counter used to begin at "1" again: an old,
+        // acknowledged "1" and a new, retrying "1" coexist.
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "1", body: "old",
+            ackSent: true, retryState: RetryState.Acknowledged, receivedAt: DateTime.UtcNow.AddDays(-1));
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "1", body: "new",
+            retryState: RetryState.Retrying, nextRetryAt: DateTime.UtcNow.AddSeconds(30));
+        await _db.SaveChangesAsync();
+
+        var ackedId = await MessageHandlingLogic.TryApplyAckAsync("W1ABC", "1", _db, "W3UWU", default);
+
+        var fresh = await _db.Messages.SingleAsync(m => m.Body == "new");
+        Assert.That(ackedId, Is.EqualTo(fresh.Id));
+        Assert.That(fresh.RetryState, Is.EqualTo(RetryState.Acknowledged));
+        Assert.That(fresh.AckSent, Is.True);
+    }
+
+    [Test]
+    public async Task TryApplyAck_PrefersNewestInFlightRow()
+    {
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "1", body: "older",
+            retryState: RetryState.Failed, receivedAt: DateTime.UtcNow.AddHours(-2));
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "1", body: "newer",
+            retryState: RetryState.Pending, receivedAt: DateTime.UtcNow);
+        await _db.SaveChangesAsync();
+
+        await MessageHandlingLogic.TryApplyAckAsync("W1ABC", "1", _db, "W3UWU", default);
+
+        Assert.That((await _db.Messages.SingleAsync(m => m.Body == "newer")).AckSent, Is.True);
+        Assert.That((await _db.Messages.SingleAsync(m => m.Body == "older")).AckSent, Is.False);
+    }
+
+    [Test]
+    public async Task TryApplyReject_StopsRetries()
+    {
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "5",
+            retryState: RetryState.Retrying, nextRetryAt: DateTime.UtcNow.AddSeconds(30));
+        await _db.SaveChangesAsync();
+
+        var rejected = await MessageHandlingLogic.TryApplyRejectAsync("W1ABC", "5", _db, "W3UWU", default);
+
+        Assert.That(rejected, Is.Not.Null);
+        var msg = await _db.Messages.SingleAsync();
+        Assert.That(msg.RetryState, Is.EqualTo(RetryState.Failed));
+        Assert.That(msg.NextRetryAt, Is.Null);
+        Assert.That(msg.AckSent, Is.False);
+    }
+
+    [TestCase(null, 1)]
+    [TestCase("41", 42)]
+    [TestCase("99998", 99999 - 1 + 1)]
+    [TestCase("99999", 1)]
+    [TestCase("AB", 1)]
+    public void NextMessageNumber_ResumesAndWraps(string? lastId, int expected)
+    {
+        Assert.That(MessageHandlingLogic.NextMessageNumber(lastId), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task FindLastOutboundMessageId_ReturnsNewestOfOurs()
+    {
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "40", receivedAt: DateTime.UtcNow.AddMinutes(-5));
+        SeedMessage(from: "W3UWU", to: "W1ABC", messageId: "41", receivedAt: DateTime.UtcNow.AddMinutes(-1));
+        SeedMessage(from: "W1ABC", to: "W3UWU", messageId: "900", receivedAt: DateTime.UtcNow);
+        await _db.SaveChangesAsync();
+
+        var last = await MessageHandlingLogic.FindLastOutboundMessageIdAsync(_db, "w3uwu", default);
+
+        Assert.That(last, Is.EqualTo("41"));
     }
 
     // =========================================================================

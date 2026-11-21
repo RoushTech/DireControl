@@ -174,6 +174,104 @@ public sealed class ModemTxTests
     }
 
     [Test]
+    public void DrainForKeyup_AirtimeBudget_KeepsKeyupShortAndLeavesTheRestQueued()
+    {
+        var priority = MakeLane();
+        var digipeat = MakeLane();
+        var normal = MakeLane();
+        for (var i = 0; i < 32; i++)
+            priority.Writer.TryWrite(new DireControl.Api.Services.TxItem(
+                Ax25Encoder.EncodeUiFrame("N4WR-1", new string('i', 128), "WIDE1-1"), null));
+        for (var i = 0; i < 5; i++)
+            normal.Writer.TryWrite(new DireControl.Api.Services.TxItem(
+                Ax25Encoder.EncodeUiFrame("N4WR-1", new string('u', 256), "WIDE1-1"), null));
+
+        var modulator = new AfskModulator(SampleRate);
+        const int lead = 45, tail = 3;
+        var budget = (long)(DireControl.Api.Services.SoundModemService.KeyupBudgetSeconds * 1200) - (lead + tail) * 8;
+
+        var items = DireControl.Api.Services.SoundModemService.DrainForKeyup(
+            priority.Reader, digipeat.Reader, normal.Reader, maxNormal: 5, budget);
+        var audio = modulator.GenerateTransmission(items.Select(i => i.Frame).ToList(), lead, tail, 0.5f);
+
+        Assert.That(audio.Length / (double)SampleRate,
+            Is.LessThanOrEqualTo(DireControl.Api.Services.SoundModemService.KeyupBudgetSeconds));
+        Assert.That(items, Is.Not.Empty);
+        Assert.That(priority.Reader.Count + normal.Reader.Count, Is.EqualTo(37 - items.Count),
+            "everything that did not fit stays queued, session lane included");
+    }
+
+    [Test]
+    public void DrainForKeyup_OversizedFirstFrame_IsStillTaken()
+    {
+        var priority = MakeLane();
+        var normal = MakeLane();
+        normal.Writer.TryWrite(new DireControl.Api.Services.TxItem(
+            Ax25Encoder.EncodeUiFrame("N4WR-1", new string('u', 256), null), null));
+
+        var items = DireControl.Api.Services.SoundModemService.DrainForKeyup(
+            priority.Reader, null, normal.Reader, maxNormal: 5, bitBudget: 10);
+
+        Assert.That(items, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void DrainForKeyup_DigipeatsGoBeforeBeacons_OnePerKeyup()
+    {
+        var priority = MakeLane();
+        var digipeat = MakeLane();
+        var normal = MakeLane();
+        normal.Writer.TryWrite(new DireControl.Api.Services.TxItem([1], null));     // beacon
+        digipeat.Writer.TryWrite(new DireControl.Api.Services.TxItem([20], null));  // digipeats
+        digipeat.Writer.TryWrite(new DireControl.Api.Services.TxItem([21], null));
+
+        var items = DireControl.Api.Services.SoundModemService.DrainForKeyup(
+            priority.Reader, digipeat.Reader, normal.Reader, maxNormal: 5, long.MaxValue);
+
+        Assert.That(items.Select(i => i.Frame[0]), Is.EqualTo([20, 1]).AsCollection);
+        Assert.That(digipeat.Reader.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void DroppingLane_CancelsTheDroppedFramesCompletion()
+    {
+        var dropped = new List<DireControl.Api.Services.TxItem>();
+        var lane = DireControl.Api.Services.SoundModemService.CreateDroppingLane(2, dropped.Add);
+        var first = new TaskCompletionSource<bool>();
+
+        lane.Writer.TryWrite(new DireControl.Api.Services.TxItem([1], first));
+        lane.Writer.TryWrite(new DireControl.Api.Services.TxItem([2], new TaskCompletionSource<bool>()));
+        lane.Writer.TryWrite(new DireControl.Api.Services.TxItem([3], new TaskCompletionSource<bool>()));
+
+        Assert.That(first.Task.IsCanceled, Is.True, "the producer learns its frame was never sent");
+        Assert.That(dropped.Select(d => d.Frame[0]), Is.EqualTo([1]).AsCollection);
+    }
+
+    [Test]
+    public void CancelPending_ClosesTheLaneSoLateFramesAreRefused()
+    {
+        var lane = MakeLane();
+        var queued = new TaskCompletionSource<bool>();
+        lane.Writer.TryWrite(new DireControl.Api.Services.TxItem([1], queued));
+
+        DireControl.Api.Services.SoundModemService.CancelPending(lane);
+
+        Assert.That(queued.Task.IsCanceled, Is.True);
+        Assert.That(lane.Writer.TryWrite(new DireControl.Api.Services.TxItem([2], null)), Is.False,
+            "a frame arriving after teardown is refused, not stranded");
+    }
+
+    [Test]
+    public void GenerateTransmission_EndsWithARampNotAStep()
+    {
+        var frame = Ax25Encoder.EncodeUiFrame("N4WR", ">x", string.Empty);
+        var audio = new AfskModulator(SampleRate).GenerateTransmission([frame], leadFlags: 30, tailFlags: 2, amplitude: 0.8f);
+
+        Assert.That(MathF.Abs(audio[^1]), Is.LessThan(0.01f), "the final sample is faded out");
+        Assert.That(audio.Max(MathF.Abs), Is.EqualTo(0.8f).Within(0.001f), "the body keeps full amplitude");
+    }
+
+    [Test]
     public void GenerateTransmission_TxDelayProducesExpectedAudioLength()
     {
         var modulator = new AfskModulator(SampleRate);

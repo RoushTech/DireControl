@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { baseCallsign } from '@/types/packet'
+import { audioLevelColor } from '@/utils/audioLevel'
+import { formatDateTime, timeZonePref, setTimeZonePref, type TimeZonePref } from '@/utils/time'
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import L from 'leaflet'
@@ -45,7 +48,11 @@ import {
 } from '@/api/modemApi'
 import { updatePacketSettings } from '@/api/packetApi'
 import { apiErrorDetail } from '@/api/axios'
+import { getStatus, reconnectAprsIs } from '@/api/statusApi'
+import { serverNow } from '@/utils/serverTime'
 import { usePacketHubStore } from '@/stores/packetHub'
+import { useRadiosStore } from '@/stores/radiosStore'
+import { useToastStore } from '@/stores/toastStore'
 import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
 import { getWeatherStatus } from '@/api/weatherApi'
 import {
@@ -75,6 +82,14 @@ const activeTab = ref<string>(
 watch(activeTab, (tab) => {
   router.replace({ query: { ...route.query, tab } })
 })
+// Follow ?tab= links (banners, checklist) that arrive while Settings is open.
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (typeof tab === 'string' && TAB_VALUES.includes(tab) && tab !== activeTab.value)
+      activeTab.value = tab
+  },
+)
 
 // ─── Retry settings (read-only display) ──────────────────────────────────────
 const retrySettings = ref<Pick<
@@ -148,10 +163,75 @@ async function saveAprsIsSettings() {
     setTimeout(() => {
       aprsIsSaveSuccess.value = false
     }, 3000)
-  } catch {
-    aprsIsSaveError.value = 'Failed to save APRS-IS settings.'
+    if (aprsIsEnabled.value) void watchAprsIsOutcome()
+    else aprsIsOutcome.value = null
+  } catch (e) {
+    aprsIsSaveError.value = apiErrorDetail(e)
   } finally {
     aprsIsSaving.value = false
+  }
+}
+
+// What happened after the save: a save restarts the connection, and whether
+// the new settings actually log in is the part the operator cares about.
+const aprsIsOutcome = ref<{ type: 'info' | 'success' | 'error' | 'warning'; text: string } | null>(
+  null,
+)
+const aprsIsReconnecting = ref(false)
+let aprsIsOutcomeRun = 0
+
+async function watchAprsIsOutcome() {
+  const run = ++aprsIsOutcomeRun
+  // Only a connect attempt made after this point counts — until the service
+  // restarts, status still describes the previous connection.
+  const since = serverNow() - 1000
+  aprsIsOutcome.value = { type: 'info', text: 'Connecting to APRS-IS…' }
+  const deadline = Date.now() + 15_000
+  while (run === aprsIsOutcomeRun && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    if (run !== aprsIsOutcomeRun) return
+    try {
+      const s = await getStatus()
+      const fresh =
+        !!s.aprsIsLastConnectAttemptAt && new Date(s.aprsIsLastConnectAttemptAt).getTime() >= since
+      if (!fresh) continue
+      if (s.aprsIsState === 'Connected') {
+        aprsIsOutcome.value = {
+          type: 'success',
+          text: `Connected to ${s.aprsIsServerName ?? aprsIsHost.value}.`,
+        }
+        return
+      }
+      if (s.aprsIsState === 'AuthFailed') {
+        aprsIsOutcome.value = {
+          type: 'error',
+          text: `Auth failed: ${s.aprsIsLastError ?? 'the server rejected the passcode'}.`,
+        }
+        return
+      }
+    } catch (e) {
+      aprsIsOutcome.value = { type: 'error', text: apiErrorDetail(e) }
+      return
+    }
+  }
+  if (run === aprsIsOutcomeRun) {
+    const s = await getStatus().catch(() => null)
+    aprsIsOutcome.value = {
+      type: 'warning',
+      text: `Still not connected after 15 s${s?.aprsIsLastError ? ` — ${s.aprsIsLastError}` : ''}. Check the host and port.`,
+    }
+  }
+}
+
+async function reconnectAprsIsNow() {
+  aprsIsReconnecting.value = true
+  try {
+    await reconnectAprsIs()
+    void watchAprsIsOutcome()
+  } catch (e) {
+    aprsIsOutcome.value = { type: 'error', text: apiErrorDetail(e) }
+  } finally {
+    aprsIsReconnecting.value = false
   }
 }
 
@@ -188,6 +268,7 @@ const digipeaterMaxWideN = ref(2)
 const digipeaterFillInOnly = ref(false)
 const kissServerEnabled = ref(false)
 const kissServerPort = ref(8010)
+const kissServerBindAddress = ref('0.0.0.0')
 const rfToIsGatingEnabled = ref(false)
 const isToRfGatingEnabled = ref(false)
 const isToRfPath = ref('')
@@ -202,6 +283,7 @@ function loadRfServicesSettings(s: SettingsDto) {
   digipeaterFillInOnly.value = s.digipeaterFillInOnly
   kissServerEnabled.value = s.kissServerEnabled
   kissServerPort.value = s.kissServerPort
+  kissServerBindAddress.value = s.kissServerBindAddress
   rfToIsGatingEnabled.value = s.rfToIsGatingEnabled
   isToRfGatingEnabled.value = s.isToRfGatingEnabled
   isToRfPath.value = s.isToRfPath
@@ -259,6 +341,7 @@ async function saveRfServices() {
       digipeaterFillInOnly: digipeaterFillInOnly.value,
       kissServerEnabled: kissServerEnabled.value,
       kissServerPort: kissServerPort.value,
+      kissServerBindAddress: kissServerBindAddress.value.trim(),
       rfToIsGatingEnabled: rfToIsGatingEnabled.value,
       isToRfGatingEnabled: isToRfGatingEnabled.value,
       isToRfPath: isToRfPath.value.trim(),
@@ -299,7 +382,7 @@ const packetSaveSuccess = ref(false)
 
 /** What the PMS answers as on the air: the station base callsign + PMS SSID. */
 const pmsFullCallsign = computed(() => {
-  const base = stationCallsign.value.trim().toUpperCase().split('-')[0]
+  const base = baseCallsign(stationCallsign.value)
   return `${base || 'N0CALL'}-${pmsSsid.value}`
 })
 
@@ -373,6 +456,13 @@ const radioFormDirty = ref(false)
 // While editing a saved radio, the dialog shows the live meter + waterfall so
 // audio levels can be set against what the modem actually hears/sends.
 const packetHub = usePacketHubStore()
+const radiosStore = useRadiosStore()
+const toastStore = useToastStore()
+
+/** Radio saves restart every modem instance. */
+function announceModemRestart() {
+  toastStore.toast('Modem restarting with the new configuration…', 'info', 4000)
+}
 const editorLevel = ref<ModemLevelDto | null>(null)
 const editorWaterfall = ref<InstanceType<typeof WaterfallCanvas> | null>(null)
 
@@ -418,6 +508,58 @@ async function doTestTone(kind: TestToneKind) {
     }, TEST_TONE_MS)
   }
 }
+/** PTT/TX fields differ from what is saved — the test path uses the saved config. */
+const pttFieldsDirty = computed(() => {
+  const saved = radios.value.find((r) => r.id === editingRadioId.value)?.modem
+  if (!saved) return true
+  const keys = [
+    'txEnabled',
+    'modemPlaybackDevice',
+    'pttMethod',
+    'pttSerialPort',
+    'pttSerialUseRts',
+    'pttSerialUseDtr',
+    'pttHidDevice',
+    'pttHidPin',
+    'pttGpioChip',
+    'pttGpioLine',
+    'pttGpioActiveLow',
+    'pttRigctldHost',
+    'pttRigctldPort',
+  ] as const
+  return keys.some((k) => (rModem.value[k] ?? null) !== (saved[k] ?? null))
+})
+const pttTesting = ref(false)
+
+async function doTestPtt() {
+  if (!editingRadioId.value) return
+  pttTesting.value = true
+  try {
+    await sendTestTone(editingRadioId.value, TestToneKinds.PttOnly, 1000)
+    toastStore.toast('PTT test sent — the radio should key for 1 s. Keyed ✓', 'success', 4000)
+  } catch (e) {
+    toastStore.toast(`PTT test failed: ${apiErrorDetail(e)}`, 'error')
+  } finally {
+    setTimeout(() => {
+      pttTesting.value = false
+    }, 1000)
+  }
+}
+
+// Unsaved-changes guard: the dialog is persistent, so outside clicks and
+// Escape no longer throw edits away; Cancel asks when the form is dirty.
+const discardConfirmOpen = ref(false)
+
+function requestCloseRadioDialog() {
+  if (radioFormDirty.value) discardConfirmOpen.value = true
+  else radioDialogOpen.value = false
+}
+
+function discardRadioChanges() {
+  discardConfirmOpen.value = false
+  radioDialogOpen.value = false
+}
+
 const showTxTiming = ref(false)
 let suppressRadioDirty = false
 
@@ -657,6 +799,7 @@ async function saveRadio() {
       radios.value.push(created)
     }
     radioDialogOpen.value = false
+    announceModemRestart()
   } catch (e: unknown) {
     // Keep the dialog open and say why — a silent failure looks like a frozen save.
     const detail = (e as { response?: { data?: unknown } })?.response?.data
@@ -674,6 +817,7 @@ async function toggleActive(id: string) {
     const updated = await toggleRadioActive(id)
     const idx = radios.value.findIndex((r) => r.id === id)
     if (idx !== -1) radios.value[idx] = updated
+    announceModemRestart()
   } catch {
     const radio = radios.value.find((r) => r.id === id)
     showToast(
@@ -683,15 +827,9 @@ async function toggleActive(id: string) {
   }
 }
 
-// ─── Toast (shared across tabs) ───────────────────────────────────────────────
-const beaconToast = ref(false)
-const beaconToastText = ref('')
-const beaconToastColor = ref<'success' | 'error'>('success')
-
+// ─── Toasts go through the app-wide stack ─────────────────────────────────────
 function showToast(text: string, color: 'success' | 'error') {
-  beaconToastColor.value = color
-  beaconToastText.value = text
-  beaconToast.value = true
+  toastStore.toast(text, color)
 }
 
 // ─── Beacon now ───────────────────────────────────────────────────────────────
@@ -701,14 +839,14 @@ async function doBeaconNow(radio: RadioDto) {
   beaconing.value[radio.id] = true
   try {
     await beaconNow(radio.id)
-    beaconToastColor.value = 'success'
-    beaconToastText.value = `Beacon sent for ${radio.fullCallsign}.`
-  } catch {
-    beaconToastColor.value = 'error'
-    beaconToastText.value = `Beacon failed for ${radio.fullCallsign}. Check that a TX modem is connected and home position is set.`
+    toastStore.toast(`Beacon queued for ${radio.fullCallsign}.`, 'info')
+  } catch (e) {
+    toastStore.toast(
+      `Beacon failed for ${radio.fullCallsign}: ${apiErrorDetail(e)}. Check that a TX modem is running and home position is set.`,
+      'error',
+    )
   } finally {
     beaconing.value[radio.id] = false
-    beaconToast.value = true
   }
 }
 
@@ -722,6 +860,7 @@ function promptDeleteRadio(radio: RadioDto) {
   deleteConfirmAction = async () => {
     await deleteRadio(radio.id)
     radios.value = radios.value.filter((r) => r.id !== radio.id)
+    announceModemRestart()
   }
   deleteConfirmOpen.value = true
 }
@@ -1373,11 +1512,26 @@ function promptDeleteRule(id: number, name: string) {
   deleteConfirmOpen.value = true
 }
 
+const deleteConfirmError = ref('')
+const deleteConfirmBusy = ref(false)
+
 async function confirmDelete() {
-  if (deleteConfirmAction) await deleteConfirmAction()
-  deleteConfirmOpen.value = false
-  deleteConfirmAction = null
+  deleteConfirmError.value = ''
+  deleteConfirmBusy.value = true
+  try {
+    if (deleteConfirmAction) await deleteConfirmAction()
+    deleteConfirmOpen.value = false
+    deleteConfirmAction = null
+  } catch (e) {
+    // Stay open and say why, rather than leaving a dialog that does nothing.
+    deleteConfirmError.value = apiErrorDetail(e)
+  } finally {
+    deleteConfirmBusy.value = false
+  }
 }
+watch(deleteConfirmOpen, (open) => {
+  if (!open) deleteConfirmError.value = ''
+})
 </script>
 
 <template>
@@ -1401,6 +1555,16 @@ async function confirmDelete() {
 
     <v-tabs-window v-model="activeTab" class="settings-content">
       <v-tabs-window-item value="station" class="pa-4">
+        <v-alert
+          v-if="stationCallsign.trim().toUpperCase().startsWith('N0CALL')"
+          type="error"
+          variant="tonal"
+          density="compact"
+          class="mb-4"
+        >
+          Your callsign is still the placeholder N0CALL. Set your own callsign below before
+          transmitting or connecting to APRS-IS — DireControl identifies with it on air.
+        </v-alert>
         <div class="settings-grid">
           <div class="settings-section">
             <!-- ================================================================ -->
@@ -1578,6 +1742,19 @@ async function confirmDelete() {
             </div>
 
             <v-card variant="outlined" class="mb-6 pa-4">
+              <div class="d-flex align-center ga-6 mb-2">
+                <span class="text-body-2">Times shown in</span>
+                <v-radio-group
+                  :model-value="timeZonePref"
+                  inline
+                  hide-details
+                  density="compact"
+                  @update:model-value="(v) => setTimeZonePref(v as TimeZonePref)"
+                >
+                  <v-radio label="UTC" value="utc" />
+                  <v-radio label="Local time" value="local" />
+                </v-radio-group>
+              </div>
               <div class="d-flex align-center ga-6">
                 <span class="text-body-2">Distance units</span>
                 <v-radio-group
@@ -1658,18 +1835,27 @@ async function confirmDelete() {
                   </td>
                   <td>{{ radio.beaconCount }}</td>
                   <td>
-                    <v-chip
-                      :color="radio.isActive ? 'green' : 'grey'"
-                      size="x-small"
-                      variant="tonal"
-                      class="cursor-pointer"
-                      @click="toggleActive(radio.id)"
+                    <v-tooltip
+                      text="Activating or deactivating restarts the sound modem"
+                      location="top"
                     >
-                      {{ radio.isActive ? 'Active' : 'Inactive' }}
-                    </v-chip>
+                      <template #activator="{ props: tipProps }">
+                        <v-switch
+                          v-bind="tipProps"
+                          :model-value="radio.isActive"
+                          color="success"
+                          density="compact"
+                          hide-details
+                          inset
+                          :aria-label="`${radio.name} active`"
+                          @update:model-value="toggleActive(radio.id)"
+                        />
+                      </template>
+                    </v-tooltip>
                   </td>
                   <td class="text-right" style="white-space: nowrap">
                     <v-btn
+                      aria-label="Beacon now"
                       icon="mdi-access-point"
                       size="x-small"
                       variant="text"
@@ -1680,13 +1866,15 @@ async function confirmDelete() {
                       @click="doBeaconNow(radio)"
                     />
                     <v-btn
+                      aria-label="Edit radio"
                       icon="mdi-pencil"
                       size="x-small"
                       variant="text"
                       @click="openEditRadio(radio)"
                     />
                     <v-btn
-                      icon="mdi-close"
+                      aria-label="Delete radio"
+                      icon="mdi-delete"
                       size="x-small"
                       variant="text"
                       color="error"
@@ -1759,6 +1947,15 @@ async function confirmDelete() {
                 type="number"
                 style="max-width: 140px"
               />
+              <v-text-field
+                v-if="kissServerEnabled"
+                v-model="kissServerBindAddress"
+                label="Bind address"
+                density="compact"
+                hint="KISS has no authentication — 127.0.0.1 keeps it on this host"
+                persistent-hint
+                style="max-width: 260px"
+              />
             </div>
 
             <v-divider class="my-4" />
@@ -1808,6 +2005,9 @@ async function confirmDelete() {
               >
                 Save RF Services
               </v-btn>
+              <span class="text-caption text-medium-emphasis"
+                >Saving restarts the KISS server and disconnects its clients; the modem keeps running.</span
+              >
               <v-fade-transition>
                 <span v-if="rfServicesSaveSuccess" class="text-caption text-success">
                   <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
@@ -1871,6 +2071,9 @@ async function confirmDelete() {
               >
                 Save External TNC
               </v-btn>
+              <span class="text-caption text-medium-emphasis"
+                >Saving reconnects to the external TNC.</span
+              >
               <v-fade-transition>
                 <span v-if="externalTncSaveSuccess" class="text-caption text-success">
                   <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
@@ -1956,6 +2159,9 @@ async function confirmDelete() {
               >
                 Save APRS-IS Settings
               </v-btn>
+              <span class="text-caption text-medium-emphasis"
+                >Saving drops and re-opens the APRS-IS connection.</span
+              >
               <v-fade-transition>
                 <span v-if="aprsIsSaveSuccess" class="text-caption text-success">
                   <v-icon size="14" class="mr-1">mdi-check-circle</v-icon>Saved
@@ -1964,6 +2170,27 @@ async function confirmDelete() {
             </div>
             <v-alert v-if="aprsIsSaveError" type="error" density="compact" class="mt-3">
               {{ aprsIsSaveError }}
+            </v-alert>
+            <v-alert
+              v-if="aprsIsOutcome"
+              :type="aprsIsOutcome.type"
+              density="compact"
+              variant="tonal"
+              class="mt-3"
+            >
+              {{ aprsIsOutcome.text }}
+              <template #append>
+                <v-btn
+                  v-if="aprsIsOutcome.type !== 'info' && aprsIsEnabled"
+                  size="small"
+                  variant="text"
+                  prepend-icon="mdi-refresh"
+                  :loading="aprsIsReconnecting"
+                  @click="reconnectAprsIsNow"
+                >
+                  Reconnect
+                </v-btn>
+              </template>
             </v-alert>
           </v-card>
         </div>
@@ -2239,6 +2466,7 @@ async function confirmDelete() {
                   </v-list-item-subtitle>
                   <template #append>
                     <v-btn
+                      aria-label="Delete alert zone"
                       icon="mdi-delete"
                       size="x-small"
                       variant="text"
@@ -2279,6 +2507,7 @@ async function confirmDelete() {
                   </v-list-item-subtitle>
                   <template #append>
                     <v-btn
+                      aria-label="Delete proximity rule"
                       icon="mdi-delete"
                       size="x-small"
                       variant="text"
@@ -2515,6 +2744,9 @@ async function confirmDelete() {
           >
             Save packet settings
           </v-btn>
+          <span class="text-caption text-medium-emphasis"
+            >Saving restarts the PMS, terminal listener and AGWPE server — open sessions end.</span
+          >
         </div>
       </v-tabs-window-item>
 
@@ -2638,7 +2870,7 @@ async function confirmDelete() {
                 >· VACUUM skipped (busy)</span
               >
               <span class="text-medium-emphasis">
-                · {{ new Date(lastCleanup.completedAt).toLocaleString() }}</span
+                · {{ formatDateTime(lastCleanup.completedAt) }}</span
               >
             </div>
           </v-card>
@@ -2712,7 +2944,7 @@ async function confirmDelete() {
                   stations removed</template
                 >)
                 <span class="text-medium-emphasis">
-                  · {{ new Date(reprocessStatus.lastResult.completedAt).toLocaleString() }}</span
+                  · {{ formatDateTime(reprocessStatus.lastResult.completedAt) }}</span
                 >
               </div>
             </template>
@@ -2723,7 +2955,7 @@ async function confirmDelete() {
 
     <!-- ── Dialogs ── -->
     <!-- Add / Edit Radio dialog -->
-    <v-dialog v-model="radioDialogOpen" max-width="880" scrollable>
+    <v-dialog v-model="radioDialogOpen" max-width="880" scrollable persistent>
       <v-card>
         <v-card-title class="d-flex align-center ga-2">
           {{ editingRadioId ? 'Edit Radio' : 'Add Radio' }}
@@ -2949,6 +3181,18 @@ async function confirmDelete() {
                   <div v-if="editingRadioId" class="calibration-box">
                     <div class="d-flex align-center ga-2 mb-2">
                       <v-chip
+                        v-if="
+                          editingRadioId && radiosStore.carrierHeldSeconds(editingRadioId) !== null
+                        "
+                        color="warning"
+                        size="x-small"
+                        variant="tonal"
+                        title="Carrier is on with nothing decoding — squelch open or input too hot"
+                      >
+                        carrier held {{ radiosStore.carrierHeldSeconds(editingRadioId) }} s
+                      </v-chip>
+                      <v-chip
+                        v-else
                         :color="editorLevel?.carrierDetected ? 'success' : 'grey'"
                         size="x-small"
                         variant="tonal"
@@ -2973,7 +3217,7 @@ async function confirmDelete() {
                     </div>
                     <v-progress-linear
                       :model-value="Math.min(100, (editorLevel?.audioLevel ?? 0) * 100)"
-                      :color="(editorLevel?.audioLevel ?? 0) > 0.9 ? 'error' : 'success'"
+                      :color="audioLevelColor(editorLevel?.audioLevel ?? 0)"
                       height="6"
                       rounded
                       class="mb-3"
@@ -3030,6 +3274,31 @@ async function confirmDelete() {
                         <span class="text-caption text-medium-emphasis">
                           keys TX ~2s · gain applies live while you drag
                         </span>
+                      </div>
+                      <div class="d-flex align-center ga-2 flex-wrap mt-2">
+                        <v-tooltip
+                          :disabled="!pttFieldsDirty"
+                          text="Save first — the test uses the saved PTT settings"
+                          location="top"
+                        >
+                          <template #activator="{ props: tipProps }">
+                            <span v-bind="tipProps">
+                              <v-btn
+                                size="small"
+                                variant="outlined"
+                                prepend-icon="mdi-radio-handheld"
+                                :disabled="pttFieldsDirty || toneSending"
+                                :loading="pttTesting"
+                                @click="doTestPtt"
+                              >
+                                Test PTT (key 1 s)
+                              </v-btn>
+                            </span>
+                          </template>
+                        </v-tooltip>
+                        <span class="text-caption text-medium-emphasis"
+                          >no tone — wiring check</span
+                        >
                       </div>
                     </template>
                   </div>
@@ -3183,6 +3452,18 @@ async function confirmDelete() {
                       hint="CSMA slot time"
                       persistent-hint
                     />
+                    <v-text-field
+                      v-model.number="rModem.txSpaceBoostDb"
+                      label="Space boost (dB)"
+                      density="compact"
+                      type="number"
+                      min="0"
+                      max="6"
+                      step="0.5"
+                      :rules="[(v: number) => (v >= 0 && v <= 6) || '0–6 dB']"
+                      hint="2200 Hz louder than 1200 Hz. 0 = equal; ~4–5 for a flat data jack"
+                      persistent-hint
+                    />
                   </div>
                 </div>
               </template>
@@ -3204,7 +3485,7 @@ async function confirmDelete() {
             ● Unsaved changes
           </span>
           <v-spacer />
-          <v-btn variant="text" @click="radioDialogOpen = false">Cancel</v-btn>
+          <v-btn variant="text" @click="requestCloseRadioDialog">Cancel</v-btn>
           <v-btn
             color="primary"
             variant="tonal"
@@ -3214,6 +3495,22 @@ async function confirmDelete() {
           >
             Save Radio
           </v-btn>
+          <span class="text-caption text-medium-emphasis"
+            >Saving restarts the sound modem (receive pauses briefly).</span
+          >
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Discard unsaved radio edits? -->
+    <v-dialog v-model="discardConfirmOpen" max-width="420">
+      <v-card>
+        <v-card-title class="text-subtitle-1">Discard unsaved changes?</v-card-title>
+        <v-card-text>This radio has edits that have not been saved.</v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="discardConfirmOpen = false">Keep editing</v-btn>
+          <v-btn color="error" variant="tonal" @click="discardRadioChanges">Discard</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -3323,17 +3620,6 @@ async function confirmDelete() {
     </v-dialog>
 
     <!-- Shared toast (used by beacon-now, radio toggle, and maintenance) -->
-    <v-snackbar
-      v-model="beaconToast"
-      :color="beaconToastColor"
-      :timeout="5000"
-      location="bottom right"
-    >
-      {{ beaconToastText }}
-      <template #actions>
-        <v-btn variant="text" @click="beaconToast = false">Dismiss</v-btn>
-      </template>
-    </v-snackbar>
 
     <!-- Cleanup confirmation dialog -->
     <v-dialog v-model="cleanupConfirmOpen" max-width="460">
@@ -3384,11 +3670,24 @@ async function confirmDelete() {
           <v-icon color="error" class="mr-2">mdi-alert-circle-outline</v-icon>
           Confirm Delete
         </v-card-title>
-        <v-card-text>{{ deleteConfirmMessage }}</v-card-text>
+        <v-card-text>
+          {{ deleteConfirmMessage }}
+          <v-alert
+            v-if="deleteConfirmError"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mt-3"
+          >
+            Delete failed: {{ deleteConfirmError }}
+          </v-alert>
+        </v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="deleteConfirmOpen = false">Cancel</v-btn>
-          <v-btn color="error" variant="tonal" @click="confirmDelete">Delete</v-btn>
+          <v-btn color="error" variant="tonal" :loading="deleteConfirmBusy" @click="confirmDelete">
+            Delete
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

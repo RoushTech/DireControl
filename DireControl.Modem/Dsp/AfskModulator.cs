@@ -9,6 +9,17 @@ namespace DireControl.Modem.Dsp;
 /// </summary>
 public sealed class AfskModulator(int sampleRate, float baud = 1200f, float markFreq = 1200f, float spaceFreq = 2200f)
 {
+    /// <summary>Largest supported space-tone boost.</summary>
+    public const double MaxSpaceBoostDb = 6.0;
+
+    /// <summary>
+    /// Space tone level relative to mark, in dB (0 to <see cref="MaxSpaceBoostDb"/>).
+    /// Pre-compensates receiver de-emphasis for a flat (data-jack) TX path.
+    /// The louder tone is always sent at the requested amplitude, so the peak
+    /// never exceeds it; with a boost the mark tone is reduced instead.
+    /// </summary>
+    public double SpaceBoostDb { get; init; }
+
     /// <summary>Flags between frames when several are sent in one keyup.</summary>
     private const int InterFrameFlags = 2;
 
@@ -150,11 +161,33 @@ public sealed class AfskModulator(int sampleRate, float baud = 1200f, float mark
     /// NRZI-encodes the bit stream (0 = tone change, 1 = same tone) and renders
     /// phase-continuous AFSK audio.
     /// </summary>
+    /// <summary>Length of the raised-cosine fade at the end of each burst.</summary>
+    internal const double RampOutMs = 5.0;
+
+    /// <summary>
+    /// Fades the final few milliseconds — inside the tail flags, after the
+    /// closing flag — so the burst does not end on a hard step, which splatters
+    /// a click across the receiver's audio and adjacent channels.
+    /// </summary>
+    private void ApplyRampOut(float[] samples)
+    {
+        var ramp = Math.Min(samples.Length, (int)(sampleRate * RampOutMs / 1000.0));
+        for (var i = 0; i < ramp; i++)
+        {
+            var gain = 0.5 * (1 + Math.Cos(Math.PI * (i + 1) / ramp));
+            samples[samples.Length - ramp + i] *= (float)gain;
+        }
+    }
+
     private float[] RenderBits(List<bool> bits, float amplitude)
     {
         var samplesPerBit = sampleRate / (double)baud;
         var totalSamples = (int)Math.Ceiling(bits.Count * samplesPerBit);
         var samples = new float[totalSamples];
+
+        var boost = Math.Pow(10, Math.Clamp(SpaceBoostDb, 0, MaxSpaceBoostDb) / 20);
+        var markAmplitude = amplitude / boost;
+        var spaceAmplitude = (double)amplitude;
 
         var level = true; // NRZI line state; initial value is arbitrary
         var phase = 0.0;
@@ -167,6 +200,7 @@ public sealed class AfskModulator(int sampleRate, float baud = 1200f, float mark
                 level = !level;
 
             var freq = level ? markFreq : spaceFreq;
+            var toneAmplitude = level ? markAmplitude : spaceAmplitude;
             var phaseStep = 2 * Math.PI * freq / sampleRate;
 
             bitBoundary += samplesPerBit;
@@ -174,13 +208,15 @@ public sealed class AfskModulator(int sampleRate, float baud = 1200f, float mark
 
             while (sampleIndex < cellEnd && sampleIndex < totalSamples)
             {
-                samples[sampleIndex++] = (float)(Math.Sin(phase) * amplitude);
+                samples[sampleIndex++] = (float)(Math.Sin(phase) * toneAmplitude);
                 phase += phaseStep;
                 if (phase > 2 * Math.PI)
                     phase -= 2 * Math.PI;
             }
         }
 
-        return sampleIndex == totalSamples ? samples : samples[..sampleIndex];
+        var rendered = sampleIndex == totalSamples ? samples : samples[..sampleIndex];
+        ApplyRampOut(rendered);
+        return rendered;
     }
 }

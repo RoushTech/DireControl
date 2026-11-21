@@ -16,14 +16,30 @@ public sealed class AlsaCaptureDevice : IDisposable
     private readonly short[] _pcmBuffer;
     private readonly GCHandle _pcmBufferHandle;
     private bool _disposed;
+    private long _overruns;
 
     public string DeviceName { get; }
     public int SampleRate { get; }
 
+    /// <summary>
+    /// Capture overruns recovered so far.  Each one is audio the demodulator
+    /// never saw — previously recovered silently, so lost packets were invisible.
+    /// </summary>
+    public long Overruns => Interlocked.Read(ref _overruns);
+
+    /// <summary>True when the explicit period request took effect.</summary>
+    public bool ExplicitPeriod { get; }
+
     /// <param name="deviceName">ALSA PCM name, e.g. "default", "hw:1,0", "plughw:CARD=Device".</param>
     /// <param name="sampleRate">Capture rate; ALSA soft-resamples if the hardware differs.</param>
     /// <param name="periodFrames">Frames returned per <see cref="Read"/> (default ~21 ms at 48 kHz).</param>
-    public AlsaCaptureDevice(string deviceName, int sampleRate = 48000, int periodFrames = 1024)
+    /// <param name="periodUs">
+    /// Hardware period to request explicitly, or null for ALSA's default
+    /// (buffer/4 — 125 ms with the 500 ms buffer, which makes carrier detect
+    /// and CSMA react 125–250 ms late).  If the device refuses, capture falls
+    /// back to the default configuration.
+    /// </param>
+    public AlsaCaptureDevice(string deviceName, int sampleRate = 48000, int periodFrames = 1024, uint? periodUs = null)
     {
         DeviceName = deviceName;
         SampleRate = sampleRate;
@@ -35,6 +51,12 @@ public sealed class AlsaCaptureDevice : IDisposable
         {
             _pcmBufferHandle.Free();
             throw new AlsaException($"snd_pcm_open(\"{deviceName}\")", err);
+        }
+
+        if (periodUs is { } period && TrySetExplicitPeriod(period, (uint)sampleRate))
+        {
+            ExplicitPeriod = true;
+            return;
         }
 
         err = AlsaNative.snd_pcm_set_params(
@@ -50,6 +72,38 @@ public sealed class AlsaCaptureDevice : IDisposable
             AlsaNative.snd_pcm_close(_pcm);
             _pcmBufferHandle.Free();
             throw new AlsaException($"snd_pcm_set_params(\"{deviceName}\", {sampleRate} Hz)", err);
+        }
+    }
+
+    /// <summary>
+    /// Configures mono S16 at <paramref name="rate"/> with a short hardware
+    /// period inside the usual 500 ms buffer.  Returns false — leaving nothing
+    /// committed — if the device cannot honour any of it exactly.
+    /// </summary>
+    private bool TrySetExplicitPeriod(uint periodUs, uint rate)
+    {
+        if (AlsaNative.snd_pcm_hw_params_malloc(out var hw) < 0)
+            return false;
+        try
+        {
+            var dir = 0;
+            var actualRate = rate;
+            var bufferUs = LatencyUs;
+            var period = periodUs;
+            return AlsaNative.snd_pcm_hw_params_any(_pcm, hw) >= 0
+                && AlsaNative.snd_pcm_hw_params_set_access(_pcm, hw, AlsaNative.SndPcmAccessRwInterleaved) >= 0
+                && AlsaNative.snd_pcm_hw_params_set_format(_pcm, hw, AlsaNative.SndPcmFormatS16Le) >= 0
+                && AlsaNative.snd_pcm_hw_params_set_channels(_pcm, hw, 1) >= 0
+                && AlsaNative.snd_pcm_hw_params_set_rate_resample(_pcm, hw, 1) >= 0
+                && AlsaNative.snd_pcm_hw_params_set_rate_near(_pcm, hw, ref actualRate, ref dir) >= 0
+                && actualRate == rate
+                && AlsaNative.snd_pcm_hw_params_set_buffer_time_near(_pcm, hw, ref bufferUs, ref dir) >= 0
+                && AlsaNative.snd_pcm_hw_params_set_period_time_near(_pcm, hw, ref period, ref dir) >= 0
+                && AlsaNative.snd_pcm_hw_params(_pcm, hw) >= 0;
+        }
+        finally
+        {
+            AlsaNative.snd_pcm_hw_params_free(hw);
         }
     }
 
@@ -77,6 +131,7 @@ public sealed class AlsaCaptureDevice : IDisposable
                 return (int)read;
             }
 
+            Interlocked.Increment(ref _overruns);
             var recovered = AlsaNative.snd_pcm_recover(_pcm, (int)read, silent: 1);
             if (recovered < 0)
                 throw new AlsaException($"snd_pcm_readi(\"{DeviceName}\")", (int)read);

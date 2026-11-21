@@ -18,14 +18,6 @@ export enum HeardVia {
   IgateRfDigi = 6,
 }
 
-export enum AprsIsConnectionState {
-  Disabled = 'Disabled',
-  Connecting = 'Connecting',
-  Connected = 'Connected',
-  AuthFailed = 'AuthFailed',
-  Disconnected = 'Disconnected',
-}
-
 export interface QrzLookupData {
   name: string | null
   city: string | null
@@ -96,32 +88,12 @@ export interface SettingsDto {
   aprsIsFilter: string
   deduplicationWindowSeconds: number
   direwolfEnabled: boolean
-  modemEnabled: boolean
-  modemCaptureDevice: string
-  modemKissChannel: number
-  modemTxEnabled: boolean
-  modemPlaybackDevice: string
-  modemTxAudioLevelPct: number
-  modemTxDelayMs: number
-  modemTxTailMs: number
-  modemPersistence: number
-  modemSlotTimeMs: number
-  modemPttMethod: number
-  modemPttSerialPort: string | null
-  modemPttSerialUseRts: boolean
-  modemPttSerialUseDtr: boolean
-  modemPttHidDevice: string | null
-  modemPttHidPin: number
-  modemPttGpioChip: number
-  modemPttGpioLine: number
-  modemPttGpioActiveLow: boolean
-  modemPttRigctldHost: string
-  modemPttRigctldPort: number
   digipeaterEnabled: boolean
   digipeaterMaxWideN: number
   digipeaterFillInOnly: boolean
   kissServerEnabled: boolean
   kissServerPort: number
+  kissServerBindAddress: string
   rfToIsGatingEnabled: boolean
   isToRfGatingEnabled: boolean
   isToRfPath: string
@@ -165,7 +137,6 @@ export interface StatisticsDto {
   uniqueStationsThisWeek: number
   uniqueStationsAllTime: number
   packetsPerHour: number[]
-  busiestDigipeaters: CallsignCountDto[]
   busiestStations: CallsignCountDto[]
   recentlyFirstHeard: RecentlyHeardDto[]
   gridSquares: string[]

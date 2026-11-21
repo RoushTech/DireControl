@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useOwnCallsign } from '@/composables/useOwnCallsign'
+import { sourceChip, isOwnCallsign, type SourceChip } from '@/types/packet'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
@@ -7,14 +9,13 @@ import { useStationSelectionStore } from '@/stores/stationSelection'
 import { getPacketsSince } from '@/api/stationsApi'
 import {
   PacketType,
-  PacketSource,
   PACKET_TYPE_LABELS,
   PACKET_TYPE_COLORS,
   parsedTypeFromString,
   packetDtoToBroadcast,
   type PacketBroadcastDto,
 } from '@/types/packet'
-import { timeAgo, formatUtc, formatUtcTime } from '@/utils/time'
+import { timeAgo, formatDateTime, formatTimeOfDay } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
 
@@ -54,13 +55,12 @@ const sourceOptions = [
 const absoluteTime = ref(false)
 
 function timeLabel(p: PacketBroadcastDto): string {
-  return absoluteTime.value ? formatUtcTime(p.receivedAt) : timeAgo(p.receivedAt, now.value)
+  return absoluteTime.value ? formatTimeOfDay(p.receivedAt) : timeAgo(p.receivedAt, now.value)
 }
 
-function sourceChip(p: PacketBroadcastDto): { label: string; color: string } {
-  return p.source === PacketSource.AprsIs
-    ? { label: 'IS', color: 'is' }
-    : { label: 'RF', color: 'rf' }
+const { ownCallsign } = useOwnCallsign()
+function packetSourceChip(p: PacketBroadcastDto): SourceChip {
+  return sourceChip(p.source, isOwnCallsign(p.callsign, ownCallsign.value))
 }
 
 function typeLabel(parsedType: string): string {
@@ -284,7 +284,7 @@ function openPopOut() {
         <div :key="p.id" class="beacon-row" @click="openInspectDialog(p.id)">
           <span
             class="beacon-cell beacon-time text-caption text-medium-emphasis"
-            :title="formatUtc(p.receivedAt)"
+            :title="formatDateTime(p.receivedAt)"
           >
             {{ timeLabel(p) }}
           </span>
@@ -299,8 +299,8 @@ function openPopOut() {
             </v-chip>
           </span>
           <span class="beacon-cell beacon-src">
-            <v-chip :color="sourceChip(p).color" size="x-small" variant="tonal">
-              {{ sourceChip(p).label }}
+            <v-chip :color="packetSourceChip(p).color" size="x-small" variant="tonal">
+              {{ packetSourceChip(p).label }}
             </v-chip>
           </span>
           <span class="beacon-cell beacon-summary text-body-2 text-truncate" :title="p.summary">
@@ -435,7 +435,7 @@ function openPopOut() {
   flex: 1;
   min-width: 0;
   max-width: 100%;
-  /* Packet payloads read better in mono (mock style) */
+  /* Packet payloads read better in mono */
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.8rem;
 }

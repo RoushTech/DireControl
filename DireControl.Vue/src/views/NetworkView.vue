@@ -6,7 +6,7 @@ import { getWatchList, toggleWatch } from '@/api/stationsApi'
 import { getRadios, getBeaconHistory } from '@/api/radiosApi'
 import type { DigipeaterAnalysisEntry, StationDto } from '@/types/station'
 import type { RadioDto } from '@/types/radio'
-import { timeAgo, formatUtc, formatUtcTime } from '@/utils/time'
+import { timeAgo, formatDateTime, formatTimeOfDay } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
 import { useToastStore } from '@/stores/toastStore'
@@ -53,10 +53,10 @@ function confirmedPercent(radio: RadioDto): number {
   return Math.min(100, (radio.confirmationCount / radio.beaconCount) * 100)
 }
 
-// Mock caption style: the data timestamp, not a ticking relative time.
+// Caption style: the data timestamp, not a ticking relative time.
 const asOfLabel = computed(() => {
   if (loadedAt.value === null) return ''
-  return `as of ${formatUtcTime(new Date(loadedAt.value).toISOString())}`
+  return `as of ${formatTimeOfDay(new Date(loadedAt.value).toISOString())}`
 })
 
 async function load() {
@@ -251,7 +251,8 @@ onMounted(load)
         <v-card v-if="!loading && beaconRadios.length === 0" variant="outlined" class="pa-4">
           <div class="card-title mb-1">Beacon reach</div>
           <div class="text-caption text-medium-emphasis">
-            No radio has beaconed yet — enable auto-beacon in Settings → Radios.
+            No radio has beaconed yet — enable auto-beacon on a radio.
+            <v-btn variant="text" size="small" to="/settings?tab=radios">Radios</v-btn>
           </div>
         </v-card>
 
@@ -275,7 +276,7 @@ onMounted(load)
                   {{ s.callsign }}
                 </a>
               </v-list-item-title>
-              <v-list-item-subtitle :title="formatUtc(s.lastSeen)">
+              <v-list-item-subtitle :title="formatDateTime(s.lastSeen)">
                 heard {{ timeAgo(s.lastSeen, now) }}
               </v-list-item-subtitle>
               <template #append>
@@ -328,7 +329,7 @@ onMounted(load)
   overflow-x: auto;
 }
 
-/* Mock type scale: page h2 17px/650, card h3 14px/650, mono numeric columns. */
+/* Type scale: page h2 17px/650, card h3 14px/650, mono numeric columns. */
 .page-title {
   font-size: 17px;
   font-weight: 650;

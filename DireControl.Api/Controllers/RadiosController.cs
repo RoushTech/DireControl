@@ -1,3 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
+using DireControl.Modem.Dsp;
+using DireControl.Modem.Ax25;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using DireControl.Data;
@@ -13,7 +16,7 @@ namespace DireControl.Api.Controllers;
 public class RadiosController(
     DireControlContext db,
     BeaconService beaconService,
-    ModemRestartTrigger modemRestartTrigger) : ControllerBase
+    [FromKeyedServices(RestartSignals.Modem)] RestartSignal modemRestartTrigger) : ControllerBase
 {
     // ─── List ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +78,8 @@ public class RadiosController(
     {
         if (ValidateAutoBeacon(request.AutoBeaconEnabled, request.AutoBeaconIntervalSeconds) is { } beaconError)
             return BadRequest(beaconError);
+        if (!Ax25Address.IsValidPath(request.BeaconPath))
+            return BadRequest("Invalid beacon path. Use up to 8 comma-separated callsigns such as WIDE1-1,WIDE2-1 (1–6 characters, SSID 0–15), or leave empty for direct.");
 
         var radio = new Radio
         {
@@ -162,6 +167,8 @@ public class RadiosController(
 
         if (ValidateAutoBeacon(request.AutoBeaconEnabled, request.AutoBeaconIntervalSeconds) is { } beaconError)
             return BadRequest(beaconError);
+        if (!Ax25Address.IsValidPath(request.BeaconPath))
+            return BadRequest("Invalid beacon path. Use up to 8 comma-separated callsigns such as WIDE1-1,WIDE2-1 (1–6 characters, SSID 0–15), or leave empty for direct.");
 
         radio.Name = request.Name.Trim();
         radio.Callsign = request.Callsign.Trim().ToUpperInvariant();
@@ -379,6 +386,7 @@ public class RadiosController(
                 ModemPlaybackDevice = radio.ModemPlaybackDevice,
                 TxEnabled = radio.TxEnabled,
                 TxAudioLevelPct = radio.TxAudioLevelPct,
+                TxSpaceBoostDb = radio.TxSpaceBoostDb,
                 TxDelayMs = radio.TxDelayMs,
                 TxTailMs = radio.TxTailMs,
                 TxPersistence = radio.TxPersistence,
@@ -420,6 +428,8 @@ public class RadiosController(
             return "Playback device is required when TX is enabled.";
         if (modem.TxAudioLevelPct is < 1 or > 100)
             return "TX audio level must be between 1 and 100 percent.";
+        if (modem.TxSpaceBoostDb is < 0 or > AfskModulator.MaxSpaceBoostDb || double.IsNaN(modem.TxSpaceBoostDb))
+            return $"TX space boost must be between 0 and {AfskModulator.MaxSpaceBoostDb} dB.";
         if (modem.TxDelayMs is < 0 or > 2000)
             return "TX delay must be between 0 and 2000 ms.";
         if (modem.TxTailMs is < 0 or > 1000)
@@ -459,6 +469,7 @@ public class RadiosController(
             : modem.ModemPlaybackDevice.Trim();
         radio.TxEnabled = modem.TxEnabled;
         radio.TxAudioLevelPct = modem.TxAudioLevelPct;
+        radio.TxSpaceBoostDb = modem.TxSpaceBoostDb;
         radio.TxDelayMs = modem.TxDelayMs;
         radio.TxTailMs = modem.TxTailMs;
         radio.TxPersistence = modem.TxPersistence;

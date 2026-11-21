@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import { useToastStore } from '@/stores/toastStore'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { ALERT_TYPE_COLORS } from '@/types/alert'
-import { formatUtc, timeAgo } from '@/utils/time'
+import { formatDateTime, timeAgo } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
 
 const router = useRouter()
@@ -45,13 +46,13 @@ function alertDetailText(alert: (typeof alertsStore.alerts)[0]): string {
   }
 }
 
-const ackFailed = ref(false)
+const toastStore = useToastStore()
 
 async function acknowledge(id: number) {
   try {
     await alertsStore.acknowledge(id)
   } catch {
-    ackFailed.value = true
+    toastStore.toast("Couldn't acknowledge the alert — the backend may be unreachable.", 'error')
   }
 }
 
@@ -74,7 +75,6 @@ function goToStation(callsign: string) {
           { title: 'Watch List', value: 'WatchList' },
           { title: 'Proximity', value: 'Proximity' },
           { title: 'Geofence', value: 'Geofence' },
-          { title: 'New Message', value: 'NewMessage' },
         ]"
         item-title="title"
         item-value="value"
@@ -132,7 +132,7 @@ function goToStation(callsign: string) {
           <!-- Timestamp -->
           <span
             class="text-caption text-medium-emphasis flex-shrink-0"
-            :title="formatUtc(alert.triggeredAt)"
+            :title="formatDateTime(alert.triggeredAt)"
           >
             {{ timeAgo(alert.triggeredAt, now) }}
           </span>
@@ -160,13 +160,6 @@ function goToStation(callsign: string) {
         </div>
       </div>
     </div>
-
-    <v-snackbar v-model="ackFailed" color="error" :timeout="5000" location="bottom right">
-      Couldn't acknowledge the alert — the backend may be unreachable.
-      <template #actions>
-        <v-btn variant="text" @click="ackFailed = false">Dismiss</v-btn>
-      </template>
-    </v-snackbar>
   </div>
 </template>
 

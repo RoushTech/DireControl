@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import type { HubConnection } from '@microsoft/signalr'
+import { createHubConnection } from '@/api/hubConnection'
 import { LOG_LEVEL_RANK, type LogEntryDto } from '@/types/log'
 
 // Hard cap on rows held in memory so a long-running stream can't grow unbounded.
@@ -14,6 +16,41 @@ export const useLogStreamStore = defineStore('logStream', () => {
   const textFilter = ref('')
 
   const pendingCount = computed(() => pendingLogs.value.length)
+
+  // ── /hubs/logs connection (opened while a log view is mounted) ─────────────
+  const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('disconnected')
+  let connection: HubConnection | null = null
+
+  async function connect() {
+    if (connection) return
+    connectionStatus.value = 'connecting'
+    const conn = createHubConnection('/hubs/logs')
+    connection = conn
+    conn.on('logBacklog', (entries: LogEntryDto[]) => seedBacklog(entries))
+    conn.on('logReceived', (entry: LogEntryDto) => addLog(entry))
+    conn.onreconnecting(() => {
+      connectionStatus.value = 'connecting'
+    })
+    conn.onreconnected(() => {
+      connectionStatus.value = 'connected'
+    })
+    conn.onclose(() => {
+      connectionStatus.value = 'disconnected'
+    })
+    try {
+      await conn.start()
+      connectionStatus.value = 'connected'
+    } catch {
+      connectionStatus.value = 'disconnected'
+    }
+  }
+
+  async function disconnect() {
+    const conn = connection
+    connection = null
+    if (conn) await conn.stop()
+    connectionStatus.value = 'disconnected'
+  }
 
   function addLog(entry: LogEntryDto) {
     const target = paused.value ? pendingLogs : displayedLogs
@@ -78,6 +115,9 @@ export const useLogStreamStore = defineStore('logStream', () => {
     filteredLogs,
     addLog,
     seedBacklog,
+    connectionStatus,
+    connect,
+    disconnect,
     pause,
     unpause,
     clear,

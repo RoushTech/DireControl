@@ -1,11 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import {
-  HubConnectionBuilder,
-  HubConnectionState,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { HubConnectionState, type HubConnection } from '@microsoft/signalr'
+import { createHubConnection } from '@/api/hubConnection'
 import {
   base64ToBytes,
   bytesToBase64,
@@ -72,11 +68,7 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   function ensureConnection(): HubConnection {
     if (connection) return connection
-    connection = new HubConnectionBuilder()
-      .withUrl('/hubs/terminal')
-      .withAutomaticReconnect()
-      .configureLogging(LogLevel.Warning)
-      .build()
+    connection = createHubConnection('/hubs/terminal')
 
     connection.onreconnecting(() => {
       hubState.value = 'connecting'

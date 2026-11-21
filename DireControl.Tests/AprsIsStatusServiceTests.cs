@@ -1,7 +1,5 @@
-using DireControl.Api.Hubs;
 using DireControl.Api.Services;
 using DireControl.Enums;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 
@@ -11,7 +9,7 @@ namespace DireControl.Tests;
 public class AprsIsStatusServiceTests
 {
     private static AprsIsStatusService CreateService() =>
-        new(new FakeHubContext(), NullLogger<AprsIsStatusService>.Instance);
+        new(NullLogger<AprsIsStatusService>.Instance);
 
     [Test]
     public void RecordFailure_StampsFirstDisconnectedOnce_AndCountsAttempts()
@@ -76,41 +74,5 @@ public class AprsIsStatusServiceTests
             Assert.That(svc.LastError, Is.EqualTo("dropped"));
             Assert.That(svc.FirstDisconnectedAt, Is.Not.Null);
         });
-    }
-
-    // ─── Minimal SignalR fakes (no mocking library is referenced) ─────────────
-
-    private sealed class FakeHubContext : IHubContext<PacketHub>
-    {
-        public IHubClients Clients { get; } = new FakeHubClients();
-        public IGroupManager Groups { get; } = new FakeGroupManager();
-    }
-
-    private sealed class FakeHubClients : IHubClients
-    {
-        public IClientProxy All { get; } = new FakeClientProxy();
-        public IClientProxy AllExcept(IReadOnlyList<string> excludedConnectionIds) => All;
-        public IClientProxy Client(string connectionId) => All;
-        public IClientProxy Clients(IReadOnlyList<string> connectionIds) => All;
-        public IClientProxy Group(string groupName) => All;
-        public IClientProxy GroupExcept(string groupName, IReadOnlyList<string> excludedConnectionIds) => All;
-        public IClientProxy Groups(IReadOnlyList<string> groupNames) => All;
-        public IClientProxy User(string userId) => All;
-        public IClientProxy Users(IReadOnlyList<string> userIds) => All;
-    }
-
-    private sealed class FakeClientProxy : IClientProxy
-    {
-        public Task SendCoreAsync(string method, object?[] args, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class FakeGroupManager : IGroupManager
-    {
-        public Task AddToGroupAsync(string connectionId, string groupName, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
-
-        public Task RemoveFromGroupAsync(string connectionId, string groupName, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
     }
 }

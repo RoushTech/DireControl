@@ -64,6 +64,15 @@ public class Radio : IEntityTypeConfiguration<Radio>
     /// <summary>TX audio amplitude as a percentage of full scale — the deviation control.</summary>
     public int TxAudioLevelPct { get; set; } = 80;
 
+    /// <summary>
+    /// How much louder (dB, 0–6) the 2200 Hz space tone is sent than the
+    /// 1200 Hz mark tone.  Receivers with normal de-emphasis hear a flat
+    /// data-jack signal with space ~5 dB low; boosting it pre-compensates.
+    /// 0 (the default) sends both tones at equal level, as before; ~4–5 dB
+    /// suits a flat data jack feeding de-emphasised receivers.
+    /// </summary>
+    public double TxSpaceBoostDb { get; set; }
+
     /// <summary>Milliseconds of HDLC flags sent after keying PTT before the frame (TXDELAY).</summary>
     public int TxDelayMs { get; set; } = 300;
 

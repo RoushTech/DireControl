@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
@@ -28,7 +29,7 @@ public sealed class TerminalSessionService(
     IOptions<DireControlOptions> options,
     IServiceScopeFactory scopeFactory,
     IServiceProvider services,
-    PacketServicesRestartTrigger restartTrigger,
+    [FromKeyedServices(RestartSignals.PacketServices)] RestartSignal restartTrigger,
     ILogger<TerminalSessionService> logger) : BackgroundService, IAx25InboundHandler
 {
     private const int ScrollbackBytes = 128 * 1024;
@@ -80,9 +81,6 @@ public sealed class TerminalSessionService(
 
     public IReadOnlyList<TerminalSessionDto> ListSessions() =>
         [.. _sessions.Values.OrderBy(s => s.StartedAt).Select(ToDto)];
-
-    public TerminalSessionDto? GetSession(string id) =>
-        _sessions.TryGetValue(id, out var s) ? ToDto(s) : null;
 
     public (long StartSeq, byte[] Data)? SnapshotBuffer(string id) =>
         _sessions.TryGetValue(id, out var s) ? s.Snapshot() : null;
@@ -179,7 +177,8 @@ public sealed class TerminalSessionService(
             var ct = iterCts.Token;
 
             // Claim the base callsign so inbound connects surface in the web
-            // terminal; a settings save re-runs this with the fresh callsign.
+            // terminal; a packet-settings or callsign save fires the restart
+            // trigger, which re-runs this with the fresh callsign.
             var baseCallsign = options.Value.OurCallsign;
             var registered = sessionManager.RegisterListener(baseCallsign, this);
             if (!registered)

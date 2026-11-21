@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { sourceChip, type SourceChip } from '@/types/packet'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDisplay } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
@@ -16,14 +17,9 @@ import {
 } from '@/api/pmsApi'
 import { apiErrorDetail } from '@/api/axios'
 import { getSettings, getStations } from '@/api/stationsApi'
-import { formatUtc, timeAgo } from '@/utils/time'
+import { formatDateTime, timeAgo } from '@/utils/time'
 import { APRS_MAX_PARTS, aprsPartCount } from '@/utils/aprsMessage'
-import type {
-  AllMessagePacketDto,
-  InboxMessageDto,
-  MessageCopyDto,
-  MessageFailedDto,
-} from '@/types/message'
+import type { AllMessagePacketDto, InboxMessageDto, MessageCopyDto } from '@/types/message'
 import { RetryState } from '@/types/message'
 import { HeardVia, type StationDto, StationType } from '@/types/station'
 import { PacketSource } from '@/types/packet'
@@ -38,7 +34,7 @@ const stationSelection = useStationSelectionStore()
 const router = useRouter()
 const { now } = useTick(1000)
 
-// Callsigns link to the station page (mock convention). The station page's
+// Callsigns link to the station page. The station page's
 // "Show on map" covers the old select-on-map behavior.
 function goToStation(callsign: string) {
   stationSelection.selectStation(callsign)
@@ -326,11 +322,8 @@ const HEARD_VIA_LABELS: Partial<Record<HeardVia, string>> = {
   [HeardVia.Internet]: 'internet',
 }
 
-function routeSource(source: PacketSource | null): { label: string; color: string } | null {
-  if (source === null) return null
-  return source === PacketSource.AprsIs
-    ? { label: 'IS', color: 'is' }
-    : { label: 'RF', color: 'rf' }
+function routeSource(source: PacketSource | null): SourceChip | null {
+  return source === null ? null : sourceChip(source)
 }
 
 function heardViaText(hv: HeardVia | null): string {
@@ -370,6 +363,16 @@ async function toggleCopies(msg: InboxMessageDto) {
 const replyBody = ref('')
 const replySending = ref(false)
 const replyError = ref('')
+// Set when the server queued fewer parts than a multi-part message needed —
+// the transmitter dropped out mid-send, so the peer has an incomplete message.
+const partialSendWarning = ref('')
+
+function checkPartialSend(sentCount: number, expected: number) {
+  partialSendWarning.value =
+    sentCount < expected
+      ? `Only ${sentCount} of ${expected} parts were queued — the transmitter became unavailable mid-send. Send the rest again once TX is back.`
+      : ''
+}
 
 async function sendReply() {
   const peer = selectedPeer.value
@@ -377,15 +380,17 @@ async function sendReply() {
   if (!peer || !body || replySending.value || replyParts.value > APRS_MAX_PARTS) return
   replySending.value = true
   replyError.value = ''
+  const expectedParts = replyParts.value
   try {
-    await store.send({
+    const sent = await store.send({
       toCallsign: peer,
       body,
       path: defaultOutboundPath.value || undefined,
     })
+    checkPartialSend(sent.length, expectedParts)
     replyBody.value = ''
-  } catch {
-    replyError.value = 'Failed to send. Is the radio connected?'
+  } catch (e) {
+    replyError.value = apiErrorDetail(e)
   } finally {
     replySending.value = false
   }
@@ -415,7 +420,10 @@ function retryBadge(msg: InboxMessageDto): { color: string; text: string } {
     case RetryState.Cancelled:
       return { color: 'default', text: 'Cancelled' }
     default:
-      return { color: 'info', text: 'Pending' }
+      // A later part of a multi-part message waits for the previous part's ACK.
+      return msg.lastSentAt === null
+        ? { color: 'info', text: 'Queued — waits for previous part' }
+        : { color: 'info', text: 'Pending' }
   }
 }
 
@@ -463,15 +471,6 @@ async function doCancel(msg: InboxMessageDto) {
   } finally {
     delete actionLoading.value[msg.id]
   }
-}
-
-// Failed message toast
-const failedToast = ref(false)
-const failedToastText = ref('')
-
-function showFailedToast(data: MessageFailedDto) {
-  failedToastText.value = `Message to ${data.toCallsign} failed after ${data.retryCount} attempts — no ACK received.`
-  failedToast.value = true
 }
 
 // ─── Compose panel ──────────────────────────────────────────────────────────
@@ -523,17 +522,19 @@ async function doSend() {
   if (composeParts.value > APRS_MAX_PARTS) return
   sending.value = true
   sendError.value = ''
+  const expectedParts = composeParts.value
   try {
-    await store.send({
+    const sent = await store.send({
       toCallsign: to,
       body: composeBody.value.trim(),
       path: composePath.value.trim() || undefined,
     })
+    checkPartialSend(sent.length, expectedParts)
     composeOpen.value = false
     activeTab.value = 'threads'
     selectedPeer.value = to
-  } catch {
-    sendError.value = 'Failed to send. Is Direwolf connected?'
+  } catch (e) {
+    sendError.value = apiErrorDetail(e)
   } finally {
     sending.value = false
   }
@@ -583,16 +584,13 @@ function isExpanded(id: number | string): boolean {
 
 // ─── SignalR (shared hub) ────────────────────────────────────────────────────
 // Store mutations are registered app-level in messagesStore; this view only
-// adds its UI reactions (browser notification, failed toast) while mounted.
+// adds its UI reaction (browser notification) while mounted; the give-up
+// toast is raised app-wide by messagesStore.
 const hub = usePacketHubStore()
 const connectionStatus = computed(() => hub.state)
 
 function onHubMessageReceived(message: InboxMessageDto) {
   showBrowserNotification(message)
-}
-
-function onHubMessageFailed(data: MessageFailedDto) {
-  showFailedToast(data)
 }
 
 // ─── Browser notifications ───────────────────────────────────────────────────
@@ -636,19 +634,17 @@ onMounted(async () => {
 
   await Promise.all([store.fetchInbox(), fetchAllMessages()])
   hub.on('messageReceived', onHubMessageReceived)
-  hub.on('messageFailed', onHubMessageFailed)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   hub.off('messageReceived', onHubMessageReceived)
-  hub.off('messageFailed', onHubMessageFailed)
 })
 </script>
 
 <template>
   <div class="messages-view">
-    <!-- Header (mock: 17px/650 title; Compose lives in the card's tab row) -->
+    <!-- Header (17px/650 title; Compose lives in the card's tab row) -->
     <div class="d-flex align-center ga-2 mb-3 flex-shrink-0">
       <span class="page-title">Messages</span>
       <v-chip
@@ -661,7 +657,7 @@ onUnmounted(() => {
       </v-chip>
     </div>
 
-    <!-- One card: tab row (with counts + Compose) over the table, mock-style -->
+    <!-- One card: tab row (with counts + Compose) over the table -->
     <v-card variant="outlined" class="messages-card">
       <div class="msg-tabs" role="tablist">
         <button
@@ -769,7 +765,7 @@ onUnmounted(() => {
                 <div class="d-flex align-center ga-2">
                   <span class="callsign-plain conv-peer">{{ conv.peer }}</span>
                   <v-spacer />
-                  <span class="mono-time text-medium-emphasis" :title="formatUtc(conv.lastAt)">
+                  <span class="mono-time text-medium-emphasis" :title="formatDateTime(conv.lastAt)">
                     {{ timeAgo(conv.lastAt, now) }}
                   </span>
                 </div>
@@ -819,7 +815,7 @@ onUnmounted(() => {
                     <div class="bubble" :class="isOutbound(msg) ? 'bubble--out' : 'bubble--in'">
                       <div class="bubble-body">{{ msg.body }}</div>
                       <div class="bubble-meta">
-                        <span class="mono-time" :title="formatUtc(msg.receivedAt)">
+                        <span class="mono-time" :title="formatDateTime(msg.receivedAt)">
                           {{ timeAgo(msg.receivedAt, now) }}
                         </span>
 
@@ -887,7 +883,7 @@ onUnmounted(() => {
                             :key="copy.packetId"
                             class="bubble-route"
                           >
-                            <span class="mono-time" :title="formatUtc(copy.receivedAt)">{{
+                            <span class="mono-time" :title="formatDateTime(copy.receivedAt)">{{
                               timeAgo(copy.receivedAt, now)
                             }}</span>
                             <v-chip
@@ -942,6 +938,17 @@ onUnmounted(() => {
                 </div>
 
                 <div class="conv-reply">
+                  <v-alert
+                    v-if="partialSendWarning"
+                    type="warning"
+                    density="compact"
+                    variant="tonal"
+                    closable
+                    class="mb-2"
+                    @click:close="partialSendWarning = ''"
+                  >
+                    {{ partialSendWarning }}
+                  </v-alert>
                   <v-text-field
                     v-model="replyBody"
                     :placeholder="`Message ${selectedConversation.peer}`"
@@ -1022,7 +1029,7 @@ onUnmounted(() => {
                     <span
                       v-if="msg.lastSentAt"
                       class="text-caption text-medium-emphasis"
-                      :title="formatUtc(msg.lastSentAt)"
+                      :title="formatDateTime(msg.lastSentAt)"
                     >
                       sent {{ timeAgo(msg.lastSentAt, now) }}
                     </span>
@@ -1144,7 +1151,7 @@ onUnmounted(() => {
                     {{ msg.body }}
                   </td>
                   <td class="text-no-wrap mono-time">
-                    <span :title="formatUtc(msg.receivedAt)">{{
+                    <span :title="formatDateTime(msg.receivedAt)">{{
                       timeAgo(msg.receivedAt, now)
                     }}</span>
                   </td>
@@ -1191,6 +1198,7 @@ onUnmounted(() => {
             />
             <v-spacer />
             <v-btn
+              aria-label="Refresh mailbox"
               icon="mdi-refresh"
               size="small"
               variant="text"
@@ -1249,7 +1257,9 @@ onUnmounted(() => {
                     </template>
                   </td>
                   <td class="text-no-wrap mono-time">
-                    <span :title="formatUtc(msg.createdAt)">{{ timeAgo(msg.createdAt, now) }}</span>
+                    <span :title="formatDateTime(msg.createdAt)">{{
+                      timeAgo(msg.createdAt, now)
+                    }}</span>
                   </td>
                   <td>
                     <div class="d-flex ga-1">
@@ -1280,6 +1290,7 @@ onUnmounted(() => {
                       Kill
                     </v-btn>
                     <v-btn
+                      aria-label="Delete permanently"
                       icon="mdi-delete-outline"
                       size="x-small"
                       variant="text"
@@ -1411,6 +1422,7 @@ onUnmounted(() => {
         <v-card-text>
           <v-combobox
             v-model="composeTo"
+            autofocus
             :items="addresseeSuggestions"
             item-title="callsign"
             item-value="callsign"
@@ -1454,6 +1466,8 @@ onUnmounted(() => {
           <v-textarea
             v-model="composeBody"
             label="Message"
+            @keydown.ctrl.enter.prevent="doSend"
+            @keydown.meta.enter.prevent="doSend"
             density="compact"
             variant="outlined"
             rows="3"
@@ -1542,12 +1556,6 @@ onUnmounted(() => {
     </v-dialog>
 
     <!-- ── Failed Message Toast ───────────────────────────────────────────── -->
-    <v-snackbar v-model="failedToast" color="error" :timeout="6000" location="bottom right">
-      {{ failedToastText }}
-      <template #actions>
-        <v-btn variant="text" @click="failedToast = false">Dismiss</v-btn>
-      </template>
-    </v-snackbar>
   </div>
 </template>
 
@@ -1564,7 +1572,7 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* Mock tab row: underline text tabs with count chips, Compose at the right. */
+/* Tab row: underline text tabs with count chips, Compose at the right. */
 .msg-tabs {
   display: flex;
   gap: 2px;

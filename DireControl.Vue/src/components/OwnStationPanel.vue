@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { formatSecondsAgo } from '@/utils/time'
 import { ref } from 'vue'
+import { useDisplay } from 'vuetify'
+import { serverNow } from '@/utils/serverTime'
 import { useRadiosStore } from '@/stores/radiosStore'
 import { useToastStore } from '@/stores/toastStore'
 import BeaconHistoryModal from './BeaconHistoryModal.vue'
@@ -8,6 +11,10 @@ import { beaconNow } from '@/api/radiosApi'
 import type { RadioDto, DigiConfirmationDto } from '@/types/radio'
 
 const radiosStore = useRadiosStore()
+
+// On a phone the full cards would cover the map; they collapse to one chip.
+const { smAndDown } = useDisplay()
+const expanded = ref(false)
 const toastStore = useToastStore()
 
 // Shared singleton tick — no extra setInterval created if already running at 1 s
@@ -25,11 +32,40 @@ function openHistory(radioId: string) {
 // ─── Beacon Now ───────────────────────────────────────────────────────────────
 const beaconing = ref<Record<string, boolean>>({})
 
+/** How long to wait for a queued beacon to reach the air before warning. */
+const ON_AIR_TIMEOUT_MS = 60_000
+
+/**
+ * A 204 only means the frame was queued — CSMA may hold it for a long time.
+ * Confirm airtime from the modem's own last-TX stamp instead.
+ */
+function confirmOnAir(radio: RadioDto, queuedAt: number) {
+  if (!radiosStore.getModemStatusForRadio(radio.id)) return // external TNC: no airtime signal
+  const deadline = queuedAt + ON_AIR_TIMEOUT_MS
+  const timer = setInterval(() => {
+    const lastTx = radiosStore.getModemStatusForRadio(radio.id)?.lastTxAt
+    if (lastTx && new Date(lastTx).getTime() >= queuedAt) {
+      clearInterval(timer)
+      toastStore.toast(`Beacon for ${radio.fullCallsign} went out on air.`, 'success')
+    } else if (serverNow() > deadline) {
+      clearInterval(timer)
+      toastStore.toast(
+        `Beacon for ${radio.fullCallsign} is still queued after 60 s — channel busy or a TX fault.`,
+        'warning',
+        10000,
+        { label: 'Radio', to: '/radio' },
+      )
+    }
+  }, 1000)
+}
+
 async function doBeaconNow(radio: RadioDto) {
   beaconing.value[radio.id] = true
   try {
+    const queuedAt = serverNow()
     await beaconNow(radio.id)
-    toastStore.toast(`Beacon sent for ${radio.fullCallsign}.`, 'success')
+    toastStore.toast(`Beacon queued for ${radio.fullCallsign}.`, 'info')
+    confirmOnAir(radio, queuedAt)
     void radiosStore.fetchLastBeacon(radio.id)
   } catch {
     toastStore.toast(
@@ -47,13 +83,6 @@ function secondsAgo(radioId: string): number | null {
   const lb = radiosStore.getLastBeaconForRadio(radioId)
   if (!lb?.beaconedAt) return null
   return Math.max(0, Math.floor((now.value - new Date(lb.beaconedAt).getTime()) / 1000))
-}
-
-function formatSecondsAgo(secs: number | null): string {
-  if (secs === null) return 'never'
-  if (secs < 60) return `${secs}s ago`
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s ago`
-  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m ago`
 }
 
 function lastBeaconLabel(radio: RadioDto): string {
@@ -111,16 +140,48 @@ function dotColor(radio: RadioDto): string {
 function txChip(radio: RadioDto): { label: string; color: string } {
   const activity = radiosStore.getActivityForRadio(radio.id)
   if (activity?.transmitting) return { label: 'TX', color: 'error' }
+  const held = radiosStore.carrierHeldSeconds(radio.id)
+  if (held !== null) return { label: `Carrier held ${held} s`, color: 'warning' }
   if (activity?.carrierDetected) return { label: 'RX', color: 'success' }
+  // Ready means the modem is actually running with TX — not merely configured.
   if (radio.modem.modemEnabled && radio.modem.txEnabled)
-    return { label: 'TX ready', color: 'success' }
+    return radiosStore.isTxLive(radio.id)
+      ? { label: 'TX ready', color: 'success' }
+      : { label: 'TX down', color: 'warning' }
   if (radio.modem.modemEnabled) return { label: 'RX only', color: 'grey' }
   return { label: 'no modem', color: 'grey' }
 }
 </script>
 
 <template>
-  <div v-if="radiosStore.activeRadios.length > 0" class="own-station-panel">
+  <div
+    v-if="radiosStore.activeRadios.length > 0 && smAndDown && !expanded"
+    class="own-station-panel own-station-panel--compact"
+  >
+    <v-chip
+      v-for="radio in radiosStore.activeRadios"
+      :key="radio.id"
+      :color="txChip(radio).color"
+      size="small"
+      variant="elevated"
+      prepend-icon="mdi-radio-handheld"
+      :aria-label="`${radio.fullCallsign}: ${txChip(radio).label} — show station panel`"
+      @click="expanded = true"
+    >
+      {{ radio.fullCallsign }} · {{ txChip(radio).label }}
+    </v-chip>
+  </div>
+  <div v-else-if="radiosStore.activeRadios.length > 0" class="own-station-panel">
+    <v-btn
+      v-if="smAndDown"
+      size="x-small"
+      variant="tonal"
+      prepend-icon="mdi-chevron-down"
+      class="align-self-start"
+      @click="expanded = false"
+    >
+      Collapse
+    </v-btn>
     <div v-for="radio in radiosStore.activeRadios" :key="radio.id" class="own-station-card">
       <!-- Header: status dot · name · callsign · live TX chip -->
       <div class="own-head mb-1">
@@ -139,7 +200,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
         </v-chip>
       </div>
 
-      <!-- Labeled rows, mock-style -->
+      <!-- Labeled rows -->
       <div class="own-row">
         <span class="own-label">Last beacon</span>
         <span class="own-value" :class="{ 'text-warning': awaitingConfirmation(radio) }">
@@ -194,6 +255,17 @@ function txChip(radio: RadioDto): { label: string; color: string } {
       </div>
     </div>
   </div>
+  <!-- No radio yet: say so, rather than the panel silently not existing. -->
+  <div v-else-if="radiosStore.loaded" class="own-station-panel">
+    <div class="own-station-card">
+      <div class="text-body-2 mb-2">
+        No radio set up yet — DireControl has nothing to beacon with.
+      </div>
+      <v-btn size="small" variant="tonal" color="primary" to="/settings?tab=radios">
+        Add a radio
+      </v-btn>
+    </div>
+  </div>
 
   <BeaconHistoryModal
     v-if="historyRadioId"
@@ -213,7 +285,13 @@ function txChip(radio: RadioDto): { label: string; color: string } {
   flex-direction: column;
   gap: 8px;
   width: 248px;
+  max-width: calc(100vw - 20px);
   pointer-events: auto;
+}
+
+.own-station-panel--compact {
+  width: auto;
+  align-items: flex-start;
 }
 
 .own-station-card {

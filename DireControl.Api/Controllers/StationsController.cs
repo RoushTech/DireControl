@@ -149,49 +149,23 @@ public class StationsController(
             .AsNoTracking()
             .Where(p => p.StationCallsign == callsign && p.WeatherData != null);
 
-        if (from.HasValue || to.HasValue)
-        {
-            var fromUtc = from.HasValue
-                ? DateTime.SpecifyKind(from.Value, DateTimeKind.Utc)
-                : DateTime.UtcNow.AddDays(-7);
-            var toUtc = to.HasValue
-                ? DateTime.SpecifyKind(to.Value, DateTimeKind.Utc)
-                : DateTime.UtcNow;
+        // The UI always asks for a range; with none given, default to the last 7 days.
+        var fromUtc = from.HasValue
+            ? DateTime.SpecifyKind(from.Value, DateTimeKind.Utc)
+            : DateTime.UtcNow.AddDays(-7);
+        var toUtc = to.HasValue
+            ? DateTime.SpecifyKind(to.Value, DateTimeKind.Utc)
+            : DateTime.UtcNow;
 
-            var rangeHours = (toUtc - fromUtc).TotalHours;
-            var bucketMinutes = rangeHours <= 25 ? 5 : 60;
+        var rangeHours = (toUtc - fromUtc).TotalHours;
+        var bucketMinutes = rangeHours <= 25 ? 5 : 60;
 
-            var packets = await baseQuery
-                .Where(p => p.ReceivedAt >= fromUtc && p.ReceivedAt <= toUtc)
-                .OrderBy(p => p.ReceivedAt)
-                .ToListAsync(ct);
+        var packets = await baseQuery
+            .Where(p => p.ReceivedAt >= fromUtc && p.ReceivedAt <= toUtc)
+            .OrderBy(p => p.ReceivedAt)
+            .ToListAsync(ct);
 
-            return Ok(BucketWeatherReadings(packets, bucketMinutes));
-        }
-        else
-        {
-            // Legacy: last 50 readings, newest-first.
-            var packets = await baseQuery
-                .OrderByDescending(p => p.ReceivedAt)
-                .Take(50)
-                .ToListAsync(ct);
-
-            var readings = packets.Select(p => new WeatherReadingDto
-            {
-                ReceivedAt = p.ReceivedAt,
-                Temperature = p.WeatherData!.TemperatureF,
-                Humidity = p.WeatherData.HumidityPercent,
-                WindSpeed = p.WeatherData.WindSpeedMph,
-                WindDirection = p.WeatherData.WindDirectionDeg,
-                WindGust = p.WeatherData.WindGustMph,
-                Pressure = p.WeatherData.PressureMbar,
-                RainLastHour = p.WeatherData.RainfallLastHourIn,
-                RainLast24h = p.WeatherData.RainfallLast24hIn,
-                RainSinceMidnight = p.WeatherData.RainfallSinceMidnightIn,
-            }).ToList();
-
-            return Ok(readings);
-        }
+        return Ok(BucketWeatherReadings(packets, bucketMinutes));
     }
 
     private static IReadOnlyList<WeatherReadingDto> BucketWeatherReadings(

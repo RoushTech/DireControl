@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Threading.Channels;
 using DireControl.Data;
 using DireControl.Data.Models;
@@ -18,11 +19,21 @@ namespace DireControl.Api.Services;
 public sealed class AprsIsService(
     IServiceScopeFactory scopeFactory,
     IAprsIsStatusService statusService,
-    AprsIsReconnectTrigger reconnectTrigger,
+    [FromKeyedServices(RestartSignals.AprsIs)] RestartSignal reconnectTrigger,
     IFrameTransmitter transmitter,
+    AprsIsTxInbound txInbound,
     IOptions<DireControlOptions> options,
     ILogger<AprsIsService> logger) : BackgroundService
 {
+    /// <summary>
+    /// IS→RF budget, per Dire Wolf IGTXLIMIT defaults: 6 per minute and 10 per
+    /// 5 minutes.  Shared across reconnects.
+    /// </summary>
+    private readonly IsToRfRateLimiter _isToRfLimiter = new(TimeProvider.System);
+
+    /// <summary>Lines buffered between the socket and the database.</summary>
+    private const int ReceiveQueueCapacity = 2000;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -100,7 +111,13 @@ public sealed class AprsIsService(
         logger.LogInformation("Connecting to APRS-IS at {Host}…", settings.AprsIsHost);
 
         var authFailed = false;
-        var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+        // Bounded so a database stall cannot grow memory without limit; on
+        // overflow the oldest lines go (APRS-IS traffic is best-effort).
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(ReceiveQueueCapacity)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
         using var client = new AprsSharp.AprsIsClient.AprsIsClient();
 
         // Inactivity watchdog: cancelled and reset on every received message.
@@ -147,6 +164,20 @@ public sealed class AprsIsService(
         // ReadAllAsync can drain and exit cleanly.
         _ = receiveTask.ContinueWith(_ => channel.Writer.TryComplete(), TaskScheduler.Default);
 
+        // Lines pushed down the TX (gating) login join the same pipeline, so
+        // they are deduplicated and IS→RF-gated like any other.
+        using var forwardCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var line in txInbound.Reader.ReadAllAsync(forwardCts.Token))
+                    channel.Writer.TryWrite(line);
+            }
+            catch (OperationCanceledException) { }
+            catch (ChannelClosedException) { }
+        }, CancellationToken.None);
+
         try
         {
             await foreach (var raw in channel.Reader.ReadAllAsync(ct))
@@ -180,7 +211,7 @@ public sealed class AprsIsService(
                 }
 
                 statusService.IncrementPacketCount();
-                await ProcessLineAsync(raw, settings, ct);
+                await ProcessLineSafelyAsync(raw, settings, ct);
             }
         }
         catch (OperationCanceledException)
@@ -270,6 +301,27 @@ public sealed class AprsIsService(
     }
 
     /// <summary>
+    /// Processes one line, logging rather than propagating failures: one bad
+    /// line ("database is locked" during VACUUM, a station insert racing the
+    /// RF path) must not drop the connection for 30 s.
+    /// </summary>
+    internal async Task ProcessLineSafelyAsync(string tnc2, UserSetting settings, CancellationToken ct)
+    {
+        try
+        {
+            await ProcessLineAsync(tnc2, settings, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to process APRS-IS line: {Line}", tnc2);
+        }
+    }
+
+    /// <summary>
     /// IS→RF gating (standard rule): forward APRS-IS <em>messages</em> to RF,
     /// wrapped in third-party format, when the addressee was heard on RF
     /// recently — they are in range of our transmitter but not on the internet.
@@ -298,6 +350,24 @@ public sealed class AprsIsService(
         var thirdPartyInfo = IgateLogic.BuildIsToRfThirdPartyInfo(tnc2, ourCallsign);
         if (thirdPartyInfo is null)
             return;
+
+        // A sender we also hear on RF is local: the addressee can hear it
+        // directly, so re-transmitting its message would only duplicate it.
+        var sender = IgateLogic.ExtractSender(tnc2);
+        var senderHeardOnRf = sender is not null && await db.Stations.AnyAsync(
+            s => s.Callsign == sender && s.LastHeardRf != null && s.LastHeardRf >= heardCutoff,
+            ct);
+        if (senderHeardOnRf)
+        {
+            logger.LogDebug("Not gating IS→RF for {Addressee}: sender {Sender} is heard on RF.", addressee, sender);
+            return;
+        }
+
+        if (!_isToRfLimiter.TryAcquire())
+        {
+            logger.LogWarning("IS→RF rate limit reached; not gating message for {Addressee}.", addressee);
+            return;
+        }
 
         var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, thirdPartyInfo, settings.IsToRfPath);
         if (transmitter.TrySend(frame))

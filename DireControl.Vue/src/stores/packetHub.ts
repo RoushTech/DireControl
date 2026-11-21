@@ -1,14 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import {
-  HubConnectionBuilder,
-  HubConnectionState,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { HubConnectionState, type HubConnection } from '@microsoft/signalr'
+import { createHubConnection } from '@/api/hubConnection'
 import { serverNow } from '@/utils/serverTime'
+import { PacketSource, type PacketBroadcastDto } from '@/types/packet'
 
-export type PacketHubState = 'connecting' | 'connected' | 'disconnected'
+export type PacketHubState = 'connecting' | 'connected' | 'disconnected' | 'resyncing'
 
 // SignalR's own handler signature — a shared wrapper has to be untyped here;
 // consumers keep their typed handlers.
@@ -25,25 +22,46 @@ type HubHandler = (...args: any[]) => void
  */
 export const usePacketHubStore = defineStore('packetHub', () => {
   const state = ref<PacketHubState>('connecting')
-  /** serverNow() timestamp of the last packetReceived — "how alive is the band". */
+  /** serverNow() timestamp of the last packetReceived, any source. */
   const lastPacketAt = ref<number | null>(null)
+  /**
+   * Last APRS-IS packet, kept apart from RF: internet traffic flowing says
+   * nothing about whether the radio is hearing anything.  RF health comes from
+   * the modem's own last-decode time instead.
+   */
+  const lastAprsIsPacketAt = ref<number | null>(null)
 
   let connection: HubConnection | null = null
+  // Events sent while the socket was down are gone for good; stores register
+  // here to refetch their state once the connection is back.
+  const reconnectHandlers: Array<() => Promise<unknown> | void> = []
+  let everConnected = false
+
+  async function runResync() {
+    if (reconnectHandlers.length === 0) {
+      state.value = 'connected'
+      return
+    }
+    state.value = 'resyncing'
+    await Promise.allSettled(reconnectHandlers.map((h) => Promise.resolve().then(h)))
+    if (state.value === 'resyncing') state.value = 'connected'
+  }
+
+  /** Registers a refetch to run after every reconnect (not the first connect). */
+  function onReconnected(handler: () => Promise<unknown> | void) {
+    reconnectHandlers.push(handler)
+  }
   let retryTimer: ReturnType<typeof setTimeout> | null = null
 
   function ensureConnection(): HubConnection {
     if (connection) return connection
-    connection = new HubConnectionBuilder()
-      .withUrl('/hubs/packets')
-      .withAutomaticReconnect()
-      .configureLogging(LogLevel.Warning)
-      .build()
+    connection = createHubConnection('/hubs/packets')
 
     connection.onreconnecting(() => {
       state.value = 'connecting'
     })
     connection.onreconnected(() => {
-      state.value = 'connected'
+      void runResync()
     })
     connection.onclose(() => {
       // Automatic reconnect has given up (it stops after its backoff sequence) —
@@ -52,8 +70,10 @@ export const usePacketHubStore = defineStore('packetHub', () => {
       scheduleRetry()
     })
 
-    connection.on('packetReceived', () => {
-      lastPacketAt.value = serverNow()
+    connection.on('packetReceived', (p: PacketBroadcastDto) => {
+      const at = serverNow()
+      lastPacketAt.value = at
+      if (p?.source === PacketSource.AprsIs) lastAprsIsPacketAt.value = at
     })
 
     // ModemStatusBroadcaster pushes these to every client at up to 10 Hz, and
@@ -81,7 +101,10 @@ export const usePacketHubStore = defineStore('packetHub', () => {
     state.value = 'connecting'
     try {
       await conn.start()
-      state.value = 'connected'
+      // A fresh start after onclose is a reconnect too — resync the same way.
+      if (everConnected) void runResync()
+      else state.value = 'connected'
+      everConnected = true
     } catch {
       state.value = 'disconnected'
       scheduleRetry()
@@ -96,5 +119,5 @@ export const usePacketHubStore = defineStore('packetHub', () => {
     connection?.off(method, handler)
   }
 
-  return { state, lastPacketAt, start, on, off }
+  return { state, lastPacketAt, lastAprsIsPacketAt, start, on, off, onReconnected }
 })

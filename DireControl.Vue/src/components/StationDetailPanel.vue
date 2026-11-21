@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUnits } from '@/composables/useUnits'
 import { ref, watch, computed } from 'vue'
 import { Line, Bar } from 'vue-chartjs'
 import {
@@ -36,7 +37,14 @@ import {
   type WeatherReadingDto,
   type SignalPointDto,
 } from '@/types/packet'
-import { timeAgo, formatUtc, compassDir } from '@/utils/time'
+import {
+  timeAgo,
+  formatDateTime,
+  compassDir,
+  formatTimeOfDay,
+  formatDateLabel,
+  hourOf,
+} from '@/utils/time'
 import { getSymbolStyle, parseAprsSymbol } from '@/utils/aprsIcon'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
@@ -53,6 +61,7 @@ ChartJS.register(
   Legend,
 )
 
+const { formatAltitude } = useUnits()
 const props = defineProps<{
   callsign: string | null
   refreshKey: number
@@ -85,7 +94,7 @@ const packetsNewData = ref(false)
 interface TabDef {
   value: TabValue
   label: string
-  /** Short label used by the compact in-map tab row (mock: Info · Pkts · Wx · Stats · Sig). */
+  /** Short label used by the compact in-map tab row (Info · Pkts · Wx · Stats · Sig). */
   short: string
   badge: boolean
 }
@@ -179,10 +188,10 @@ const totalBuckets = computed(() => (weatherRange.value === '24h' ? 288 : 168))
 
 function formatBucketLabel(date: Date): string {
   if (weatherRange.value === '24h') {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    return formatTimeOfDay(date, { seconds: false })
   }
   // 7d: show weekday name at midnight, blank otherwise
-  return date.getHours() === 0 ? date.toLocaleDateString([], { weekday: 'short' }) : ''
+  return hourOf(date) === 0 ? formatDateLabel(date, { weekday: 'short' }) : ''
 }
 
 const weatherChartData = computed(() => {
@@ -265,8 +274,8 @@ const weatherChartOptions = computed(() => {
             const total = is24h ? 288 : 168
             const d = new Date(Date.now() - total * bMs + idx * bMs)
             return is24h
-              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-              : d.toLocaleDateString([], {
+              ? formatTimeOfDay(d, { seconds: false })
+              : formatDateLabel(d, {
                   weekday: 'short',
                   month: 'short',
                   day: 'numeric',
@@ -425,9 +434,9 @@ const heardViaBars = computed(() => {
 function signalTimeLabel(iso: string): string {
   const d = new Date(iso)
   if (signalRange.value === '7d') {
-    return d.toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+    return formatDateLabel(d, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
   }
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return formatTimeOfDay(d, { seconds: false })
 }
 
 const audioChartData = computed(() => ({
@@ -606,7 +615,7 @@ async function fetchStation() {
   void fetchLatestRaw()
 }
 
-// Latest raw packet line shown at the bottom of the Info tab (mock's mono box).
+// Latest raw packet line shown at the bottom of the Info tab (mono box).
 const latestRaw = ref<string | null>(null)
 
 async function fetchLatestRaw() {
@@ -840,11 +849,12 @@ watch(tab, (newTab) => {
     :class="{ 'detail-panel-content--page': props.pageVariant }"
   >
     <!-- Header (hidden in page mode — the page provides its own).
-         Mock: one row — symbol · callsign · star ······ close -->
+         One row — symbol · callsign · star ······ close -->
     <div v-if="!props.pageVariant" class="panel-header">
       <div :style="symbolStyle" class="symbol-icon flex-shrink-0" />
       <span class="panel-callsign">{{ callsign }}</span>
       <v-btn
+        aria-label="Toggle watch list"
         :icon="station?.isOnWatchList ? 'mdi-star' : 'mdi-star-outline'"
         :color="station?.isOnWatchList ? 'amber' : 'default'"
         variant="text"
@@ -855,10 +865,16 @@ watch(tab, (newTab) => {
         @click="toggleWatchStatus"
       />
       <v-spacer />
-      <v-btn icon="mdi-close" variant="text" size="x-small" @click="emit('close')" />
+      <v-btn
+        aria-label="Close panel"
+        icon="mdi-close"
+        variant="text"
+        size="x-small"
+        @click="emit('close')"
+      />
     </div>
 
-    <!-- Horizontal text tabs under the header (mock: Info · Pkts · Wx · Stats · Sig) -->
+    <!-- Horizontal text tabs under the header (Info · Pkts · Wx · Stats · Sig) -->
     <nav v-if="!props.pageVariant" class="tab-row" role="tablist" @keydown="onTabKeydown">
       <button
         v-for="t in visibleTabs"
@@ -902,12 +918,12 @@ watch(tab, (newTab) => {
             </template>
 
             <div class="info-label">First Seen</div>
-            <div class="info-value" :title="formatUtc(station.firstSeen)">
+            <div class="info-value" :title="formatDateTime(station.firstSeen)">
               {{ timeAgo(station.firstSeen, now) }}
             </div>
 
             <div class="info-label">Last Seen</div>
-            <div class="info-value" :title="formatUtc(station.lastSeen)">
+            <div class="info-value" :title="formatDateTime(station.lastSeen)">
               {{ timeAgo(station.lastSeen, now) }}
             </div>
 
@@ -948,7 +964,7 @@ watch(tab, (newTab) => {
             <template v-if="station.lastAltitude != null">
               <div class="info-label">Altitude</div>
               <div class="info-value">
-                {{ Math.round(station.lastAltitude).toLocaleString() }} ft
+                {{ formatAltitude(station.lastAltitude) }}
               </div>
             </template>
 
@@ -968,7 +984,7 @@ watch(tab, (newTab) => {
             </template>
           </div>
 
-          <!-- Latest raw packet line (mock's mono box) -->
+          <!-- Latest raw packet line (mono box) -->
           <div v-if="latestRaw" class="raw-packet-box mx-3 mt-2" :title="latestRaw">
             {{ latestRaw }}
           </div>
@@ -1047,7 +1063,7 @@ watch(tab, (newTab) => {
               />
               <span
                 class="text-caption text-medium-emphasis flex-shrink-0"
-                :title="formatUtc(p.receivedAt)"
+                :title="formatDateTime(p.receivedAt)"
               >
                 {{ timeAgo(p.receivedAt, now) }}
               </span>
@@ -1082,6 +1098,7 @@ watch(tab, (newTab) => {
           <!-- Pagination -->
           <div v-if="totalPages > 1" class="d-flex align-center justify-center ga-1 pa-2">
             <v-btn
+              aria-label="Previous page"
               icon="mdi-chevron-left"
               size="x-small"
               variant="text"
@@ -1090,6 +1107,7 @@ watch(tab, (newTab) => {
             />
             <span class="text-caption">{{ packetPage }} / {{ totalPages }}</span>
             <v-btn
+              aria-label="Next page"
               icon="mdi-chevron-right"
               size="x-small"
               variant="text"
@@ -1369,7 +1387,7 @@ watch(tab, (newTab) => {
       </div>
     </div>
 
-    <!-- Footer (mock): Full page ↗ + message -->
+    <!-- Footer: Full page ↗ + message -->
     <div v-if="!props.pageVariant && props.showPageLink && callsign" class="panel-foot">
       <v-btn
         variant="tonal"
@@ -1381,6 +1399,7 @@ watch(tab, (newTab) => {
         Full page ↗
       </v-btn>
       <v-btn
+        aria-label="Message station"
         icon="mdi-email-outline"
         variant="text"
         size="small"
@@ -1456,7 +1475,7 @@ watch(tab, (newTab) => {
   overflow: hidden;
 }
 
-/* Horizontal text tabs under the header (mock: Info · Pkts · Wx · Stats · Sig) */
+/* Horizontal text tabs under the header (Info · Pkts · Wx · Stats · Sig) */
 .tab-row {
   display: flex;
   gap: 2px;
@@ -1550,7 +1569,7 @@ watch(tab, (newTab) => {
   background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
-/* Sentence-case section labels — the mock reserves all-caps for the map's
+/* Sentence-case section labels — the app reserves all-caps for the map's
    layer groups only. */
 .wx-section-label {
   font-weight: 600;

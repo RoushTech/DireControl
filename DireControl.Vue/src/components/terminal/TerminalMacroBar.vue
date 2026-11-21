@@ -98,7 +98,10 @@ async function saveMacro() {
   }
 }
 
+const confirmRemove = ref<TerminalMacroDto | null>(null)
+
 async function removeMacro(macro: TerminalMacroDto) {
+  confirmRemove.value = null
   manageError.value = ''
   try {
     await deleteMacro(macro.id)
@@ -127,6 +130,7 @@ async function removeMacro(macro: TerminalMacroDto) {
     </span>
     <v-spacer />
     <v-btn
+      aria-label="Manage macros"
       icon="mdi-pencil-outline"
       size="x-small"
       variant="text"
@@ -165,13 +169,20 @@ async function removeMacro(macro: TerminalMacroDto) {
                   <span v-else class="text-medium-emphasis">—</span>
                 </td>
                 <td class="text-right text-no-wrap">
-                  <v-btn icon="mdi-pencil" size="x-small" variant="text" @click="openEdit(macro)" />
+                  <v-btn
+                    aria-label="Edit macro"
+                    icon="mdi-pencil"
+                    size="x-small"
+                    variant="text"
+                    @click="openEdit(macro)"
+                  />
                   <v-btn
                     icon="mdi-close"
                     size="x-small"
                     variant="text"
                     color="error"
-                    @click="removeMacro(macro)"
+                    :aria-label="`Delete macro ${macro.label}`"
+                    @click="confirmRemove = macro"
                   />
                 </td>
               </tr>
@@ -234,6 +245,24 @@ async function removeMacro(macro: TerminalMacroDto) {
           <v-btn variant="text" @click="editorOpen = false">Cancel</v-btn>
           <v-btn color="primary" :loading="saving" :disabled="!mLabel.trim()" @click="saveMacro">
             Save
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+    <v-dialog
+      :model-value="confirmRemove !== null"
+      max-width="380"
+      @update:model-value="confirmRemove = null"
+    >
+      <v-card>
+        <v-card-title class="text-subtitle-1"
+          >Delete macro "{{ confirmRemove?.label }}"?</v-card-title
+        >
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="confirmRemove = null">Cancel</v-btn>
+          <v-btn color="error" variant="tonal" @click="confirmRemove && removeMacro(confirmRemove)">
+            Delete
           </v-btn>
         </v-card-actions>
       </v-card>

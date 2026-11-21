@@ -1,12 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import {
-  HubConnectionBuilder,
-  HubConnectionState,
-  LogLevel,
-  type HubConnection,
-  type ISubscription,
-} from '@microsoft/signalr'
+import { HubConnectionState, type HubConnection, type ISubscription } from '@microsoft/signalr'
+import { createHubConnection } from '@/api/hubConnection'
 
 export type AudioMonitorState = 'idle' | 'connecting' | 'playing' | 'error'
 
@@ -151,11 +146,7 @@ export const useAudioMonitorStore = defineStore('audioMonitor', () => {
 
   function ensureConnection(): HubConnection {
     if (connection) return connection
-    connection = new HubConnectionBuilder()
-      .withUrl('/hubs/audio')
-      .withAutomaticReconnect()
-      .configureLogging(LogLevel.Warning)
-      .build()
+    connection = createHubConnection('/hubs/audio')
 
     connection.onreconnected(() => {
       // The old stream died with the old transport. Only re-subscribe if the

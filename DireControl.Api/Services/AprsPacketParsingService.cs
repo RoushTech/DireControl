@@ -27,7 +27,7 @@ public sealed class AprsPacketParsingService(
     PendingAlertChannel alertChannel,
     ILogger<AprsPacketParsingService> logger) : BackgroundService
 {
-    private const int BatchSize = 50;
+    internal const int BatchSize = 50;
     private const int PollIntervalMs = 5_000;
 
     /// <summary>
@@ -83,7 +83,7 @@ public sealed class AprsPacketParsingService(
         {
             try
             {
-                await ProcessBatchAsync(stoppingToken);
+                await DrainAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -100,7 +100,27 @@ public sealed class AprsPacketParsingService(
         logger.LogInformation("AprsPacketParsingService stopped.");
     }
 
-    private async Task ProcessBatchAsync(CancellationToken ct)
+    /// <summary>
+    /// Parses unparsed packets batch after batch until a short batch shows the
+    /// backlog is clear.  The poll delay only applies once caught up — sleeping
+    /// after every full batch capped the parser at ~10 packets/s and made every
+    /// incoming ACK wait up to 5 s, which triggered retries on both ends.
+    /// </summary>
+    /// <returns>The number of packets taken for parsing.</returns>
+    internal async Task<int> DrainAsync(CancellationToken ct)
+    {
+        var total = 0;
+        int taken;
+        do
+        {
+            taken = await ProcessBatchAsync(ct);
+            total += taken;
+        }
+        while (taken == BatchSize && !ct.IsCancellationRequested);
+        return total;
+    }
+
+    private async Task<int> ProcessBatchAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
@@ -112,7 +132,7 @@ public sealed class AprsPacketParsingService(
             .ToListAsync(ct);
 
         if (packets.Count == 0)
-            return;
+            return 0;
 
         logger.LogDebug("Parsing batch of {Count} packets.", packets.Count);
 
@@ -134,7 +154,30 @@ public sealed class AprsPacketParsingService(
                 await ParsePacketAsync(packet, db, ourCallsign, effects, ct);
                 await ResolvePathCoordinatesAsync(packet, db, ourCallsign, ct);
                 await db.SaveChangesAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogTrace(ex, "Could not parse packet {Id} ({Raw}).", packet.Id, packet.RawPacket);
+                // Discard this packet's partial changes — but only those: the
+                // preloaded stations must stay tracked for the rest of the batch.
+                DiscardPendingChanges(db);
+                await db.Packets
+                    .Where(p => p.Id == packet.Id)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(p => p.ParsedType, OurPacketType.Unparseable)
+                        .SetProperty(p => p.ParserVersion, ParserVersionInfo.Current), ct);
+                continue;
+            }
 
+            // The packet is parsed and saved.  Anything failing from here on is a
+            // side effect (own-beacon matching, ACKs, SignalR) and must neither
+            // stamp a good packet Unparseable nor go unnoticed.
+            try
+            {
                 await CheckOwnBeaconAsync(packet, activeRadios, db, ct);
                 await ApplyMessageEffectsAsync(effects, db, ourCallsign, ct);
 
@@ -157,20 +200,42 @@ public sealed class AprsPacketParsingService(
                 // Notify alerting service of updated station
                 alertChannel.Writer.TryWrite(packet.StationCallsign);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                logger.LogTrace(ex, "Could not parse packet {Id} ({Raw}).", packet.Id, packet.RawPacket);
-                // Discard any partial changes and mark this packet so it is not re-queued.
-                db.ChangeTracker.Clear();
-                await db.Packets
-                    .Where(p => p.Id == packet.Id)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(p => p.ParsedType, OurPacketType.Unparseable)
-                        .SetProperty(p => p.ParserVersion, ParserVersionInfo.Current), ct);
+                logger.LogWarning(ex, "Post-parse handling failed for packet {Id} ({Raw}).", packet.Id, packet.RawPacket);
+                DiscardPendingChanges(db);
             }
         }
 
         await UpdateStationStatisticsAsync(db, callsigns, ct);
+        return packets.Count;
+    }
+
+    /// <summary>
+    /// Rolls back unsaved changes without detaching unchanged entities, unlike
+    /// <c>ChangeTracker.Clear()</c>, which also dropped the batch's preloaded
+    /// stations and sent every later packet back to per-row queries.
+    /// </summary>
+    internal static void DiscardPendingChanges(DireControlContext db)
+    {
+        foreach (var entry in db.ChangeTracker.Entries().ToList())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    entry.State = EntityState.Detached;
+                    break;
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    entry.CurrentValues.SetValues(entry.OriginalValues);
+                    entry.State = EntityState.Unchanged;
+                    break;
+            }
+        }
     }
 
     /// <summary>
@@ -226,10 +291,27 @@ public sealed class AprsPacketParsingService(
                         PacketHub.MessageAcknowledgedMethod,
                         new MessageAcknowledgedDto { Id = dbId, MessageId = effect.OriginalMsgId },
                         ct);
+                }
+            }
+            else if (effect.IsRejectReceived && effect.OriginalMsgId is not null)
+            {
+                // The remote station refused our message: stop retrying it.
+                var rejected = await MessageHandlingLogic.TryApplyRejectAsync(
+                    effect.PeerCallsign, effect.OriginalMsgId, db, ourCallsign, ct);
 
+                if (rejected is not null)
+                {
+                    logger.LogInformation(
+                        "Message {Id} to {ToCallsign} was rejected by the recipient.",
+                        rejected.MessageId, rejected.ToCallsign);
                     await hubContext.Clients.All.SendAsync(
-                        PacketHub.MessageAckedMethod,
-                        new MessageAckDto { Id = dbId, MessageId = effect.OriginalMsgId },
+                        PacketHub.MessageFailedMethod,
+                        new MessageFailedDto
+                        {
+                            Id = rejected.Id,
+                            ToCallsign = rejected.ToCallsign,
+                            RetryCount = rejected.RetryCount,
+                        },
                         ct);
                 }
             }
@@ -783,15 +865,17 @@ public sealed class AprsPacketParsingService(
         if (!addressee.Trim().Equals(ourCallsign, StringComparison.OrdinalIgnoreCase))
             return;
 
-        // Detect ACK receipts: body is "ackXXXX" where XXXX is the original message ID.
-        if (MessageHandlingLogic.TryParseAck(body, out var originalMsgId))
+        // Detect ACK/REJ receipts: an unnumbered body "ackXXXX"/"rejXXXX" where
+        // XXXX is the original message ID.
+        if (MessageHandlingLogic.TryParseAckOrReject(body, messageId, out var originalMsgId, out var isReject))
         {
             effects.Add(new MessageEffect(
                 IsNewInboxMessage: false,
-                IsAckReceived: true,
+                IsAckReceived: !isReject,
                 PeerCallsign: fromCallsign,
                 MessageId: messageId,
-                OriginalMsgId: originalMsgId));
+                OriginalMsgId: originalMsgId,
+                IsRejectReceived: isReject));
             return;
         }
 
@@ -1356,4 +1440,5 @@ internal sealed record MessageEffect(
     string? OriginalMsgId = null,
     bool IsDuplicateInboxMessage = false,
     Message? InboxMessage = null,
-    PacketSource ArrivedVia = PacketSource.Rf);
+    PacketSource ArrivedVia = PacketSource.Rf,
+    bool IsRejectReceived = false);

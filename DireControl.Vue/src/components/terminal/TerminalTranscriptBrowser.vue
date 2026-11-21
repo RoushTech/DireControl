@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from '@/utils/time'
 import { nextTick, ref, watch } from 'vue'
 import { useTheme } from 'vuetify'
 import { Terminal, type ITheme } from '@xterm/xterm'
@@ -147,7 +148,7 @@ async function confirmDelete() {
 // ── Formatting ───────────────────────────────────────────────────────────────
 
 function formatDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleString() : '—'
+  return iso ? formatDateTime(iso) : '—'
 }
 
 function formatBytes(bytes: number): string {
@@ -161,6 +162,7 @@ function formatBytes(bytes: number): string {
     <v-card class="transcript-card">
       <v-card-title class="d-flex align-center ga-2">
         <v-btn
+          aria-label="Back to transcript list"
           v-if="replaying"
           icon="mdi-arrow-left"
           size="small"
@@ -176,7 +178,13 @@ function formatBytes(bytes: number): string {
         </template>
         <template v-else>Session Transcripts</template>
         <v-spacer />
-        <v-btn icon="mdi-close" size="small" variant="text" @click="open = false" />
+        <v-btn
+          aria-label="Close"
+          icon="mdi-close"
+          size="small"
+          variant="text"
+          @click="open = false"
+        />
       </v-card-title>
       <v-divider />
 
@@ -203,6 +211,7 @@ function formatBytes(bytes: number): string {
           />
           <v-spacer />
           <v-btn
+            aria-label="Refresh transcripts"
             icon="mdi-refresh"
             size="small"
             variant="text"
@@ -247,6 +256,7 @@ function formatBytes(bytes: number): string {
               </td>
               <td class="text-right">
                 <v-btn
+                  aria-label="Delete transcript"
                   icon="mdi-delete-outline"
                   size="x-small"
                   variant="text"
@@ -265,6 +275,7 @@ function formatBytes(bytes: number): string {
 
         <div class="d-flex align-center justify-end ga-2 px-3 py-2">
           <v-btn
+            aria-label="Previous page"
             icon="mdi-chevron-left"
             size="x-small"
             variant="tonal"
@@ -273,6 +284,7 @@ function formatBytes(bytes: number): string {
           />
           <span class="text-caption">Page {{ page }}</span>
           <v-btn
+            aria-label="Next page"
             icon="mdi-chevron-right"
             size="x-small"
             variant="tonal"

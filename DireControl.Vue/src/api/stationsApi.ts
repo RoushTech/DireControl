@@ -42,11 +42,6 @@ export async function getStationPackets(
   return data
 }
 
-export async function getRecentPackets(): Promise<PacketDto[]> {
-  const { data } = await http.get<PacketDto[]>('/api/v0/packets/recent')
-  return data
-}
-
 /** Returns the most recent `limit` packets since `since`, newest first. */
 export async function getPacketsSince(since: string, limit = 200): Promise<PacketDto[]> {
   const { data } = await http.get<PacketDto[]>('/api/v0/packets', {

@@ -12,9 +12,10 @@ import { getStatus, reconnectAprsIs } from '@/api/statusApi'
 import { ModemStates, modemStateLabels, type ModemState } from '@/api/modemApi'
 import { getAbout } from '@/api/aboutApi'
 import { recordServerSync } from '@/utils/serverTime'
-import { timeAgo } from '@/utils/time'
+import { timeAgo, formatDateTime } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
 import AudioMonitorButton from '@/components/AudioMonitorButton.vue'
+import SetupChecklist from '@/components/SetupChecklist.vue'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
 const CLOCK_SYNC_INTERVAL_MS = 5 * 60 * 1000
@@ -37,6 +38,8 @@ const isDark = ref(theme.global.current.value.dark)
 const apiOffline = ref(false)
 const direwolfDisconnected = ref(false)
 const modemState = ref<ModemState>(ModemStates.Disabled)
+const modemLastDecodedAt = ref<string | null>(null)
+const modemRunningSince = ref<string | null>(null)
 const aprsIsState = ref('Disabled')
 const aprsIsServerName = ref<string | null>(null)
 const aprsIsFilter = ref('')
@@ -48,6 +51,7 @@ const aprsIsLastError = ref<string | null>(null)
 const aprsIsReconnecting = ref(false)
 const showShortcutsDialog = ref(false)
 const version = ref<string | null>(null)
+const commit = ref<string | null>(null)
 const mobileDrawerOpen = ref(false)
 
 const shortcuts = [
@@ -59,17 +63,18 @@ const shortcuts = [
 ]
 
 // ─── Nav groups ──────────────────────────────────────────────────────────────
-const activityRoutes = ['/beacons', '/radio', '/logs']
+const activityRoutes = ['/beacons', '/logs']
 const commsRoutes = ['/messages', '/terminal', '/alerts']
 const insightsRoutes = ['/statistics', '/network', '/rf-heard']
 
 const activityActive = computed(() => activityRoutes.includes(route.path))
-const commsActive = computed(
-  () => commsRoutes.includes(route.path) || route.path.startsWith('/stations/'),
-)
+// A station page is part of the map/station browsing flow, not Comms.
+const commsActive = computed(() => commsRoutes.includes(route.path))
 const insightsActive = computed(() => insightsRoutes.includes(route.path))
 
-const commsBadgeCount = computed(() => messagesStore.unreadCount + alertsStore.unacknowledgedCount)
+const commsBadgeCount = computed(
+  () => messagesStore.unreadCount + messagesStore.failedCount + alertsStore.unacknowledgedCount,
+)
 
 // Persist theme changes
 watch(isDark, (dark) => {
@@ -119,12 +124,31 @@ const aprsIsStateLabel = computed(() => {
  * and the RF backend into a single glanceable state with detail in the popover.
  */
 const livePill = computed<{ label: string; color: string; icon: string }>(() => {
+  // Worst-of: the pill names the most serious failure rather than going green
+  // while the hover card is the only place a broken modem or login shows.
   if (apiOffline.value) return { label: 'Offline', color: 'error', icon: 'mdi-wifi-off' }
   if (packetHub.state === 'disconnected')
     return { label: 'No live feed', color: 'error', icon: 'mdi-lan-disconnect' }
+  if (modemState.value === ModemStates.Error)
+    return { label: 'Modem error', color: 'error', icon: 'mdi-radio-off' }
+  if (aprsIsState.value === 'AuthFailed')
+    return { label: 'APRS-IS auth failed', color: 'error', icon: 'mdi-key-alert' }
   if (packetHub.state === 'connecting')
     return { label: 'Connecting', color: 'warning', icon: 'mdi-lan-pending' }
+  if (packetHub.state === 'resyncing')
+    return { label: 'Resyncing…', color: 'info', icon: 'mdi-sync' }
+  if (rfSilent.value) return { label: 'RF silent', color: 'warning', icon: 'mdi-radio-tower' }
   return { label: 'Live', color: 'success', icon: 'mdi-access-point' }
+})
+
+/** The modem is running but has decoded nothing for this long. */
+const RF_SILENT_WARN_MS = 30 * 60 * 1000
+
+const rfSilent = computed(() => {
+  if (modemState.value !== ModemStates.Running) return false
+  const last = modemLastDecodedAt.value ?? modemRunningSince.value
+  if (!last) return false
+  return now.value - new Date(last).getTime() > RF_SILENT_WARN_MS
 })
 
 const modemStateColor = computed(() => {
@@ -138,17 +162,25 @@ const modemStateColor = computed(() => {
   }
 })
 
-const lastPacketLabel = computed(() => {
-  if (packetHub.lastPacketAt === null) return 'none this session'
-  return timeAgo(new Date(packetHub.lastPacketAt).toISOString(), now.value)
+const lastRfDecodeLabel = computed(() => {
+  if (modemState.value !== ModemStates.Running) return 'modem not running'
+  if (!modemLastDecodedAt.value) return 'none since modem start'
+  return timeAgo(modemLastDecodedAt.value, now.value)
+})
+
+const lastAprsIsPacketLabel = computed(() => {
+  if (packetHub.lastAprsIsPacketAt === null) return 'none this session'
+  return timeAgo(new Date(packetHub.lastAprsIsPacketAt).toISOString(), now.value)
 })
 
 async function pollStatus() {
   try {
     const status = await getStatus()
     apiOffline.value = false
-    direwolfDisconnected.value = !status.direwolfConnected
+    direwolfDisconnected.value = !status.externalTncConnected
     modemState.value = status.modemState
+    modemLastDecodedAt.value = status.modemLastDecodedAt
+    modemRunningSince.value = status.modemRunningSince
     aprsIsState.value = status.aprsIsState
     aprsIsServerName.value = status.aprsIsServerName
     aprsIsFilter.value = status.aprsIsFilter
@@ -165,7 +197,7 @@ async function pollStatus() {
 
 function formatTimestamp(iso: string | null): string {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString()
+  return formatDateTime(iso)
 }
 
 async function reconnectAprsIsNow() {
@@ -255,6 +287,7 @@ async function syncServerClock() {
     const about = await getAbout()
     recordServerSync(about.serverTime, requestStart, Date.now())
     version.value = about.version
+    commit.value = about.commit
   } catch {
     // ignore — non-critical; keep the last good offset and version
   }
@@ -272,18 +305,18 @@ async function syncServerClock() {
     >
       <v-list density="compact" nav>
         <v-list-item to="/" prepend-icon="mdi-map" title="Map" @click="mobileDrawerOpen = false" />
+        <v-list-item
+          to="/radio"
+          prepend-icon="mdi-radio-handheld"
+          title="Radio"
+          @click="mobileDrawerOpen = false"
+        />
 
         <v-list-subheader>Activity</v-list-subheader>
         <v-list-item
           to="/beacons"
           prepend-icon="mdi-radio-tower"
           title="Beacon Stream"
-          @click="mobileDrawerOpen = false"
-        />
-        <v-list-item
-          to="/radio"
-          prepend-icon="mdi-radio-handheld"
-          title="Radio"
           @click="mobileDrawerOpen = false"
         />
         <v-list-item
@@ -304,6 +337,12 @@ async function syncServerClock() {
             <v-badge
               v-if="messagesStore.unreadCount > 0"
               :content="messagesStore.unreadCount"
+              color="error"
+              inline
+            />
+            <v-badge
+              v-if="messagesStore.failedCount > 0"
+              :content="`${messagesStore.failedCount} failed`"
               color="error"
               inline
             />
@@ -370,17 +409,24 @@ async function syncServerClock() {
         @click="mobileDrawerOpen = !mobileDrawerOpen"
       />
 
-      <!-- Brand sits left with the nav beside it, mock-style — not a growing title -->
+      <!-- Brand sits left with the nav beside it — not a growing title -->
       <div class="app-brand font-weight-bold ml-2 flex-shrink-0">
         <span class="text-primary mr-1">▲</span>DireControl
-        <span v-if="version" class="text-caption text-medium-emphasis ml-1">{{ version }}</span>
+        <span
+          v-if="version"
+          class="text-caption text-medium-emphasis ml-1"
+          :title="commit ? `commit ${commit}` : undefined"
+          >{{ version }}</span
+        >
       </div>
 
-      <!-- Desktop nav — grouped: Map · Activity · Comms · Insights · Settings -->
+      <!-- Desktop nav — Map · Radio · Activity · Comms · Insights · Settings.
+           Radio is the station's health page, so it sits at the top level. -->
       <div class="desktop-nav ml-4">
         <v-btn to="/" variant="text" size="small">Map</v-btn>
+        <v-btn to="/radio" variant="text" size="small">Radio</v-btn>
 
-        <v-menu open-on-hover :close-delay="100">
+        <v-menu open-on-hover open-on-click :close-delay="100">
           <template #activator="{ props }">
             <v-btn
               v-bind="props"
@@ -394,12 +440,11 @@ async function syncServerClock() {
           </template>
           <v-list density="compact" nav>
             <v-list-item to="/beacons" prepend-icon="mdi-radio-tower" title="Beacon Stream" />
-            <v-list-item to="/radio" prepend-icon="mdi-radio-handheld" title="Radio" />
             <v-list-item to="/logs" prepend-icon="mdi-text-box-outline" title="Logs" />
           </v-list>
         </v-menu>
 
-        <v-menu open-on-hover :close-delay="100">
+        <v-menu open-on-hover open-on-click :close-delay="100">
           <template #activator="{ props }">
             <v-btn
               v-bind="props"
@@ -427,6 +472,12 @@ async function syncServerClock() {
                   color="error"
                   inline
                 />
+                <v-badge
+                  v-if="messagesStore.failedCount > 0"
+                  :content="`${messagesStore.failedCount} failed`"
+                  color="error"
+                  inline
+                />
               </template>
             </v-list-item>
             <v-list-item to="/terminal" prepend-icon="mdi-console-network" title="Terminal" />
@@ -443,7 +494,7 @@ async function syncServerClock() {
           </v-list>
         </v-menu>
 
-        <v-menu open-on-hover :close-delay="100">
+        <v-menu open-on-hover open-on-click :close-delay="100">
           <template #activator="{ props }">
             <v-btn
               v-bind="props"
@@ -480,7 +531,7 @@ async function syncServerClock() {
         />
 
         <!-- Global live-status pill: hub + APRS-IS + modem in one place -->
-        <v-menu open-on-hover :close-delay="100">
+        <v-menu open-on-hover open-on-click :close-delay="100">
           <template #activator="{ props }">
             <v-chip
               v-bind="props"
@@ -504,8 +555,20 @@ async function syncServerClock() {
                 </span>
               </div>
               <div class="d-flex align-center justify-space-between mb-1">
-                <span class="text-body-2">Last packet</span>
-                <span class="text-caption text-medium-emphasis">{{ lastPacketLabel }}</span>
+                <span class="text-body-2">Last RF decode</span>
+                <span
+                  class="text-caption"
+                  :class="rfSilent ? 'text-warning' : 'text-medium-emphasis'"
+                >
+                  {{ lastRfDecodeLabel }}
+                </span>
+              </div>
+              <div
+                v-if="aprsIsState !== 'Disabled'"
+                class="d-flex align-center justify-space-between mb-1"
+              >
+                <span class="text-body-2">Last APRS-IS packet</span>
+                <span class="text-caption text-medium-emphasis">{{ lastAprsIsPacketLabel }}</span>
               </div>
               <div class="d-flex align-center justify-space-between">
                 <span class="text-body-2">Sound modem</span>
@@ -597,7 +660,31 @@ async function syncServerClock() {
       :sticky="true"
     >
       <v-banner-text>No RF backend is connected — no new packets will be received</v-banner-text>
+      <template #actions>
+        <v-btn variant="text" to="/settings?tab=radios">Set up a radio</v-btn>
+        <v-btn variant="text" to="/settings?tab=rf">External TNC</v-btn>
+      </template>
     </v-banner>
+
+    <!-- A running modem that hears nothing is the failure APRS-IS traffic hides. -->
+    <v-banner
+      v-else-if="rfSilent"
+      color="warning"
+      density="compact"
+      icon="mdi-radio-tower"
+      lines="one"
+      :sticky="true"
+    >
+      <v-banner-text>
+        The sound modem is running but has decoded nothing on RF for over 30 minutes — check audio
+        level, squelch and the capture device.
+      </v-banner-text>
+      <template #actions>
+        <v-btn variant="text" to="/radio">Open Radio</v-btn>
+      </template>
+    </v-banner>
+
+    <SetupChecklist v-if="!apiOffline" :aprs-is-state="aprsIsState" />
 
     <v-main class="fill-height">
       <router-view v-slot="{ Component }">
@@ -622,6 +709,16 @@ async function syncServerClock() {
           @click:close="toastStore.dismiss(toast.id)"
         >
           {{ toast.message }}
+          <template v-if="toast.action" #append>
+            <v-btn
+              size="small"
+              variant="text"
+              :to="toast.action.to"
+              @click="toastStore.dismiss(toast.id)"
+            >
+              {{ toast.action.label }}
+            </v-btn>
+          </template>
         </v-alert>
       </v-slide-y-reverse-transition>
     </div>
@@ -663,7 +760,7 @@ body,
   overflow: hidden;
 }
 
-/* Mock convention: callsigns render in mono, app-wide. */
+/* Convention: callsigns render in mono, app-wide. */
 .callsign-link {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-weight: 600;

@@ -99,18 +99,6 @@ public sealed class StatisticsAggregationService(
                 packetsPerHour[23 - bucket.HoursAgo] = bucket.Count;
         }
 
-        // Busiest digipeaters from pre-aggregated table
-        var topDigis = await db.DigipeaterStatistics
-            .Where(d => d.TotalPacketsForwarded > 0)
-            .OrderByDescending(d => d.TotalPacketsForwarded)
-            .Take(10)
-            .Select(d => new CallsignCountDto
-            {
-                Callsign = d.Callsign,
-                Count = d.TotalPacketsForwarded,
-            })
-            .ToListAsync(ct);
-
         // Busiest stations by beacon rate
         var topBeacon = await db.StationStatistics
             .Where(ss => ss.AveragePacketsPerHour > 0)
@@ -162,7 +150,6 @@ public sealed class StatisticsAggregationService(
             UniqueStationsThisWeek = uniqueThisWeek,
             UniqueStationsAllTime = uniqueAllTime,
             PacketsPerHour = packetsPerHour,
-            BusiestDigipeaters = topDigis,
             BusiestStations = topBeacon,
             RecentlyFirstHeard = recentlyFirstHeard,
             GridSquares = gridSquares,

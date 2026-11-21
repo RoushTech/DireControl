@@ -162,7 +162,7 @@ function heardViaLabel(p: PacketDto): string {
           >
             {{ copyFeedback ? 'Copied ✓' : 'Copy Raw' }}
           </v-btn>
-          <v-btn icon="mdi-close" size="small" variant="text" @click="onClose" />
+          <v-btn aria-label="Close" icon="mdi-close" size="small" variant="text" @click="onClose" />
         </div>
       </div>
 
@@ -438,7 +438,7 @@ function heardViaLabel(p: PacketDto): string {
         </v-btn>
       </v-card-actions>
 
-      <!-- Mock footer: jump to the sender's station page -->
+      <!-- Footer: jump to the sender's station page -->
       <v-card-actions v-if="!mobile && packet" class="px-4 pb-3 pt-0">
         <v-spacer />
         <v-btn

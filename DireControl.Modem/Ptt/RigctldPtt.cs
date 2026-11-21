@@ -47,17 +47,25 @@ public sealed class RigctldPtt(string host, int port) : IPttController
     {
         lock (_lock)
         {
-            try
+            // A closed connection is only discovered on use (TcpClient.Connected
+            // lags), so one failure — an IO error or EOF instead of a reply —
+            // earns exactly one retry on a fresh connection.
+            for (var attempt = 0; attempt < 2; attempt++)
             {
-                EnsureConnected();
-                _writer!.WriteLine(command);
-                return _reader!.ReadLine();
-            }
-            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
-            {
+                try
+                {
+                    EnsureConnected();
+                    _writer!.WriteLine(command);
+                    var reply = _reader!.ReadLine();
+                    if (reply is not null)
+                        return reply;
+                }
+                catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+                {
+                }
                 Disconnect();
-                return null;
             }
+            return null;
         }
     }
 
@@ -105,18 +113,11 @@ public sealed class RigctldPtt(string host, int port) : IPttController
 
     public void Dispose()
     {
+        // SendCommand reconnects if the connection dropped — a CAT-keyed rig
+        // must be told to unkey even when rigctld closed on us mid-keyup.
+        try { SendCommand("T 0"); }
+        catch { /* best effort unkey */ }
         lock (_lock)
-        {
-            try
-            {
-                if (_client is { Connected: true })
-                {
-                    _writer!.WriteLine("T 0");
-                    _reader!.ReadLine();
-                }
-            }
-            catch { /* best effort unkey */ }
             Disconnect();
-        }
     }
 }

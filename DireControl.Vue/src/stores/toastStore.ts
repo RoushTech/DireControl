@@ -1,11 +1,18 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
+/** An optional button on a toast that navigates somewhere relevant. */
+export interface ToastAction {
+  label: string
+  to: string
+}
+
 export interface Toast {
   id: number
   message: string
   color: string
   show: boolean
+  action?: ToastAction
 }
 
 let toastSeq = 0
@@ -18,9 +25,9 @@ let toastSeq = 0
 export const useToastStore = defineStore('toasts', () => {
   const toasts = ref<Toast[]>([])
 
-  function toast(message: string, color = 'info', timeoutMs = 6000) {
+  function toast(message: string, color = 'info', timeoutMs = 6000, action?: ToastAction) {
     const id = ++toastSeq
-    toasts.value.push({ id, message, color, show: true })
+    toasts.value.push({ id, message, color, show: true, action })
     setTimeout(() => dismiss(id), timeoutMs)
   }
 

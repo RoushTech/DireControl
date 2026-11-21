@@ -6,8 +6,14 @@ namespace DireControl.Modem.Audio;
 /// Blocking ALSA PCM playback: mono S16_LE at the requested rate.  Opened per
 /// transmission and disposed after <see cref="Drain"/>, so the device is only
 /// held while actually transmitting.
+/// <para>
+/// The open itself is non-blocking: a <c>hw:</c>/<c>plughw:</c> substream held
+/// by another process (a leftover Dire Wolf, <c>aplay</c>) fails fast with
+/// EBUSY instead of waiting forever — the radio is keyed only after the open
+/// succeeds, so a blocked open used to mean dead carrier indefinitely.
+/// </para>
 /// </summary>
-public sealed class AlsaPlaybackDevice : IDisposable
+public sealed class AlsaPlaybackDevice : IPlaybackSink
 {
     private const uint LatencyUs = 200_000;
     private const int PeriodFrames = 1024;
@@ -25,11 +31,21 @@ public sealed class AlsaPlaybackDevice : IDisposable
         _pcmBuffer = new short[PeriodFrames];
         _pcmBufferHandle = GCHandle.Alloc(_pcmBuffer, GCHandleType.Pinned);
 
-        var err = AlsaNative.snd_pcm_open(out _pcm, deviceName, AlsaNative.SndPcmStreamPlayback, mode: 0);
+        var err = AlsaNative.snd_pcm_open(
+            out _pcm, deviceName, AlsaNative.SndPcmStreamPlayback, AlsaNative.SndPcmNonblock);
         if (err < 0)
         {
             _pcmBufferHandle.Free();
             throw new AlsaException($"snd_pcm_open(\"{deviceName}\")", err);
+        }
+
+        // Writes and drain stay blocking — only the open must not wait.
+        err = AlsaNative.snd_pcm_nonblock(_pcm, 0);
+        if (err < 0)
+        {
+            AlsaNative.snd_pcm_close(_pcm);
+            _pcmBufferHandle.Free();
+            throw new AlsaException($"snd_pcm_nonblock(\"{deviceName}\")", err);
         }
 
         err = AlsaNative.snd_pcm_set_params(

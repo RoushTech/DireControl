@@ -45,12 +45,16 @@ public sealed class MessageRetryService(
         logger.LogInformation("MessageRetryService stopped.");
     }
 
-    private async Task ProcessDueRetriesAsync(CancellationToken ct)
+    /// <summary>One retry pass: release held multi-part parts, then retransmit what is due.</summary>
+    internal async Task ProcessDueRetriesAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
 
+        await ReleaseHeldPartsAsync(db, ct);
+
         var due = await db.Messages
+            .AsNoTracking()
             .Where(m =>
                 m.RetryState == RetryState.Retrying &&
                 m.NextRetryAt <= DateTime.UtcNow &&
@@ -64,19 +68,41 @@ public sealed class MessageRetryService(
 
         foreach (var message in due)
         {
-            await messageSendingService.RetransmitAsync(message, ct);
-            message.RetryCount++;
-            message.LastSentAt = DateTime.UtcNow;
-
-            if (message.RetryCount >= message.MaxRetries)
+            if (!await messageSendingService.RetransmitAsync(message, ct))
             {
-                message.RetryState = RetryState.Failed;
-                message.NextRetryAt = null;
-                await db.SaveChangesAsync(ct);
+                // Nothing went to air: don't spend an attempt on it.  Check
+                // again after the base delay rather than every poll.
+                await db.Messages
+                    .Where(m => m.Id == message.Id && m.RetryState == RetryState.Retrying && !m.AckSent)
+                    .ExecuteUpdateAsync(s => s.SetProperty(
+                        m => m.NextRetryAt, DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds)), ct);
+                continue;
+            }
 
+            var retryCount = message.RetryCount + 1;
+            var sentAt = DateTime.UtcNow;
+            var failed = retryCount >= message.MaxRetries;
+            DateTime? nextRetryAt = failed
+                ? null
+                : sentAt.AddSeconds(options.Value.InitialRetryDelaySeconds * Math.Pow(2, retryCount - 1));
+
+            // Conditional: an ACK may have landed while we were transmitting,
+            // and must never be overwritten with Retrying or Failed.
+            var updated = await db.Messages
+                .Where(m => m.Id == message.Id && m.RetryState == RetryState.Retrying && !m.AckSent)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(m => m.RetryCount, retryCount)
+                    .SetProperty(m => m.LastSentAt, sentAt)
+                    .SetProperty(m => m.NextRetryAt, nextRetryAt)
+                    .SetProperty(m => m.RetryState, failed ? RetryState.Failed : RetryState.Retrying), ct);
+            if (updated == 0)
+                continue;
+
+            if (failed)
+            {
                 logger.LogInformation(
                     "Message {Id} to {ToCallsign} failed after {Count} attempts — no ACK received.",
-                    message.Id, message.ToCallsign, message.RetryCount);
+                    message.Id, message.ToCallsign, retryCount);
 
                 await hubContext.Clients.All.SendAsync(
                     PacketHub.MessageFailedMethod,
@@ -84,28 +110,70 @@ public sealed class MessageRetryService(
                     {
                         Id = message.Id,
                         ToCallsign = message.ToCallsign,
-                        RetryCount = message.RetryCount,
+                        RetryCount = retryCount,
                     },
                     ct);
             }
             else
             {
-                var delaySeconds = options.Value.InitialRetryDelaySeconds * Math.Pow(2, message.RetryCount - 1);
-                message.NextRetryAt = DateTime.UtcNow.AddSeconds(delaySeconds);
-                await db.SaveChangesAsync(ct);
-
                 await hubContext.Clients.All.SendAsync(
                     PacketHub.MessageRetriedMethod,
                     new MessageRetriedDto
                     {
                         Id = message.Id,
-                        RetryCount = message.RetryCount,
+                        RetryCount = retryCount,
                         MaxRetries = message.MaxRetries,
-                        NextRetryAt = message.NextRetryAt,
-                        LastSentAt = message.LastSentAt,
+                        NextRetryAt = nextRetryAt,
+                        LastSentAt = sentAt,
                     },
                     ct);
             }
+        }
+    }
+
+    /// <summary>
+    /// Sends the next held part of each multi-part message once nothing earlier
+    /// to that peer is still in flight (Retrying) — part i+1 follows part i's
+    /// ACK or give-up, never alongside it.
+    /// </summary>
+    private async Task ReleaseHeldPartsAsync(DireControlContext db, CancellationToken ct)
+    {
+        var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
+        var held = await db.Messages
+            .Where(m => m.FromCallsign == ourCallsign
+                     && m.RetryState == RetryState.Pending
+                     && m.LastSentAt == null
+                     && !m.AckSent)
+            .OrderBy(m => m.Id)
+            .ToListAsync(ct);
+
+        foreach (var next in held.GroupBy(m => m.ToCallsign).Select(g => g.First()))
+        {
+            var blocked = await db.Messages.AnyAsync(
+                m => m.FromCallsign == ourCallsign
+                  && m.ToCallsign == next.ToCallsign
+                  && m.Id < next.Id
+                  && m.RetryState == RetryState.Retrying,
+                ct);
+            if (blocked || !await messageSendingService.RetransmitAsync(next, ct))
+                continue;
+
+            next.RetryState = RetryState.Retrying;
+            next.LastSentAt = DateTime.UtcNow;
+            next.NextRetryAt = DateTime.UtcNow.AddSeconds(options.Value.InitialRetryDelaySeconds);
+            await db.SaveChangesAsync(ct);
+
+            await hubContext.Clients.All.SendAsync(
+                PacketHub.MessageRetriedMethod,
+                new MessageRetriedDto
+                {
+                    Id = next.Id,
+                    RetryCount = next.RetryCount,
+                    MaxRetries = next.MaxRetries,
+                    NextRetryAt = next.NextRetryAt,
+                    LastSentAt = next.LastSentAt,
+                },
+                ct);
         }
     }
 }

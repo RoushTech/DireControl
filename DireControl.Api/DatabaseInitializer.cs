@@ -13,17 +13,9 @@ public static class DatabaseInitializer
         var context = scope.ServiceProvider.GetRequiredService<DireControlContext>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<DireControlContext>>();
 
-        var migrations = context.Database.GetMigrations();
-        if (migrations.Any())
-        {
-            logger.LogInformation("Applying database migrations...");
-            await context.Database.MigrateAsync();
-        }
-        else
-        {
-            logger.LogInformation("No migrations found. Ensuring database schema is created...");
-            await context.Database.EnsureCreatedAsync();
-        }
+        // The project always ships migrations, so there is no EnsureCreated path.
+        logger.LogInformation("Applying database migrations...");
+        await context.Database.MigrateAsync();
 
         logger.LogInformation("Database ready.");
     }

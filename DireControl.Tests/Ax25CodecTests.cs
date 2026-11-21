@@ -125,4 +125,46 @@ public sealed class Ax25CodecTests
 
         Assert.That(count, Is.GreaterThan(100), "corpus should exercise a meaningful number of packets");
     }
+
+    [Test]
+    public void NonAsciiInfo_Utf8_RoundTripsWithoutQuestionMarks()
+    {
+        var bytes = Ax25Encoder.EncodeUiFrame("N4WR-1", ">Temp 21°C — café", null);
+
+        Assert.That(Ax25Decoder.TryDecode(bytes, out var frame), Is.True);
+        Assert.That(frame.ToTnc2(), Is.EqualTo("N4WR-1>APRS:>Temp 21°C — café"));
+    }
+
+    [Test]
+    public void NonAsciiInfo_LegacyEightBit_DecodesByteForByte()
+    {
+        // 0xB0 alone is not valid UTF-8 — a legacy Latin-1 degree sign.
+        var info = new byte[] { (byte)'>', (byte)'2', (byte)'1', 0xB0, (byte)'C' };
+
+        Assert.That(Ax25Frame.DecodeInfo(info), Is.EqualTo(">21°C"));
+        Assert.That(System.Text.Encoding.Latin1.GetBytes(Ax25Frame.DecodeInfo(info)), Is.EqualTo(info).AsCollection);
+    }
+
+    [TestCase("TOOLONG1")]
+    [TestCase("N4WR-16")]
+    [TestCase("")]
+    public void EncodeAddress_RejectsAddressesItCannotCarry(string address)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            Ax25Encoder.EncodeAddress(Ax25Address.Parse(address), isLast: true, topBit: false));
+    }
+
+    [TestCase(null, true)]
+    [TestCase("", true)]
+    [TestCase("WIDE1-1,WIDE2-1", true)]
+    [TestCase("K4ABC-15", true)]
+    [TestCase("WIDE1-1,TOOLONGCALL", false)]
+    [TestCase("WIDE1-16", false)]
+    [TestCase("WIDE1-1,,WIDE2-1", false)]
+    [TestCase("A,B,C,D,E,F,G,H,I", false)]
+    [TestCase("WIDE1-X", false)]
+    public void IsValidPath_EnforcesAx25AddressAndDigipeaterLimits(string? path, bool valid)
+    {
+        Assert.That(Ax25Address.IsValidPath(path), Is.EqualTo(valid));
+    }
 }

@@ -1,3 +1,4 @@
+import { formatSecondsAgo } from '@/utils/time'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { LightningAlertDto, TriggeringStrike } from '@/types/alert'
@@ -32,10 +33,7 @@ export function cardinal(bearingDegrees: number): string {
 
 /** How stale the strike already was when the alert arrived, e.g. "4s ago". */
 export function formatStrikeAge(feedLagSeconds: number): string {
-  const seconds = Math.max(0, Math.round(feedLagSeconds))
-  if (seconds < 1) return 'just now'
-  if (seconds < 90) return `${seconds}s ago`
-  return `${Math.round(seconds / 60)}m ago`
+  return formatSecondsAgo(Math.round(feedLagSeconds))
 }
 
 /**

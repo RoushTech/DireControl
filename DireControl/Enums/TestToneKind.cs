@@ -13,4 +13,10 @@ public enum TestToneKind
 
     /// <summary>Alternating mark/space warble — a distinctive "this is a test" tone.</summary>
     Alternating = 3,
+
+    /// <summary>
+    /// PTT only: keys the transmitter over silence — checks the PTT wiring
+    /// without modulating a tone.
+    /// </summary>
+    PttOnly = 4,
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.RegularExpressions;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
@@ -15,10 +16,10 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/settings")]
 public class SettingsController(
     IOptions<DireControlOptions> options,
-    AprsIsReconnectTrigger reconnectTrigger,
-    ModemRestartTrigger modemRestartTrigger,
-    KissReconnectTrigger kissReconnectTrigger,
-    PacketServicesRestartTrigger packetServicesTrigger,
+    [FromKeyedServices(RestartSignals.AprsIs)] RestartSignal reconnectTrigger,
+    [FromKeyedServices(RestartSignals.KissClient)] RestartSignal kissReconnectTrigger,
+    [FromKeyedServices(RestartSignals.KissServer)] RestartSignal kissServerTrigger,
+    [FromKeyedServices(RestartSignals.PacketServices)] RestartSignal packetServicesTrigger,
     StationIdentityService stationIdentity,
     DireControlContext db) : ControllerBase
 {
@@ -73,6 +74,7 @@ public class SettingsController(
             DigipeaterFillInOnly = userSetting.DigipeaterFillInOnly,
             KissServerEnabled = userSetting.KissServerEnabled,
             KissServerPort = userSetting.KissServerPort,
+            KissServerBindAddress = userSetting.KissServerBindAddress,
             RfToIsGatingEnabled = userSetting.RfToIsGatingEnabled,
             IsToRfGatingEnabled = userSetting.IsToRfGatingEnabled,
             IsToRfPath = userSetting.IsToRfPath,
@@ -200,8 +202,13 @@ public class SettingsController(
 
         // A callsign change invalidates the APRS-IS login — the passcode is
         // derived from the callsign — so force a reconnect with the new identity.
+        // The PMS host and terminal listener also claim the callsign, and only
+        // re-read it when packet services restart.
         if (callsignChanged)
+        {
             reconnectTrigger.Trigger();
+            packetServicesTrigger.Trigger();
+        }
 
         return NoContent();
     }
@@ -216,6 +223,12 @@ public class SettingsController(
 
         if (request.KissServerPort is < 1 or > 65535)
             return BadRequest("KISS server port must be between 1 and 65535.");
+
+        var kissBindAddress = string.IsNullOrWhiteSpace(request.KissServerBindAddress)
+            ? "0.0.0.0"
+            : request.KissServerBindAddress.Trim();
+        if (!System.Net.IPAddress.TryParse(kissBindAddress, out _))
+            return BadRequest("KISS bind address must be a valid IP address (127.0.0.1 or 0.0.0.0).");
 
         var isToRfPath = request.IsToRfPath?.Trim() ?? string.Empty;
         if (!string.IsNullOrEmpty(isToRfPath) && !PathRegex.IsMatch(isToRfPath))
@@ -236,6 +249,7 @@ public class SettingsController(
         setting.DigipeaterFillInOnly = request.DigipeaterFillInOnly;
         setting.KissServerEnabled = request.KissServerEnabled;
         setting.KissServerPort = request.KissServerPort;
+        setting.KissServerBindAddress = kissBindAddress;
         setting.RfToIsGatingEnabled = request.RfToIsGatingEnabled;
         setting.IsToRfGatingEnabled = request.IsToRfGatingEnabled;
         setting.IsToRfPath = isToRfPath;
@@ -243,9 +257,9 @@ public class SettingsController(
 
         await db.SaveChangesAsync(ct);
 
-        // The KISS server re-reads its settings on the modem restart trigger;
-        // digipeater and iGate read settings per packet.
-        modemRestartTrigger.Trigger();
+        // Digipeater and iGate read their settings per packet; only the KISS
+        // server needs restarting — the modem is untouched.
+        kissServerTrigger.Trigger();
 
         return NoContent();
     }

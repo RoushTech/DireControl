@@ -18,7 +18,7 @@ A real-time APRS (Automatic Packet Reporting System) monitoring and control appl
 - **Messaging** — Send and receive APRS messages with automatic retry and acknowledgment tracking
 - **Beacon management** — Multi-radio beacon configuration with digipeater confirmation tracking and heard/not-heard status
 - **Alerting** — Watch list alerts, proximity rules, and geofences with real-time notifications
-- **Weather overlays** — NEXRAD radar (IEM), RainViewer Pro, lightning (Tomorrow.io), and wind tiles (OpenWeatherMap)
+- **Weather overlays** — NEXRAD radar (IEM), RainViewer Pro, lightning (Blitzortung), and wind tiles (OpenWeatherMap)
 - **Callsign lookup** — HamDB and QRZ integration with result caching
 - **Statistics** — Coverage grid analysis, digipeater statistics, packet rates, and per-station metrics
 - **Real-time updates** — SignalR pushes all events (packets, messages, alerts, beacon confirmations) to the browser instantly
@@ -83,8 +83,6 @@ DireControl is configured through environment variables and the in-app Settings 
 | `HTTP_PORT` | `80` | Host port to expose the web UI on |
 | `DireControl__OurCallsign` | `N0CALL-10` | Your callsign with SSID |
 | `DireControl__HomeLat` / `DireControl__HomeLon` | *(unset)* | Home position for beacons and distance calculations |
-| `Direwolf__Host` | `localhost` | Direwolf KISS TCP host (`host.docker.internal` for Docker) |
-| `Direwolf__Port` | `8001` | Direwolf KISS TCP port |
 | `QRZ__Username` / `QRZ__Password` | *(empty)* | QRZ callsign lookup credentials (optional — HamDB is used as a free fallback) |
 | `DireControl__StationExpiryTimeoutMinutes` | `120` | Default minutes before inactive stations expire |
 
@@ -92,8 +90,10 @@ See `.env.example` for the full list including per-type station expiry overrides
 
 **In-app settings** (configured through the Settings page in the UI):
 
+- Radios and the native sound modem (Settings → Radios)
+- External KISS TCP TNC such as Direwolf — host and port (Settings → RF Services → External TNC; use `host.docker.internal` from Docker)
 - APRS-IS connection (host, port, filter, passcode)
-- Weather API keys (OpenWeatherMap, Tomorrow.io, RainViewer)
+- Weather API keys (OpenWeatherMap, RainViewer)
 - Radar provider selection
 
 ### Image Tags
@@ -106,7 +106,7 @@ The `stable` tag always points to the latest release. Pinned version tags (e.g. 
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Node.js](https://nodejs.org/) 20.19+ or 22.12+
-- [Direwolf](https://github.com/wb2osz/direwolf) running with KISS TCP enabled
+- An ALSA sound device wired to your radio for the built-in modem — or, alternatively, an external KISS TCP TNC such as [Direwolf](https://github.com/wb2osz/direwolf)
 
 ### Backend
 
@@ -133,7 +133,7 @@ Copy and edit the local settings override (git-ignored):
 cp DireControl.Api/appsettings.json DireControl.Api/appsettings.local.json
 ```
 
-The same settings from the environment variable table above can be set here using the nested JSON format (e.g. `Direwolf__Host` becomes `"Direwolf": { "Host": "..." }`).
+The same settings from the environment variable table above can be set here using the nested JSON format (e.g. `DireControl__OurCallsign` becomes `"DireControl": { "OurCallsign": "..." }`).
 
 ## Running Tests
 

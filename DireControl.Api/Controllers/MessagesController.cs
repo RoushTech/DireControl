@@ -184,24 +184,22 @@ public class MessagesController(
 
         var toCallsign = request.ToCallsign.Trim().ToUpperInvariant();
         var sent = new List<InboxMessageDto>(parts.Count);
-        foreach (var part in parts)
+
+        // Only the first part transmits now.  Later parts are stored held and
+        // released one at a time by the retry service as each earlier part is
+        // acknowledged or gives up — no multi-frame burst, no retries in step.
+        var first = await messageSendingService.SendMessageAsync(
+            toCallsign, parts[0], await messageSendingService.NextMessageIdAsync(db, ct), path, ct);
+        if (first is null)
+            return StatusCode(503, "No transmitter available (modem TX off or external TNC down).");
+        sent.Add(ToInboxDto(first));
+
+        foreach (var part in parts.Skip(1))
         {
-            var message = await messageSendingService.SendMessageAsync(
-                toCallsign,
-                part,
-                MessageSendingService.GenerateMessageId(),
-                path,
-                ct);
-
-            // The transmitter is all-or-nothing in practice; if it drops out
-            // mid-way, report what did go out rather than failing the whole send.
-            if (message is null)
-                break;
-            sent.Add(ToInboxDto(message));
+            var held = await messageSendingService.QueueHeldPartAsync(
+                toCallsign, part, await messageSendingService.NextMessageIdAsync(db, ct), path, ct);
+            sent.Add(ToInboxDto(held));
         }
-
-        if (sent.Count == 0)
-            return StatusCode(503, "No active Direwolf connection.");
 
         return Ok(sent);
     }
@@ -223,7 +221,7 @@ public class MessagesController(
 
         var sent = await messageSendingService.RetransmitAsync(msg, ct);
         if (!sent)
-            return StatusCode(503, "No active Direwolf connection.");
+            return StatusCode(503, "No transmitter available (modem TX off or external TNC down).");
 
         msg.RetryCount++;
         msg.LastSentAt = DateTime.UtcNow;

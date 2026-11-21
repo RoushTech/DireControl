@@ -157,4 +157,29 @@ public sealed class AfskRoundTripTests
         for (var i = 0; i < frames.Count; i++)
             Assert.That(decoded[i], Is.EqualTo(frames[i]).AsCollection, $"frame {i} mismatch");
     }
+
+    [Test]
+    public void OversizedFrame_600Bytes_RoundTrips()
+    {
+        var frame = Ax25Encoder.EncodeUiFrame("N4WR-1", new string('x', 580), "WIDE1-1");
+        Assert.That(frame.Length, Is.GreaterThanOrEqualTo(600));
+
+        var decoded = Demodulate(new AfskModulator(SampleRate).GenerateFrame(frame));
+
+        Assert.That(decoded, Has.Count.EqualTo(1));
+        Assert.That(decoded[0], Is.EqualTo(frame).AsCollection);
+    }
+
+    [Test]
+    public void Decode_StampsLastFrameAt()
+    {
+        var receiver = AfskReceiver.CreateStandard(SampleRate);
+        Assert.That(receiver.LastFrameAt, Is.Null);
+
+        var before = DateTime.UtcNow;
+        receiver.ProcessSamples(new AfskModulator(SampleRate).GenerateFrame(MakeTestFrame(1)));
+        receiver.ProcessSamples(new float[SampleRate / 10]);
+
+        Assert.That(receiver.LastFrameAt, Is.Not.Null.And.GreaterThanOrEqualTo(before));
+    }
 }

@@ -19,15 +19,42 @@ public sealed class MessageSendingService(
     IOptions<DireControlOptions> options,
     ILogger<MessageSendingService> logger)
 {
-    private static int _msgIdCounter;
+    private readonly SemaphoreSlim _idSeedLock = new(1, 1);
+    private int _lastMsgNumber = -1;
 
     /// <summary>
-    /// Generates a unique 1–5 character alphanumeric APRS message ID.
+    /// Generates the next 1–5 character APRS message ID.  The sequence resumes
+    /// from the newest outbound message in the database on first use, so a
+    /// restart never reissues IDs that peers may still be deduplicating on.
     /// </summary>
-    public static string GenerateMessageId()
+    public async Task<string> NextMessageIdAsync(DireControlContext db, CancellationToken ct = default)
     {
-        var n = Interlocked.Increment(ref _msgIdCounter) % 99999;
-        return (n == 0 ? 1 : n).ToString();
+        if (Volatile.Read(ref _lastMsgNumber) < 0)
+        {
+            await _idSeedLock.WaitAsync(ct);
+            try
+            {
+                if (_lastMsgNumber < 0)
+                {
+                    var lastId = await MessageHandlingLogic.FindLastOutboundMessageIdAsync(
+                        db, options.Value.OurCallsign, ct);
+                    Volatile.Write(ref _lastMsgNumber, MessageHandlingLogic.NextMessageNumber(lastId) - 1);
+                }
+            }
+            finally
+            {
+                _idSeedLock.Release();
+            }
+        }
+
+        int last, next;
+        do
+        {
+            last = Volatile.Read(ref _lastMsgNumber);
+            next = MessageHandlingLogic.NextMessageNumber(last.ToString());
+        }
+        while (Interlocked.CompareExchange(ref _lastMsgNumber, next, last) != last);
+        return next.ToString();
     }
 
     /// <summary>
@@ -87,6 +114,43 @@ public sealed class MessageSendingService(
 
         storeDb.Messages.Add(message);
         await storeDb.SaveChangesAsync(ct);
+        return message;
+    }
+
+    /// <summary>
+    /// Stores a later part of a multi-part message without transmitting it.
+    /// Held parts are Pending with no <see cref="Message.LastSentAt"/>;
+    /// <see cref="MessageRetryService"/> sends each one only once every earlier
+    /// message to the same peer has been acknowledged or has failed, so the
+    /// parts go out — and retry — one at a time instead of as a burst.
+    /// </summary>
+    public async Task<Message> QueueHeldPartAsync(
+        string toCallsign,
+        string body,
+        string messageId,
+        string path,
+        CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+
+        var message = new Message
+        {
+            FromCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant(),
+            ToCallsign = toCallsign.Trim().ToUpperInvariant(),
+            Body = body,
+            MessageId = messageId,
+            PathUsed = string.IsNullOrWhiteSpace(path) ? null : path.Trim(),
+            ReceivedAt = DateTime.UtcNow,
+            IsRead = true,
+            MaxRetries = options.Value.MaxRetryAttempts,
+            RetryState = RetryState.Pending,
+            LastSentAt = null,
+            NextRetryAt = null,
+        };
+
+        db.Messages.Add(message);
+        await db.SaveChangesAsync(ct);
         return message;
     }
 

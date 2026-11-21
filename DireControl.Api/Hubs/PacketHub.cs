@@ -6,7 +6,6 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string PacketReceivedMethod = "packetReceived";
     public const string StationsStaleMethod = "stationsStale";
     public const string MessageReceivedMethod = "messageReceived";
-    public const string MessageAckedMethod = "messageAcked";
     public const string MessageUpdatedMethod = "messageUpdated";
     public const string AlertReceivedMethod = "alertReceived";
     public const string OwnBeaconReceivedMethod = "ownBeaconReceived";
@@ -14,7 +13,6 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string MessageRetriedMethod = "messageRetried";
     public const string MessageAcknowledgedMethod = "messageAcknowledged";
     public const string MessageFailedMethod = "messageFailed";
-    public const string AprsIsStateChangedMethod = "aprsIsStateChanged";
     public const string ModemStatusChangedMethod = "modemStatusChanged";
     public const string ModemSpectrumMethod = "modemSpectrum";
     public const string ModemLevelMethod = "modemLevel";

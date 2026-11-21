@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useToastStore } from '@/stores/toastStore'
+import { formatTimeOfDay } from '@/utils/time'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTheme, useDisplay } from 'vuetify'
 import L from 'leaflet'
@@ -181,6 +183,7 @@ const PANEL_MAX_WIDTH_RATIO = 0.5
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795]
 const DEFAULT_ZOOM = 5
 
+const toastStore = useToastStore()
 const selectionStore = useStationSelectionStore()
 const radiosStore = useRadiosStore()
 const theme = useTheme()
@@ -258,9 +261,6 @@ const _storedProvider = localStorage.getItem(STORAGE_KEY) ?? DEFAULT_LIGHT_PROVI
 const selectedProvider = ref(
   providerIsAvailable(_storedProvider) ? _storedProvider : keyFreeFallbackFor(_storedProvider),
 )
-
-const providerFallbackSnackbar = ref(false)
-const providerFallbackMessage = ref('')
 
 // Station load failure — shown persistently so a dead backend doesn't just look
 // like an empty map. Cleared on the next successful load.
@@ -419,8 +419,7 @@ function invalidateSizeAfterTransition() {
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleTimeString()
+  return formatTimeOfDay(iso)
 }
 
 function popupContent(callsign: string, lastSeen: string, lat: number, lon: number): string {
@@ -900,7 +899,7 @@ async function fetchRadarManifest(): Promise<WeatherManifest | null> {
 function buildRadarLayer(framePath: string, manifest: WeatherManifest): L.TileLayer {
   const stripped = framePath.startsWith('/') ? framePath.slice(1) : framePath
   const zoomOffset = manifest.tileSize === 512 ? -1 : 0
-  return L.tileLayer(`/api/weather/radar/tile/{z}/{x}/{y}/${stripped}`, {
+  return L.tileLayer(`/api/v0/weather/radar/tile/{z}/{x}/{y}/${stripped}`, {
     opacity: 0,
     tileSize: manifest.tileSize,
     zoomOffset,
@@ -912,10 +911,7 @@ function buildRadarLayer(framePath: string, manifest: WeatherManifest): L.TileLa
 }
 
 function formatRadarTime(unixSeconds: number): string {
-  return (
-    new Date(unixSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
-    ' local'
-  )
+  return formatTimeOfDay(unixSeconds * 1000, { seconds: false })
 }
 
 function showRadarFrame(idx: number) {
@@ -1165,7 +1161,7 @@ function enableWind() {
   if (!map.value) return
   disableWind()
   ensureWeatherPane()
-  windLayer = L.tileLayer('/api/weather/wind/tile/{z}/{x}/{y}', {
+  windLayer = L.tileLayer('/api/v0/weather/wind/tile/{z}/{x}/{y}', {
     opacity: windOpacity.value,
     zIndex: 11,
     pane: 'weatherPane',
@@ -2214,8 +2210,12 @@ function setTileProvider(key: string) {
   // provider with the same light/dark theme so the map doesn't flip appearance.
   if (provider.requiresApiKey && provider.apiKeyParam && !apiKeys.value[provider.apiKeyParam]) {
     const fallback = keyFreeFallbackFor(key)
-    providerFallbackMessage.value = `${provider.name} requires an API key — add it in Settings. Fallen back to ${TILE_PROVIDERS[fallback]!.name}.`
-    providerFallbackSnackbar.value = true
+    toastStore.toast(
+      `${provider.name} requires an API key. Fallen back to ${TILE_PROVIDERS[fallback]!.name}.`,
+      'warning',
+      8000,
+      { label: 'Add key', to: '/settings?tab=map' },
+    )
     key = fallback
   }
 
@@ -2731,11 +2731,15 @@ defineExpose({ TILE_PROVIDERS })
         closable
         @click:close="showNoHomePositionBanner = false"
       >
-        Home position not yet known — range rings will appear once your station is heard
+        Home position not set — set it in Settings to show range rings and distances.
+        <template #append>
+          <v-btn size="small" variant="text" to="/settings?tab=station">Set home</v-btn>
+        </template>
       </v-alert>
 
       <!-- Sidebar toggle (desktop only) -->
       <v-btn
+        aria-label="Toggle station list"
         v-if="!mobile"
         class="sidebar-toggle-btn"
         :icon="showSidebar ? 'mdi-chevron-left' : 'mdi-chevron-right'"
@@ -2886,18 +2890,21 @@ defineExpose({ TILE_PROVIDERS })
             <div v-if="showRadar && radarFrameCount > 0" class="layer-sub">
               <div class="d-flex align-center ga-1">
                 <v-btn
+                  aria-label="Previous radar frame"
                   icon="mdi-skip-previous"
                   size="x-small"
                   variant="text"
                   @click="stepRadarFrame(-1)"
                 />
                 <v-btn
+                  aria-label="Play or pause radar"
                   :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
                   size="x-small"
                   variant="text"
                   @click="radarPlaying ? pauseRadar() : playRadar()"
                 />
                 <v-btn
+                  aria-label="Next radar frame"
                   icon="mdi-skip-next"
                   size="x-small"
                   variant="text"
@@ -3067,6 +3074,7 @@ defineExpose({ TILE_PROVIDERS })
             @update:selected="setTileProvider"
           />
           <v-btn
+            aria-label="Back to home station"
             v-if="homePosition"
             color="grey-darken-1"
             size="small"
@@ -3076,6 +3084,7 @@ defineExpose({ TILE_PROVIDERS })
             @click="centerOnHome"
           />
           <v-btn
+            :aria-label="'Open map in new window'"
             color="grey-darken-1"
             size="small"
             variant="elevated"
@@ -3101,6 +3110,11 @@ defineExpose({ TILE_PROVIDERS })
             <!-- Mirrors the alert's own "Pan map to the triggering strike" setting,
                  written straight through so a storm can be handled from the map. -->
             <v-btn
+              :aria-label="
+                lightningAutoPan
+                  ? 'Auto-pan to new alerts: on (saved with the alert settings)'
+                  : 'Auto-pan to new alerts: off (saved with the alert settings)'
+              "
               :color="lightningAutoPan ? 'primary' : 'grey'"
               :loading="autoPanSaving"
               size="x-small"
@@ -3115,6 +3129,7 @@ defineExpose({ TILE_PROVIDERS })
               @click="toggleAutoPan"
             />
             <v-btn
+              aria-label="Clear all alerts"
               size="x-small"
               variant="text"
               icon="mdi-close-box-multiple-outline"
@@ -3154,6 +3169,7 @@ defineExpose({ TILE_PROVIDERS })
       >
         <template #activator="{ props: menuProps }">
           <v-btn
+            aria-label="Layers"
             v-bind="menuProps"
             class="mobile-layer-btn"
             color="surface"
@@ -3256,18 +3272,21 @@ defineExpose({ TILE_PROVIDERS })
           <div v-if="showRadar && radarFrameCount > 0" class="mobile-layer-sub">
             <div class="d-flex align-center ga-1">
               <v-btn
+                aria-label="Previous radar frame"
                 icon="mdi-skip-previous"
                 size="x-small"
                 variant="text"
                 @click.stop="stepRadarFrame(-1)"
               />
               <v-btn
+                aria-label="Play or pause radar"
                 :icon="radarPlaying ? 'mdi-pause' : 'mdi-play'"
                 size="x-small"
                 variant="text"
                 @click.stop="radarPlaying ? pauseRadar() : playRadar()"
               />
               <v-btn
+                aria-label="Next radar frame"
                 icon="mdi-skip-next"
                 size="x-small"
                 variant="text"
@@ -3391,6 +3410,7 @@ defineExpose({ TILE_PROVIDERS })
         Stations
         <v-spacer />
         <v-btn
+          aria-label="Close station list"
           icon="mdi-close"
           size="small"
           variant="text"
@@ -3438,16 +3458,19 @@ defineExpose({ TILE_PROVIDERS })
   </v-bottom-sheet>
 
   <!-- Tile provider fallback notification -->
-  <v-snackbar v-model="providerFallbackSnackbar" :timeout="5000" color="warning" location="bottom">
-    {{ providerFallbackMessage }}
-  </v-snackbar>
 
   <!-- Station load failure — persistent until a load succeeds -->
   <v-snackbar v-model="stationsLoadFailed" :timeout="-1" color="error" location="bottom">
     Couldn't load stations — the map may be empty or out of date.
     <template #actions>
       <v-btn variant="text" @click="loadStations()">Retry</v-btn>
-      <v-btn icon="mdi-close" size="small" variant="text" @click="stationsLoadFailed = false" />
+      <v-btn
+        aria-label="Dismiss"
+        icon="mdi-close"
+        size="small"
+        variant="text"
+        @click="stationsLoadFailed = false"
+      />
     </template>
   </v-snackbar>
 </template>

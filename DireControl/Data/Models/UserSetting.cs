@@ -95,6 +95,12 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>KISS server listen port (8001 is the DireWolf convention).</summary>
     public int KissServerPort { get; set; } = 8010;
 
+    /// <summary>
+    /// KISS server bind address.  KISS has no authentication; 0.0.0.0 keeps the
+    /// historical any-interface behaviour, 127.0.0.1 restricts it to this host.
+    /// </summary>
+    public string KissServerBindAddress { get; set; } = "0.0.0.0";
+
     // ─── Connected-mode AX.25 (LAPB) ─────────────────────────────────────────
 
     /// <summary>Whether inbound AX.25 connections (SABM to our SSIDs) are answered.</summary>

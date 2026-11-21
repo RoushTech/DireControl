@@ -86,11 +86,33 @@ public sealed class Ax25Frame
             out ns, out nr, out pollFinal, out _);
     }
 
+    private static readonly Encoding StrictUtf8 =
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// Decodes an info field to text without losing bytes: strict UTF-8 when the
+    /// bytes are valid UTF-8 (what current clients send, and what the APRS-IS
+    /// side reads and writes, so RF/IS copies compare equal), otherwise Latin-1,
+    /// which maps every byte to one character.  ASCII decodes identically either
+    /// way; the old ASCII decoder turned every high byte into '?'.
+    /// </summary>
+    public static string DecodeInfo(ReadOnlySpan<byte> info)
+    {
+        try
+        {
+            return StrictUtf8.GetString(info);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Encoding.Latin1.GetString(info);
+        }
+    }
+
     /// <summary>
     /// Renders the frame as a TNC2-format string —
     /// <c>SRC&gt;DEST,DIGI1,DIGI2*:info</c> — preserving the H bit on each
-    /// digipeater as a <c>*</c> suffix.  The info field is decoded as ASCII to
-    /// match what the rest of the pipeline stores and parses.
+    /// digipeater as a <c>*</c> suffix.  The info field is decoded with
+    /// <see cref="DecodeInfo"/>.
     /// </summary>
     public string ToTnc2()
     {
@@ -100,7 +122,7 @@ public sealed class Ax25Frame
         foreach (var digi in Path)
             sb.Append(',').Append(digi.ToString());
 
-        sb.Append(':').Append(Encoding.ASCII.GetString(Info));
+        sb.Append(':').Append(DecodeInfo(Info));
         return sb.ToString();
     }
 }

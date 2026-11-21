@@ -21,7 +21,7 @@ const vuetify = createVuetify({
   display: {
     mobileBreakpoint: 768,
   },
-  // Component defaults matching the design mock: 8-10px radii, outlined
+  // Component defaults matching the app's design: 8-10px radii, outlined
   // compact inputs everywhere.
   defaults: {
     VCard: { rounded: 'lg' },
@@ -59,7 +59,7 @@ const vuetify = createVuetify({
       dark: {
         dark: true,
         colors: {
-          // Blue-tinted dark ground from the design mock, not stock #121212.
+          // Blue-tinted dark ground from the app's design, not stock #121212.
           background: '#0e1116',
           surface: '#161b22',
           'surface-light': '#1d242e',

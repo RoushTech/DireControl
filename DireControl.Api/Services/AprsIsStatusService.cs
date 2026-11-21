@@ -1,6 +1,4 @@
-using DireControl.Api.Hubs;
 using DireControl.Enums;
-using Microsoft.AspNetCore.SignalR;
 
 namespace DireControl.Api.Services;
 
@@ -42,8 +40,11 @@ public interface IAprsIsStatusService
 }
 
 /// <inheritdoc/>
+/// <remarks>
+/// State is read by polling <c>GET api/v0/status</c>; nothing subscribed to a
+/// push of it, so none is sent.
+/// </remarks>
 public sealed class AprsIsStatusService(
-    IHubContext<PacketHub> hubContext,
     ILogger<AprsIsStatusService> logger) : IAprsIsStatusService
 {
     private AprsIsConnectionState _state = AprsIsConnectionState.Disabled;
@@ -79,10 +80,6 @@ public sealed class AprsIsStatusService(
         }
 
         logger.LogInformation("APRS-IS state changed to {State} (server={Server})", state, _serverName ?? "(none)");
-
-        _ = hubContext.Clients.All.SendAsync(
-            PacketHub.AprsIsStateChangedMethod,
-            BuildDto());
     }
 
     public void SetActiveFilter(string filter)
@@ -111,28 +108,4 @@ public sealed class AprsIsStatusService(
         _lastError = error;
         _firstDisconnectedAt ??= DateTime.UtcNow;
     }
-
-    internal AprsIsStateDto BuildDto() => new()
-    {
-        State = _state.ToString(),
-        ServerName = _serverName,
-        ActiveFilter = _activeFilter,
-        SessionPacketCount = SessionPacketCount,
-        FirstDisconnectedAt = _firstDisconnectedAt,
-        LastConnectAttemptAt = _lastConnectAttemptAt,
-        FailedAttempts = _failedAttempts,
-        LastError = _lastError,
-    };
-}
-
-public sealed class AprsIsStateDto
-{
-    public required string State { get; init; }
-    public string? ServerName { get; init; }
-    public string ActiveFilter { get; init; } = string.Empty;
-    public long SessionPacketCount { get; init; }
-    public DateTime? FirstDisconnectedAt { get; init; }
-    public DateTime? LastConnectAttemptAt { get; init; }
-    public int FailedAttempts { get; init; }
-    public string? LastError { get; init; }
 }

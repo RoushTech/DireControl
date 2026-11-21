@@ -84,6 +84,7 @@ function removeRing(index: number) {
           @keydown.enter="commitEdit(i)"
         />
         <v-btn
+          aria-label="Remove range ring"
           icon="mdi-close"
           size="x-small"
           variant="text"

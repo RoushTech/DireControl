@@ -100,4 +100,22 @@ public sealed class KissCodecTests
         analyzer.AddSamples(new float[100]);
         Assert.That(analyzer.ComputeSpectrum(), Is.Null);
     }
+
+    [Test]
+    public void Decoder_OversizeFrame_IsDroppedAndResyncs()
+    {
+        var decoder = new KissDecoder();
+        var frames = new List<byte[]>();
+        decoder.FrameReceived += (_, _, payload) => frames.Add(payload);
+
+        // A runaway frame with no closing FEND, far past the cap…
+        decoder.ProcessBytes([KissCodec.Fend, 0x00]);
+        decoder.ProcessBytes(Enumerable.Repeat((byte)0x41, KissDecoder.MaxFrameBytes * 4).ToArray());
+        // …then a well-formed frame must still come through.
+        decoder.ProcessBytes(KissCodec.EncodeDataFrame(0, [0x11, 0x22, 0x33]));
+
+        Assert.That(decoder.OversizeFrames, Is.EqualTo(1));
+        Assert.That(frames, Has.Count.EqualTo(1));
+        Assert.That(frames[0], Is.EqualTo(new byte[] { 0x11, 0x22, 0x33 }).AsCollection);
+    }
 }

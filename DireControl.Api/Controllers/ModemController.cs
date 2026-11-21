@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.IO.Compression;
 using System.Text.Json;
 using DireControl.Api.Controllers.Models;
@@ -16,7 +17,7 @@ namespace DireControl.Api.Controllers;
 [Route("api/v0/modem")]
 public class ModemController(
     SoundModemService modemService,
-    ModemRestartTrigger restartTrigger,
+    [FromKeyedServices(RestartSignals.Modem)] RestartSignal restartTrigger,
     ModemAudioCaptureService captureService,
     LogStreamBroadcaster logStream,
     DireControlContext db) : ControllerBase
@@ -39,11 +40,22 @@ public class ModemController(
         CarrierDetected = s.CarrierDetected,
         CarrierStuck = s.CarrierStuck,
         CsmaTimeouts = s.CsmaTimeouts,
+        IngestDropped = s.IngestDropped,
+        TxError = s.TxError,
+        PttStuck = s.PttStuck,
+        PttWatchdogTrips = s.PttWatchdogTrips,
+        TxDropped = s.TxDropped,
+        TxQueueDepth = s.TxQueueDepth,
+        CaptureOverruns = s.CaptureOverruns,
         DecodedFrames = s.DecodedFrames,
+        LastDecodedAt = s.LastDecodedAt,
+        RunningSince = s.RunningSince,
         InvalidFrames = s.InvalidFrames,
         TxEnabled = s.TxEnabled,
         Transmitting = s.Transmitting,
         TransmittedFrames = s.TransmittedFrames,
+        LastTxAt = s.LastTxAt,
+        CsmaWaitingSince = s.CsmaWaitingSince,
         RigFrequencyHz = s.RigFrequencyHz,
         DecodedByProfile = s.DecodedByProfile,
     };
@@ -320,21 +332,6 @@ public class ModemController(
                 Reason = c.Reason,
             })
             .ToList());
-
-    /// <summary>Downloads one capture so it can be replayed or archived.</summary>
-    [HttpGet("captures/{name}")]
-    public IActionResult GetCapture(string name)
-    {
-        var path = captureService.ResolvePath(name);
-        if (path is null)
-            return NotFound();
-
-        return PhysicalFile(path, "audio/wav", name);
-    }
-
-    [HttpDelete("captures/{name}")]
-    public IActionResult DeleteCapture(string name) =>
-        captureService.Delete(name) ? NoContent() : NotFound();
 
     /// <summary>True when this radio has a running modem producing audio.</summary>
     private bool IsModemRunning(string radioId) =>

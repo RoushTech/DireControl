@@ -15,7 +15,7 @@ namespace DireControl.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.3");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.15");
 
             modelBuilder.Entity("DireControl.Data.Models.Alert", b =>
                 {
@@ -630,6 +630,9 @@ namespace DireControl.Migrations
                     b.Property<int>("TxSlotTimeMs")
                         .HasColumnType("INTEGER");
 
+                    b.Property<double>("TxSpaceBoostDb")
+                        .HasColumnType("REAL");
+
                     b.Property<int>("TxTailMs")
                         .HasColumnType("INTEGER");
 
@@ -1031,6 +1034,10 @@ namespace DireControl.Migrations
                     b.Property<int>("IsToRfRecentHeardMinutes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("KissServerBindAddress")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("KissServerEnabled")
                         .HasColumnType("INTEGER");
 
@@ -1127,6 +1134,7 @@ namespace DireControl.Migrations
                             IsToRfGatingEnabled = false,
                             IsToRfPath = "",
                             IsToRfRecentHeardMinutes = 30,
+                            KissServerBindAddress = "0.0.0.0",
                             KissServerEnabled = false,
                             KissServerPort = 8010,
                             LightningAlertAutoPan = false,

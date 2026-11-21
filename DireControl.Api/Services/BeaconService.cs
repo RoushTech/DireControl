@@ -134,16 +134,12 @@ public sealed class BeaconService(
 
     // ── APRS position info field ───────────────────────────────────────────────
 
-    private static string BuildPositionInfo(double lat, double lon, string symbol, string? comment)
+    internal static string BuildPositionInfo(double lat, double lon, string symbol, string? comment)
     {
-        var latAbs = Math.Abs(lat);
-        var latDeg = (int)latAbs;
-        var latMin = (latAbs - latDeg) * 60.0;
+        var (latDeg, latMin) = SplitDegreesMinutes(lat);
         var latDir = lat >= 0 ? 'N' : 'S';
 
-        var lonAbs = Math.Abs(lon);
-        var lonDeg = (int)lonAbs;
-        var lonMin = (lonAbs - lonDeg) * 60.0;
+        var (lonDeg, lonMin) = SplitDegreesMinutes(lon);
         var lonDir = lon >= 0 ? 'E' : 'W';
 
         var symbolTable = symbol.Length >= 1 ? symbol[0] : '/';
@@ -151,6 +147,18 @@ public sealed class BeaconService(
 
         var commentPart = string.IsNullOrEmpty(comment) ? string.Empty : comment;
 
-        return $"!{latDeg:D2}{latMin:00.00}{latDir}{symbolTable}{lonDeg:D3}{lonMin:00.00}{lonDir}{symbolCode}{commentPart}";
+        return $"!{latDeg:D2}{latMin / 100:D2}.{latMin % 100:D2}{latDir}{symbolTable}"
+            + $"{lonDeg:D3}{lonMin / 100:D2}.{lonMin % 100:D2}{lonDir}{symbolCode}{commentPart}";
+    }
+
+    /// <summary>
+    /// Whole degrees and minutes ×100 for an APRS ddmm.mm field.  Rounds the
+    /// total in hundredths of a minute <em>before</em> splitting, so 45.99999°
+    /// becomes 46°00.00' rather than the invalid 45°60.00'.
+    /// </summary>
+    private static (int Degrees, int HundredthsOfMinute) SplitDegreesMinutes(double value)
+    {
+        var total = (long)Math.Round(Math.Abs(value) * 6000.0, MidpointRounding.AwayFromZero);
+        return ((int)(total / 6000), (int)(total % 6000));
     }
 }

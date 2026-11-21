@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatTimeOfDay } from '@/utils/time'
 import { ref, watch } from 'vue'
 import { getBeaconHistory } from '@/api/radiosApi'
 import type { OwnBeaconHistoryItemDto } from '@/types/radio'
@@ -34,11 +35,7 @@ watch(
 )
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
+  return formatTimeOfDay(iso)
 }
 
 function formatCoords(lat: number | null, lon: number | null): string {
@@ -79,7 +76,13 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
         <v-icon class="mr-2" size="20">mdi-radio-tower</v-icon>
         Beacon History — {{ radioName }}
         <v-spacer />
-        <v-btn icon="mdi-close" variant="text" size="small" @click="open = false" />
+        <v-btn
+          aria-label="Close"
+          icon="mdi-close"
+          variant="text"
+          size="small"
+          @click="open = false"
+        />
       </v-card-title>
 
       <v-divider />

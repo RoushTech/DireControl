@@ -70,6 +70,7 @@ function selectSymbol(table: string, code: string) {
         style="flex: 1"
       />
       <v-btn
+        aria-label="Browse symbols"
         icon="mdi-grid"
         size="small"
         variant="tonal"
@@ -84,7 +85,13 @@ function selectSymbol(table: string, code: string) {
         <v-card-title class="d-flex align-center">
           <span>Select APRS Symbol</span>
           <v-spacer />
-          <v-btn icon="mdi-close" variant="text" size="small" @click="pickerOpen = false" />
+          <v-btn
+            aria-label="Close symbol picker"
+            icon="mdi-close"
+            variant="text"
+            size="small"
+            @click="pickerOpen = false"
+          />
         </v-card-title>
         <v-divider />
 

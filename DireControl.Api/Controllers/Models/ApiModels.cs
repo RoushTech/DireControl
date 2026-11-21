@@ -6,6 +6,10 @@ namespace DireControl.Api.Controllers.Models;
 public sealed class AboutDto
 {
     public required string Version { get; init; }
+
+    /// <summary>Source commit the build came from, when known.</summary>
+    public string? Commit { get; init; }
+
     public DateTime ServerTime { get; init; }
 }
 
@@ -136,6 +140,7 @@ public sealed class SettingsDto
     public bool DigipeaterFillInOnly { get; init; }
     public bool KissServerEnabled { get; init; }
     public int KissServerPort { get; init; }
+    public required string KissServerBindAddress { get; init; }
     public bool RfToIsGatingEnabled { get; init; }
     public bool IsToRfGatingEnabled { get; init; }
     public required string IsToRfPath { get; init; }
@@ -219,11 +224,22 @@ public sealed class ModemStatusDto
     public bool CarrierDetected { get; init; }
     public bool CarrierStuck { get; init; }
     public long CsmaTimeouts { get; init; }
+    public long IngestDropped { get; init; }
+    public string? TxError { get; init; }
+    public bool PttStuck { get; init; }
+    public long PttWatchdogTrips { get; init; }
+    public long TxDropped { get; init; }
+    public int TxQueueDepth { get; init; }
+    public long CaptureOverruns { get; init; }
     public long DecodedFrames { get; init; }
+    public DateTime? LastDecodedAt { get; init; }
+    public DateTime? RunningSince { get; init; }
     public long InvalidFrames { get; init; }
     public bool TxEnabled { get; init; }
     public bool Transmitting { get; init; }
     public long TransmittedFrames { get; init; }
+    public DateTime? LastTxAt { get; init; }
+    public DateTime? CsmaWaitingSince { get; init; }
     public long? RigFrequencyHz { get; init; }
     public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
 }
@@ -242,6 +258,7 @@ public sealed class UpdateRfServicesRequest
     public bool DigipeaterFillInOnly { get; init; }
     public bool KissServerEnabled { get; init; }
     public int KissServerPort { get; init; } = 8010;
+    public string? KissServerBindAddress { get; init; }
     public bool RfToIsGatingEnabled { get; init; }
     public bool IsToRfGatingEnabled { get; init; }
     public string IsToRfPath { get; init; } = string.Empty;
@@ -422,12 +439,6 @@ public sealed class UpdateOutboundPathRequest
     public string OutboundPath { get; init; } = string.Empty;
 }
 
-public sealed class MessageAckDto
-{
-    public int Id { get; init; }
-    public required string MessageId { get; init; }
-}
-
 public sealed class MessageRetriedDto
 {
     public int Id { get; init; }
@@ -544,7 +555,6 @@ public sealed class StatisticsDto
     public int UniqueStationsThisWeek { get; init; }
     public int UniqueStationsAllTime { get; init; }
     public int[] PacketsPerHour { get; init; } = new int[24];
-    public IReadOnlyList<CallsignCountDto> BusiestDigipeaters { get; init; } = [];
     public IReadOnlyList<CallsignCountDto> BusiestStations { get; init; } = [];
     public IReadOnlyList<RecentlyHeardDto> RecentlyFirstHeard { get; init; } = [];
     public IReadOnlyList<string> GridSquares { get; init; } = [];
@@ -566,8 +576,8 @@ public sealed class RecentlyHeardDto
 
 public sealed class StatusDto
 {
-    public bool DirewolfConnected { get; init; }
-    public bool ApiOnline { get; init; } = true;
+    /// <summary>The external KISS TCP TNC client (Direwolf etc.) is connected.</summary>
+    public bool ExternalTncConnected { get; init; }
     public long DigipeatedFrames { get; init; }
     public int KissServerClients { get; init; }
     public long RfToIsGatedLines { get; init; }
@@ -580,7 +590,12 @@ public sealed class StatusDto
     public int AprsIsFailedAttempts { get; init; }
     public string? AprsIsLastError { get; init; }
     public ModemState ModemState { get; init; }
-    public bool ModemCarrierDetected { get; init; }
+
+    /// <summary>Newest RF decode across running modems — RF health, not APRS-IS traffic.</summary>
+    public DateTime? ModemLastDecodedAt { get; init; }
+
+    /// <summary>Earliest start among running modems, to judge "silent since".</summary>
+    public DateTime? ModemRunningSince { get; init; }
 }
 
 public sealed class SignalPointDto
@@ -636,6 +651,7 @@ public sealed class RadioModemConfigDto
     public string ModemPlaybackDevice { get; init; } = "default";
     public bool TxEnabled { get; init; }
     public int TxAudioLevelPct { get; init; } = 80;
+    public double TxSpaceBoostDb { get; init; }
     public int TxDelayMs { get; init; } = 300;
     public int TxTailMs { get; init; } = 50;
     public int TxPersistence { get; init; } = 63;

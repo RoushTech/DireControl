@@ -1,3 +1,5 @@
+using DireControl.PathParsing;
+using Microsoft.Extensions.DependencyInjection;
 using DireControl.Api.Services.Ax25;
 using DireControl.Api.Services.Terminal;
 using DireControl.Data;
@@ -14,7 +16,7 @@ public sealed class PmsHostService(
     IPmsSessionServer handler,
     IServiceScopeFactory scopeFactory,
     IOptions<DireControlOptions> options,
-    PacketServicesRestartTrigger restartTrigger,
+    [FromKeyedServices(RestartSignals.PacketServices)] RestartSignal restartTrigger,
     ILogger<PmsHostService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -31,7 +33,7 @@ public sealed class PmsHostService(
                 var (enabled, ssid) = await ReadConfigAsync(stoppingToken);
                 if (enabled)
                 {
-                    var baseCall = StripSsid(options.Value.OurCallsign);
+                    var baseCall = CallsignMatcher.BaseCallsign(options.Value.OurCallsign);
                     var pmsCallsign = $"{baseCall}-{ssid}";
                     if (sessionManager.RegisterListener(pmsCallsign, handler))
                     {
@@ -64,11 +66,5 @@ public sealed class PmsHostService(
         var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
         var setting = await db.UserSettings.FindAsync([1], ct);
         return (setting?.PmsEnabled ?? false, setting?.PmsSsid ?? 1);
-    }
-
-    private static string StripSsid(string callsign)
-    {
-        var dash = callsign.IndexOf('-');
-        return (dash > 0 ? callsign[..dash] : callsign).ToUpperInvariant();
     }
 }

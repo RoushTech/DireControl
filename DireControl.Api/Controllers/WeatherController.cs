@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/weather")]
+[Route("api/v0/weather")]
 public class WeatherController(
     RainViewerRadarProvider rainViewerProvider,
     IemRadarProvider iemProvider,
@@ -32,7 +32,7 @@ public class WeatherController(
 
     // ── Radar ───────────────────────────────────────────────────────────────
 
-    // Route: /api/weather/radar/tile/{z}/{x}/{y}/{**framePath}
+    // Route: /api/v0/weather/radar/tile/{z}/{x}/{y}/{**framePath}
     // framePath captures the provider frame identifier (e.g. "v2/radar/1620046800" for
     // RainViewer, or "nexrad-n0q-900913" for IEM) with the leading slash already stripped.
     [HttpGet("radar/manifest")]

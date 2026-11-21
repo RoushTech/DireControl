@@ -64,7 +64,7 @@ const heardViaLabel: Partial<Record<HeardVia, string>> = {
   [HeardVia.Internet]: 'APRS-IS',
 }
 
-// Mock rows: one muted subtitle line ("Mobile · via digi"), not a chip salad.
+// Rows: one muted subtitle line ("Mobile · via digi"), not a chip salad.
 function rowSubtitle(s: StationDto): string {
   const parts = [stationTypeLabel[s.stationType] ?? 'Unknown']
   const via = heardViaLabel[s.heardVia]
@@ -245,7 +245,7 @@ const virtualItems = computed<VirtualItem[]>(() => {
             class="station-icon flex-shrink-0"
             :class="{ 'stale-icon': item.stale }"
           />
-          <!-- Mock row: symbol · callsign / muted subtitle ····· age -->
+          <!-- Row: symbol · callsign / muted subtitle ····· age -->
           <div class="station-info">
             <span class="station-row-callsign" :class="{ 'text-medium-emphasis': item.stale }">{{
               item.station.callsign

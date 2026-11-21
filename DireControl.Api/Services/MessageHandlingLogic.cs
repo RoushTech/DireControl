@@ -48,28 +48,34 @@ internal static partial class MessageHandlingLogic
         return (match.Groups["body"].Value, match.Groups["id"].Value, ack.Length > 0 ? ack : null);
     }
 
-    /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="body"/> is an APRS ACK packet.
-    /// Sets <paramref name="originalMsgId"/> to the message number echoed by the remote
-    /// station (the text after "ack", minus any reply-ack <c>}AA</c> tail).
-    /// </summary>
-    internal static bool TryParseAck(string body, out string originalMsgId)
-    {
-        if (body.StartsWith("ack", StringComparison.OrdinalIgnoreCase) && body.Length > 3)
-        {
-            var id = body[3..].Trim();
-            var brace = id.IndexOf('}');
-            if (brace >= 0)
-                id = id[..brace];
-            if (id.Length > 0)
-            {
-                originalMsgId = id;
-                return true;
-            }
-        }
+    // APRS101 §14: an ACK or REJ is "ack"/"rej" (lowercase) followed by the
+    // 1–5 character ID being answered, optionally with an APRS 1.1 reply-ack
+    // "}AA" tail.  Anything looser swallows real messages ("Ack, got it").
+    [GeneratedRegex(@"^(?<kind>ack|rej)(?<id>[A-Za-z0-9]{1,5})(\}[A-Za-z0-9]{0,5})?$")]
+    private static partial Regex AckOrRejectBody();
 
+    /// <summary>
+    /// Returns <see langword="true"/> when the message is an APRS ACK or REJ.
+    /// A message that carries its own ID is never one — ACKs and REJs are
+    /// unnumbered — so <paramref name="messageId"/> must be empty.  Sets
+    /// <paramref name="originalMsgId"/> to the ID being answered (minus any
+    /// reply-ack <c>}AA</c> tail) and <paramref name="isReject"/> for a REJ.
+    /// </summary>
+    internal static bool TryParseAckOrReject(
+        string body, string messageId, out string originalMsgId, out bool isReject)
+    {
         originalMsgId = string.Empty;
-        return false;
+        isReject = false;
+        if (!string.IsNullOrEmpty(messageId))
+            return false;
+
+        var match = AckOrRejectBody().Match(body);
+        if (!match.Success)
+            return false;
+
+        originalMsgId = match.Groups["id"].Value;
+        isReject = match.Groups["kind"].Value == "rej";
+        return true;
     }
 
     /// <summary>
@@ -265,13 +271,8 @@ internal static partial class MessageHandlingLogic
         var ucOur = ourCallsign.ToUpperInvariant();
         var ucFrom = fromCallsign.ToUpperInvariant();
 
-        var sentMsg = await db.Messages.FirstOrDefaultAsync(
-            m => m.MessageId == originalMsgId
-              && m.FromCallsign == ucOur
-              && m.ToCallsign == ucFrom,
-            ct);
-
-        if (sentMsg is null || sentMsg.AckSent)
+        var sentMsg = await FindAnswerableSentMessageAsync(ucFrom, originalMsgId, db, ucOur, ct);
+        if (sentMsg is null)
             return null;
 
         sentMsg.AckSent = true;
@@ -279,5 +280,74 @@ internal static partial class MessageHandlingLogic
         sentMsg.NextRetryAt = null;
         await db.SaveChangesAsync(ct);
         return sentMsg.Id;
+    }
+
+    /// <summary>
+    /// Finds the outbound message an incoming ACK or REJ answers.  Message IDs
+    /// are short and get reused, so several rows can share an ID: only
+    /// unacknowledged rows qualify, in-flight (Pending/Retrying) ones first,
+    /// newest first — an old acknowledged row must never shadow the message
+    /// that is actually waiting for this answer.
+    /// </summary>
+    private static Task<Message?> FindAnswerableSentMessageAsync(
+        string ucFrom, string originalMsgId, DireControlContext db, string ucOur, CancellationToken ct) =>
+        db.Messages
+            .Where(m => m.MessageId == originalMsgId
+                     && m.FromCallsign == ucOur
+                     && m.ToCallsign == ucFrom
+                     && !m.AckSent
+                     && m.RetryState != RetryState.Acknowledged
+                     && m.RetryState != RetryState.Cancelled)
+            .OrderBy(m => m.RetryState == RetryState.Pending || m.RetryState == RetryState.Retrying ? 0 : 1)
+            .ThenByDescending(m => m.ReceivedAt)
+            .FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// Applies an incoming REJ: the remote station refused our message, so stop
+    /// retrying it and mark it failed.
+    /// </summary>
+    /// <returns>The rejected message, or <see langword="null"/> if none matched.</returns>
+    internal static async Task<Message?> TryApplyRejectAsync(
+        string fromCallsign,
+        string originalMsgId,
+        DireControlContext db,
+        string ourCallsign,
+        CancellationToken ct)
+    {
+        var sentMsg = await FindAnswerableSentMessageAsync(
+            fromCallsign.ToUpperInvariant(), originalMsgId, db, ourCallsign.ToUpperInvariant(), ct);
+        if (sentMsg is null || sentMsg.RetryState == RetryState.Failed)
+            return null;
+
+        sentMsg.RetryState = RetryState.Failed;
+        sentMsg.NextRetryAt = null;
+        await db.SaveChangesAsync(ct);
+        return sentMsg;
+    }
+
+    /// <summary>
+    /// The next outbound message ID after <paramref name="lastId"/>: numeric,
+    /// 1–99999, wrapping.  A non-numeric or missing last ID starts at 1.
+    /// </summary>
+    internal static int NextMessageNumber(string? lastId) =>
+        int.TryParse(lastId, out var n) && n is > 0 and < 99999 ? n + 1 : 1;
+
+    /// <summary>
+    /// The ID of the most recent outbound message we sent, so the counter can
+    /// resume after a restart instead of reusing "1", "2"… — which peers
+    /// dedupe against and which shadowed old rows in ACK matching.
+    /// </summary>
+    internal static async Task<string?> FindLastOutboundMessageIdAsync(
+        DireControlContext db, string ourCallsign, CancellationToken ct)
+    {
+        var ucOur = ourCallsign.Trim().ToUpperInvariant();
+        var recent = await db.Messages
+            .Where(m => m.FromCallsign == ucOur && m.MessageId != "")
+            .OrderByDescending(m => m.ReceivedAt)
+            .ThenByDescending(m => m.Id)
+            .Select(m => m.MessageId)
+            .Take(20)
+            .ToListAsync(ct);
+        return recent.FirstOrDefault(id => int.TryParse(id, out _));
     }
 }

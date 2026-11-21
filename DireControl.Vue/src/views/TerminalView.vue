@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useDisplay } from 'vuetify'
 import { useTerminalStore } from '@/stores/terminalStore'
-import { TerminalSessionStates, type TerminalSessionDto } from '@/api/terminalApi'
+import {
+  TerminalSessionStates,
+  terminalSessionStateLabels,
+  type TerminalSessionDto,
+} from '@/api/terminalApi'
 import { apiErrorDetail } from '@/api/axios'
 import TerminalPane, { type TerminalPhosphorTheme } from '@/components/terminal/TerminalPane.vue'
 import TerminalConnectForm from '@/components/terminal/TerminalConnectForm.vue'
@@ -12,6 +17,9 @@ import TerminalTranscriptBrowser from '@/components/terminal/TerminalTranscriptB
 defineOptions({ name: 'TerminalView' })
 
 const store = useTerminalStore()
+// Below sm the toolbar folds into an overflow menu and telemetry becomes a
+// bottom sheet, so the terminal itself keeps the width.
+const { smAndDown } = useDisplay()
 
 // 'new' is the trailing "+" tab; anything else is a session id.
 const activeTab = ref<string>('new')
@@ -76,15 +84,58 @@ async function onOpenPms() {
 
 const closing = ref<Record<string, boolean>>({})
 
-async function closeTab(session: TerminalSessionDto) {
+function isEnded(session: TerminalSessionDto): boolean {
+  return (
+    session.state === TerminalSessionStates.Disconnected ||
+    session.state === TerminalSessionStates.Error
+  )
+}
+
+function stateBannerType(session: TerminalSessionDto): 'success' | 'info' | 'warning' | 'error' {
+  switch (session.state) {
+    case TerminalSessionStates.Connected:
+      return 'success'
+    case TerminalSessionStates.Error:
+      return 'error'
+    case TerminalSessionStates.Disconnected:
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+async function doClose(session: TerminalSessionDto, abort: boolean) {
   closing.value[session.id] = true
   try {
-    await store.close(session.id, false)
+    await store.close(session.id, abort)
   } catch {
     /* refreshSessions on the next sessionsChanged shows the truth */
   } finally {
     delete closing.value[session.id]
   }
+}
+
+// Disconnecting a live link is confirmed — the tab "x" is easy to hit.
+const confirmCloseFor = ref<TerminalSessionDto | null>(null)
+
+function closeTab(session: TerminalSessionDto) {
+  if (session.state === TerminalSessionStates.Connected) confirmCloseFor.value = session
+  else void doClose(session, false)
+}
+
+async function confirmClose(abort: boolean) {
+  const session = confirmCloseFor.value
+  confirmCloseFor.value = null
+  if (session) await doClose(session, abort)
+}
+
+async function reconnect(session: TerminalSessionDto) {
+  await onOpen({
+    channel: session.channel,
+    remoteCallsign: session.remoteCallsign,
+    localCallsign: session.localCallsign,
+    digiPath: session.digiPath ?? undefined,
+  })
 }
 
 // ── View preferences ─────────────────────────────────────────────────────────
@@ -138,13 +189,19 @@ onMounted(async () => {
         <v-tab v-for="session in store.sessions" :key="session.id" :value="session.id">
           <v-icon size="10" :color="stateDotColor(session)" class="mr-1">mdi-circle</v-icon>
           <span class="terminal-tab-label">{{ session.remoteCallsign }}</span>
-          <!-- v-tab renders a <button>; a nested v-btn would be invalid HTML -->
+          <!-- v-tab renders a <button>, so a nested v-btn would be invalid HTML;
+               a focusable role="button" icon keeps it keyboard-reachable. -->
           <v-icon
             size="14"
             class="ml-1 terminal-tab-close"
             :class="{ 'terminal-tab-close--busy': closing[session.id] }"
+            role="button"
+            tabindex="0"
+            :aria-label="`Close session with ${session.remoteCallsign}`"
             title="Close session"
             @click.stop.prevent="closeTab(session)"
+            @keydown.enter.stop.prevent="closeTab(session)"
+            @keydown.space.stop.prevent="closeTab(session)"
           >
             {{ closing[session.id] ? 'mdi-loading' : 'mdi-close' }}
           </v-icon>
@@ -165,46 +222,91 @@ onMounted(async () => {
         >
           {{ store.hubState }}
         </v-chip>
-        <v-select
-          v-model="phosphorTheme"
-          :items="themeItems"
-          density="compact"
-          variant="outlined"
-          hide-details
-          class="terminal-theme-select"
-        />
-        <v-btn
-          size="small"
-          variant="text"
-          :color="localEcho ? 'primary' : undefined"
-          title="Local echo"
-          @click="localEcho = !localEcho"
-        >
-          Echo
-        </v-btn>
-        <v-btn
-          icon="mdi-gauge"
-          size="small"
-          variant="text"
-          :color="telemetryOpen ? 'primary' : undefined"
-          title="Link telemetry"
-          :disabled="!activeSession"
-          @click="telemetryOpen = !telemetryOpen"
-        />
-        <v-btn
-          icon="mdi-history"
-          size="small"
-          variant="text"
-          title="Transcripts"
-          @click="transcriptsOpen = true"
-        />
-        <v-btn
-          icon="mdi-cog-outline"
-          size="small"
-          variant="text"
-          title="Packet settings"
-          to="/settings?tab=packet"
-        />
+        <v-menu v-if="smAndDown" location="bottom end">
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              icon="mdi-dots-vertical"
+              size="small"
+              variant="text"
+              aria-label="Terminal options"
+            />
+          </template>
+          <v-list density="compact">
+            <v-list-subheader>Theme</v-list-subheader>
+            <v-list-item
+              v-for="t in themeItems"
+              :key="t.value"
+              :title="t.title"
+              :active="phosphorTheme === t.value"
+              @click="phosphorTheme = t.value as TerminalPhosphorTheme"
+            />
+            <v-divider />
+            <v-list-item
+              :title="localEcho ? 'Local echo: on' : 'Local echo: off'"
+              prepend-icon="mdi-keyboard-outline"
+              @click="localEcho = !localEcho"
+            />
+            <v-list-item
+              title="Link telemetry"
+              prepend-icon="mdi-gauge"
+              :disabled="!activeSession"
+              @click="telemetryOpen = !telemetryOpen"
+            />
+            <v-list-item
+              title="Transcripts"
+              prepend-icon="mdi-history"
+              @click="transcriptsOpen = true"
+            />
+            <v-list-item
+              title="Packet settings"
+              prepend-icon="mdi-cog-outline"
+              to="/settings?tab=packet"
+            />
+          </v-list>
+        </v-menu>
+        <template v-else>
+          <v-select
+            v-model="phosphorTheme"
+            :items="themeItems"
+            density="compact"
+            variant="outlined"
+            hide-details
+            class="terminal-theme-select"
+          />
+          <v-btn
+            size="small"
+            variant="text"
+            :color="localEcho ? 'primary' : undefined"
+            title="Local echo"
+            @click="localEcho = !localEcho"
+          >
+            Echo
+          </v-btn>
+          <v-btn
+            icon="mdi-gauge"
+            size="small"
+            variant="text"
+            :color="telemetryOpen ? 'primary' : undefined"
+            title="Link telemetry"
+            :disabled="!activeSession"
+            @click="telemetryOpen = !telemetryOpen"
+          />
+          <v-btn
+            icon="mdi-history"
+            size="small"
+            variant="text"
+            title="Transcripts"
+            @click="transcriptsOpen = true"
+          />
+          <v-btn
+            icon="mdi-cog-outline"
+            size="small"
+            variant="text"
+            title="Packet settings"
+            to="/settings?tab=packet"
+          />
+        </template>
       </div>
     </div>
 
@@ -224,16 +326,59 @@ onMounted(async () => {
     <!-- Session panes — all kept alive (v-show) so scrollback survives tab switches -->
     <template v-for="session in store.sessions" :key="session.id">
       <div v-show="activeTab === session.id" class="terminal-session">
+        <v-banner
+          :color="stateBannerType(session)"
+          density="compact"
+          lines="one"
+          class="terminal-state-banner"
+        >
+          <v-banner-text>
+            <strong>{{ terminalSessionStateLabels[session.state] ?? 'Unknown' }}</strong>
+            · {{ session.localCallsign }} ↔ {{ session.remoteCallsign }}
+            <template v-if="session.digiPath"> via {{ session.digiPath }}</template>
+            <template v-if="isEnded(session) && session.endReason">
+              — {{ session.endReason }}
+            </template>
+          </v-banner-text>
+          <template #actions>
+            <template v-if="!isEnded(session)">
+              <v-btn
+                size="small"
+                variant="text"
+                :loading="closing[session.id]"
+                @click="closeTab(session)"
+              >
+                Disconnect
+              </v-btn>
+              <v-btn
+                size="small"
+                variant="text"
+                color="error"
+                title="Drop the link immediately without a DISC handshake"
+                @click="doClose(session, true)"
+              >
+                Abort
+              </v-btn>
+            </template>
+            <template v-else>
+              <v-btn size="small" variant="text" :loading="connecting" @click="reconnect(session)">
+                Reconnect
+              </v-btn>
+              <v-btn size="small" variant="text" @click="doClose(session, false)">Close tab</v-btn>
+            </template>
+          </template>
+        </v-banner>
         <div class="terminal-session-main">
           <div class="terminal-pane-wrap">
             <TerminalPane
               :session-id="session.id"
               :local-echo="localEcho"
               :phosphor-theme="phosphorTheme"
+              :read-only="isEnded(session)"
             />
           </div>
           <TerminalTelemetryPanel
-            v-if="telemetryOpen"
+            v-if="telemetryOpen && !smAndDown"
             :session="session"
             :stats="store.stats[session.id] ?? null"
           />
@@ -244,6 +389,42 @@ onMounted(async () => {
     </template>
 
     <TerminalTranscriptBrowser v-model="transcriptsOpen" />
+
+    <v-bottom-sheet
+      v-if="smAndDown && activeSession"
+      :model-value="telemetryOpen"
+      @update:model-value="(v) => (telemetryOpen = v)"
+    >
+      <v-card>
+        <TerminalTelemetryPanel
+          :session="activeSession"
+          :stats="store.stats[activeSession.id] ?? null"
+          class="telemetry-sheet"
+        />
+      </v-card>
+    </v-bottom-sheet>
+
+    <v-dialog
+      :model-value="confirmCloseFor !== null"
+      max-width="420"
+      @update:model-value="confirmCloseFor = null"
+    >
+      <v-card>
+        <v-card-title class="text-subtitle-1">
+          Disconnect from {{ confirmCloseFor?.remoteCallsign }}?
+        </v-card-title>
+        <v-card-text>
+          The link is up. Disconnect sends DISC and waits for the remote to confirm; Abort drops it
+          at once.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="confirmCloseFor = null">Keep connected</v-btn>
+          <v-btn variant="text" color="error" @click="confirmClose(true)">Abort</v-btn>
+          <v-btn variant="tonal" color="primary" @click="confirmClose(false)">Disconnect</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -259,6 +440,12 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   flex-shrink: 0;
+  min-width: 0;
+}
+
+.telemetry-sheet {
+  width: 100% !important;
+  border-left: none !important;
 }
 
 .terminal-tabs {

@@ -77,6 +77,18 @@ public sealed class RfFrameIngestService(
                 TaskContinuationOptions.OnlyOnFaulted);
         }
 
+        // Only APRS — UI frames with no layer 3 (PID 0xF0) — goes any further.
+        // I/S/U frames from other stations' connected sessions, NET/ROM (0xCF)
+        // and other layer-3 traffic would otherwise be stored as packets and
+        // uploaded to APRS-IS under our callsign.  Dire Wolf applies the same rule.
+        if (!IsAprsFrame(frame))
+        {
+            logger.LogTrace(
+                "Not APRS ({Type}, PID {Pid}); not stored or gated.",
+                frame.FrameType, frame.Pid is { } pid ? $"0x{pid:X2}" : "none");
+            return null;
+        }
+
         var rawPacket = frame.ToTnc2();
 
         // APRSSharp is still used only to validate the frame and extract the sender.
@@ -110,7 +122,12 @@ public sealed class RfFrameIngestService(
 
         // RF→IS gating: every RF-heard APRS packet (including our own beacons)
         // is queued for APRS-IS with the qAR construct appended.
-        if (setting is { AprsIsEnabled: true, RfToIsGatingEnabled: true } &&
+        // Our own digipeats come back through here as own transmissions; the
+        // original was already gated when we heard it, so only frames we
+        // originated ourselves are gated on loopback.
+        var isOwnDigipeat = isOwnTransmission && !IsFromUs(frame);
+        if (!isOwnDigipeat &&
+            setting is { AprsIsEnabled: true, RfToIsGatingEnabled: true } &&
             IgateLogic.BuildRfToIsLine(rawPacket, options.Value.OurCallsign) is { } gateLine)
         {
             aprsIsTxQueue.Enqueue(gateLine);
@@ -198,4 +215,17 @@ public sealed class RfFrameIngestService(
         logger.LogDebug("Stored RF packet from {Callsign}: {RawPacket}", callsign, rawPacket);
         return packet.Id;
     }
+
+    /// <summary>An APRS frame is a UI frame with PID 0xF0 (no layer 3).</summary>
+    internal static bool IsAprsFrame(Ax25Frame frame) =>
+        frame.FrameType == Ax25FrameType.UI && frame.Pid == Ax25Frame.NoLayer3Pid;
+
+    /// <summary>
+    /// True when the frame's source is our station (any SSID): PMS, beacons and
+    /// messages all transmit as our base callsign; a digipeat keeps its sender.
+    /// </summary>
+    private bool IsFromUs(Ax25Frame frame) =>
+        frame.Source.Callsign.Equals(
+            Ax25Address.Parse(options.Value.OurCallsign.Trim().ToUpperInvariant()).Callsign,
+            StringComparison.OrdinalIgnoreCase);
 }

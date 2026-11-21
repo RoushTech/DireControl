@@ -12,11 +12,6 @@ export async function getRadios(): Promise<RadioDto[]> {
   return data
 }
 
-export async function getRadio(id: string): Promise<RadioDto> {
-  const { data } = await http.get<RadioDto>(`/api/v0/radios/${encodeURIComponent(id)}`)
-  return data
-}
-
 export async function createRadio(request: CreateRadioRequest): Promise<RadioDto> {
   const { data } = await http.post<RadioDto>('/api/v0/radios', request)
   return data

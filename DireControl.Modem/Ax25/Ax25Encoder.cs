@@ -51,7 +51,9 @@ public static class Ax25Encoder
         frame.Add(Ax25Frame.UiControl);
         frame.Add(Ax25Frame.NoLayer3Pid);
 
-        frame.AddRange(Encoding.ASCII.GetBytes(aprsInfo));
+        // UTF-8, matching how received info fields are decoded (Ax25Frame.DecodeInfo)
+        // and how APRS-IS carries text; pure ASCII is byte-identical either way.
+        frame.AddRange(Encoding.UTF8.GetBytes(aprsInfo));
 
         return [.. frame];
     }
@@ -91,8 +93,12 @@ public static class Ax25Encoder
     /// </summary>
     public static byte[] EncodeAddress(Ax25Address address, bool isLast, bool topBit)
     {
-        // Pad or truncate to exactly 6 characters.
-        var padded = address.Callsign.ToUpperInvariant().PadRight(6)[..6];
+        // AX.25 carries at most 6 characters and a 4-bit SSID.  Truncating or
+        // masking silently put a different station's address on the air.
+        if (!Ax25Address.IsEncodable(address))
+            throw new ArgumentException(
+                $"\"{address}\" is not a valid AX.25 address (1–6 characters, SSID 0–15).", nameof(address));
+        var padded = address.Callsign.ToUpperInvariant().PadRight(6);
 
         var bytes = new byte[7];
         for (var i = 0; i < 6; i++)
@@ -102,7 +108,7 @@ public static class Ax25Encoder
         bytes[6] = (byte)(
             (topBit ? 0x80 : 0x00)
             | 0x60
-            | ((address.Ssid & 0x0F) << 1)
+            | (address.Ssid << 1)
             | (isLast ? 0x01 : 0x00));
 
         return bytes;
