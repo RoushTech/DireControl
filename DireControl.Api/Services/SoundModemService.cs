@@ -26,6 +26,17 @@ public sealed record ModemStatusSnapshot
     public string? ErrorMessage { get; init; }
     public float AudioLevel { get; init; }
     public bool CarrierDetected { get; init; }
+
+    /// <summary>
+    /// Carrier detect has been held for <see cref="ModemOptions.CarrierStuckSeconds"/>
+    /// or more without a single preamble — noise or squelch, not a transmission.
+    /// CSMA ignores it while this is set.
+    /// </summary>
+    public bool CarrierStuck { get; init; }
+
+    /// <summary>Keyups abandoned because the channel never cleared within the CSMA cap.</summary>
+    public long CsmaTimeouts { get; init; }
+
     public long DecodedFrames { get; init; }
     public long InvalidFrames { get; init; }
     public bool TxEnabled { get; init; }
@@ -57,6 +68,7 @@ public sealed class SoundModemService(
     ModemRestartTrigger restartTrigger,
     RadioAudioBroker audioBroker,
     ModemAudioCaptureService captureService,
+    Microsoft.Extensions.Options.IOptions<ModemOptions> modemOptions,
     ILoggerFactory loggerFactory,
     ILogger<SoundModemService> logger) : BackgroundService
 {
@@ -111,7 +123,9 @@ public sealed class SoundModemService(
         public Channel<TxItem>? PriorityTxChannel;
         public Channel<ToneRequest>? ToneChannel;
         public volatile bool Transmitting;
+        public volatile bool CarrierStuck;
         public long TransmittedFrames;
+        public long CsmaTimeouts;
         public long RigFrequencyHz = -1;
 
         // TX audio level (gain), adjustable live from the UI without a modem
@@ -135,6 +149,8 @@ public sealed class SoundModemService(
             {
                 AudioLevel = receiver.PeakAudioLevel,
                 CarrierDetected = receiver.CarrierDetected,
+                CarrierStuck = CarrierStuck,
+                CsmaTimeouts = Interlocked.Read(ref CsmaTimeouts),
                 DecodedFrames = receiver.ValidFrameCount,
                 InvalidFrames = receiver.Demodulators.Sum(d => d.InvalidFrameCount),
                 TxEnabled = TxChannel is not null,
@@ -479,6 +495,7 @@ public sealed class SoundModemService(
         var burstStartSample = 0L;
         var burstPeakLevel = 0f;
         var samplesSeen = 0L;
+        var stuckSamples = (long)Math.Max(1, modemOptions.Value.CarrierStuckSeconds) * SampleRate;
 
         while (!ct.IsCancellationRequested)
         {
@@ -512,9 +529,23 @@ public sealed class SoundModemService(
                 // across the burst — by the time carrier drops it reflects the
                 // silence afterwards, not the transmission.
                 burstPeakLevel = MathF.Max(burstPeakLevel, receiver.PeakAudioLevel);
+
+                // Carrier held for seconds with no preamble at all is not a
+                // transmission — stop letting it hold off CSMA.
+                if (!instance.CarrierStuck
+                    && samplesSeen - burstStartSample >= stuckSamples
+                    && receiver.Demodulators.Sum(d => d.PreambleCount) == preamblesAtCarrierStart)
+                {
+                    instance.CarrierStuck = true;
+                    logger.LogWarning(
+                        "{Radio} carrier detect held {Seconds} s with no preamble — treating it as stuck "
+                        + "(check squelch and audio level); CSMA will ignore it until it clears.",
+                        instance.Radio.FullCallsign, stuckSamples / SampleRate);
+                }
             }
             else if (wasCarrier)
             {
+                instance.CarrierStuck = false;
                 var decoded = receiver.ValidFrameCount - validAtCarrierStart;
                 var failed = receiver.Demodulators.Sum(d => d.InvalidFrameCount)
                     - invalidAtCarrierStart;
@@ -593,6 +624,49 @@ public sealed class SoundModemService(
         return items;
     }
 
+    /// <summary>Outcome of one CSMA wait.</summary>
+    internal enum CsmaResult
+    {
+        Unknown = 0,
+        Clear = 1,
+        TimedOut = 2,
+    }
+
+    /// <summary>
+    /// p-persistence CSMA: wait for <paramref name="busy"/> to clear, then
+    /// transmit with probability (P+1)/256 per slot, re-checking carrier each
+    /// slot.  Gives up once the channel has stayed busy past
+    /// <paramref name="maxWait"/> — persistence slots on a clear channel never
+    /// time out, only a channel that will not clear.
+    /// </summary>
+    internal static async Task<CsmaResult> WaitForClearChannelAsync(
+        Func<bool> busy,
+        int persistence,
+        int slotMs,
+        TimeSpan maxWait,
+        Random rng,
+        TimeProvider timeProvider,
+        CancellationToken ct)
+    {
+        var start = timeProvider.GetTimestamp();
+        var poll = TimeSpan.FromMilliseconds(10);
+        var slot = TimeSpan.FromMilliseconds(Math.Max(1, slotMs));
+
+        while (true)
+        {
+            while (busy())
+            {
+                if (timeProvider.GetElapsedTime(start) >= maxWait)
+                    return CsmaResult.TimedOut;
+                await Task.Delay(poll, timeProvider, ct);
+            }
+
+            if (rng.Next(256) <= persistence)
+                return CsmaResult.Clear;
+            await Task.Delay(slot, timeProvider, ct);
+        }
+    }
+
     private async Task TransmitLoopAsync(
         ModemInstance instance,
         AfskReceiver receiver,
@@ -611,6 +685,8 @@ public sealed class SoundModemService(
         var tailFlags = modulator.FlagsForMilliseconds(radio.TxTailMs);
         var slotTimeMs = Math.Max(10, radio.TxSlotTimeMs);
         var persistence = Math.Clamp(radio.TxPersistence, 0, 255);
+        var csmaMaxWait = TimeSpan.FromSeconds(Math.Max(1, modemOptions.Value.CsmaMaxWaitSeconds));
+        var csmaTimeoutAction = modemOptions.Value.CsmaTimeoutAction;
 
         while (!ct.IsCancellationRequested)
         {
@@ -628,22 +704,35 @@ public sealed class SoundModemService(
                 continue;
             }
 
-            // p-persistence CSMA: wait for a clear channel, then transmit with
-            // probability (P+1)/256 per slot, re-checking carrier each slot.
-            while (true)
-            {
-                while (receiver.CarrierDetected)
-                    await Task.Delay(10, ct);
-                if (Random.Shared.Next(256) <= persistence)
-                    break;
-                await Task.Delay(slotTimeMs, ct);
-            }
+            var csma = await WaitForClearChannelAsync(
+                () => receiver.CarrierDetected && !instance.CarrierStuck,
+                persistence, slotTimeMs, csmaMaxWait, Random.Shared, TimeProvider.System, ct);
 
             // One keyup: session lane first, then a bounded slice of the
             // normal lane (including frames that arrived during CSMA).
             var items = DrainForKeyup(priorityTxChannel.Reader, txChannel.Reader, MaxNormalFramesPerKeyup);
             if (items.Count == 0)
                 continue;
+
+            if (csma == CsmaResult.TimedOut)
+            {
+                Interlocked.Increment(ref instance.CsmaTimeouts);
+                if (csmaTimeoutAction != CsmaTimeoutAction.TransmitAnyway)
+                {
+                    // Dire Wolf: "Waited too long for clear channel."  The
+                    // frames count as never sent, so LAPB T1 still runs.
+                    logger.LogWarning(
+                        "{Radio} waited {Seconds} s for a clear channel; discarding {Count} frame(s).",
+                        radio.FullCallsign, csmaMaxWait.TotalSeconds, items.Count);
+                    foreach (var item in items)
+                        item.Completion?.TrySetCanceled();
+                    continue;
+                }
+
+                logger.LogWarning(
+                    "{Radio} waited {Seconds} s for a clear channel; transmitting anyway.",
+                    radio.FullCallsign, csmaMaxWait.TotalSeconds);
+            }
 
             var frames = items.Select(i => i.Frame).ToList();
             var amplitude = instance.TxAudioLevelPct / 100f;

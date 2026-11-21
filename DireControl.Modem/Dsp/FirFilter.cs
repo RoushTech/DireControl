@@ -97,8 +97,16 @@ public sealed class FirFilter
     }
 
     /// <summary>
-    /// Windowed quadrature (sine or cosine) taps at <paramref name="toneHz"/> —
-    /// one arm of a tone correlator / matched filter.
+    /// Rectangular-window quadrature (sine or cosine) taps at
+    /// <paramref name="toneHz"/> — one arm of a tone correlator / matched filter.
+    /// <para>
+    /// The window is deliberately rectangular: a rectangular window of length T
+    /// has spectral nulls every 1/T, so at exactly 1.2 symbols (1 ms) the mark
+    /// arm nulls the 2200 Hz space tone and vice versa.  A Blackman taper moved
+    /// the first null out to ~3 kHz and left only ~4.7 dB of isolation, after
+    /// which the per-tone AGC normalised the leakage up and any twist past
+    /// ~2 dB stopped every decode.
+    /// </para>
     /// </summary>
     public static float[] QuadratureTaps(int sampleRate, float toneHz, int tapCount, bool cosine)
     {
@@ -108,8 +116,7 @@ public sealed class FirFilter
         for (var i = 0; i < tapCount; i++)
         {
             var angle = 2 * Math.PI * toneHz * (i - center) / sampleRate;
-            var w = Blackman(i, tapCount);
-            taps[i] = (float)((cosine ? Math.Cos(angle) : Math.Sin(angle)) * w / tapCount);
+            taps[i] = (float)((cosine ? Math.Cos(angle) : Math.Sin(angle)) / tapCount);
         }
 
         return taps;

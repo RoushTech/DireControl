@@ -33,7 +33,7 @@ public sealed record DemodProfile
 
     /// <summary>
     /// The standard profile: bandpass pre-filter, ~1.2-symbol correlator
-    /// window, per-tone AGC, and a gentle post-filter.  Starting point modelled
+    /// window (rectangular), per-tone AGC, and a gentle post-filter.  Starting point modelled
     /// on well-known AFSK demodulator practice; tuned via the round-trip tests.
     /// </summary>
     public static DemodProfile Standard(int sampleRate)
@@ -44,7 +44,10 @@ public sealed record DemodProfile
             Name = "A",
             SampleRate = sampleRate,
             PreFilterTaps = (int)(samplesPerSymbol * 1.6f) | 1,
-            CorrelatorTaps = (int)(samplesPerSymbol * 1.2f) | 1,
+            // Exactly 1.2 symbols (48 taps at 48 kHz) — the rectangular
+            // correlator window only nulls the opposite tone at this length,
+            // so it must not be rounded up to an odd count.
+            CorrelatorTaps = (int)MathF.Round(samplesPerSymbol * 1.2f),
             PostFilterTaps = (int)(samplesPerSymbol * 1.0f) | 1,
         };
     }

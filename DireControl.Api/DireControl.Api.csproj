@@ -17,8 +17,8 @@
     <PackageReference Include="RoushTech.APRSsharp.AprsIsClient" Version="0.5.1-rc.3" />
     <PackageReference Include="RoushTech.APRSsharp.AprsParser" Version="0.5.1-rc.3" />
     <PackageReference Include="RoushTech.APRSsharp.KissTnc" Version="0.5.1-rc.3" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.3">
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.15" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

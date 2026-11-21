@@ -1377,14 +1377,13 @@ onUnmounted(() => {
         </v-card-title>
         <v-card-text>
           <template v-if="pmsConfirm.action === 'kill'">
-            Kill message #{{ pmsConfirm.msg.id }} to <strong>{{ pmsConfirm.msg.toCallsign }}</strong
-            >? Killed messages are hidden from connecting stations and purged after the retention
-            period.
+            Kill message #{{ pmsConfirm.msg.id }} to
+            <strong>{{ pmsConfirm.msg.toCallsign }}</strong>? Killed messages are hidden from
+            connecting stations and purged after the retention period.
           </template>
           <template v-else>
             Permanently delete message #{{ pmsConfirm.msg.id }} to
-            <strong>{{ pmsConfirm.msg.toCallsign }}</strong
-            >? This cannot be undone.
+            <strong>{{ pmsConfirm.msg.toCallsign }}</strong>? This cannot be undone.
           </template>
         </v-card-text>
         <v-card-actions>

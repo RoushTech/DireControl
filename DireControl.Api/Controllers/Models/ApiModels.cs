@@ -217,6 +217,8 @@ public sealed class ModemStatusDto
     public string? ErrorMessage { get; init; }
     public float AudioLevel { get; init; }
     public bool CarrierDetected { get; init; }
+    public bool CarrierStuck { get; init; }
+    public long CsmaTimeouts { get; init; }
     public long DecodedFrames { get; init; }
     public long InvalidFrames { get; init; }
     public bool TxEnabled { get; init; }

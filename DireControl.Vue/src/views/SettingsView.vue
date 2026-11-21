@@ -1914,8 +1914,7 @@ async function confirmDelete() {
             </div>
 
             <div class="text-body-2 text-medium-emphasis mb-1">
-              Passcode (auto-computed: <strong>{{ aprsIsPasscodeComputed }}</strong
-              >)
+              Passcode (auto-computed: <strong>{{ aprsIsPasscodeComputed }}</strong>)
             </div>
             <v-text-field
               v-model.number="aprsIsPasscodeOverride"
@@ -2655,8 +2654,7 @@ async function confirmDelete() {
             <div class="text-body-2 mb-3">
               Re-derives positions, weather, telemetry, and resolved paths from the stored raw
               packets — useful after a parser fix. Runs in the background; parser version
-              <strong>{{ reprocessStatus?.currentParserVersion ?? '…' }}</strong
-              >.
+              <strong>{{ reprocessStatus?.currentParserVersion ?? '…' }}</strong>.
             </div>
 
             <template v-if="reprocessStatus?.isRunning">

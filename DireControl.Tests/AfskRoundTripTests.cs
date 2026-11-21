@@ -115,6 +115,8 @@ public sealed class AfskRoundTripTests
 
     [TestCase(1195f, 2192f, Description = "Sender tones ~0.4% low")]
     [TestCase(1206f, 2211f, Description = "Sender tones ~0.5% high")]
+    [TestCase(1200f, 2100f, Description = "Off-frequency space tone, 100 Hz low")]
+    [TestCase(1200f, 2150f, Description = "Off-frequency space tone, 50 Hz low")]
     public void ToneFrequencySkew_StillDecodes(float mark, float space)
     {
         var frame = MakeTestFrame(7);

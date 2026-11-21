@@ -30,6 +30,13 @@ public sealed class HdlcDeframer
     /// <summary>True after an opening flag until the frame ends or aborts.</summary>
     public bool InFrame => _inFrame;
 
+    /// <summary>
+    /// Consecutive flags immediately preceding the current position — 1 for a
+    /// lone flag (including a closing flag after frame content).  Carrier
+    /// detect arms on a run, since a single flag turns up in noise constantly.
+    /// </summary>
+    public int CurrentFlagRun => _flagRun;
+
     /// <summary>Total frames emitted with a valid FCS.</summary>
     public long ValidFrameCount { get; private set; }
 

@@ -107,7 +107,9 @@ const radioOptions = computed(() => [
 ])
 
 const asOfLabel = computed(() =>
-  loadedAt.value === null ? '' : `as of ${timeAgo(new Date(loadedAt.value).toISOString(), now.value)}`,
+  loadedAt.value === null
+    ? ''
+    : `as of ${timeAgo(new Date(loadedAt.value).toISOString(), now.value)}`,
 )
 
 // ---- Fetch ----
@@ -119,11 +121,7 @@ async function load() {
     const [summaryResult, dailyResult, stationResult, statusResult] = await Promise.all([
       getRfHeardSummary(),
       getRfHeardDaily(range.value, channel.value ?? undefined),
-      getRfHeardStations(
-        channel.value ?? undefined,
-        500,
-        heardWithin.value || undefined,
-      ),
+      getRfHeardStations(channel.value ?? undefined, 500, heardWithin.value || undefined),
       getRfHeardStatus(),
     ])
     summary.value = summaryResult
@@ -308,17 +306,11 @@ onMounted(load)
       <div class="d-flex align-center ga-3 flex-wrap">
         <span>
           Classifying stored packets — {{ backfillPercent }}% done,
-          {{ status.packetsRemaining.toLocaleString() }} to go. Counts below cover only what
-          has been classified so far and will keep growing; the daily trend appears once this
-          finishes.
+          {{ status.packetsRemaining.toLocaleString() }} to go. Counts below cover only what has
+          been classified so far and will keep growing; the daily trend appears once this finishes.
         </span>
       </div>
-      <v-progress-linear
-        :model-value="backfillPercent"
-        height="4"
-        rounded
-        class="mt-2"
-      />
+      <v-progress-linear :model-value="backfillPercent" height="4" rounded class="mt-2" />
     </v-alert>
 
     <!-- Per-radio summary -->
@@ -361,8 +353,8 @@ onMounted(load)
       </v-col>
       <v-col v-if="summary.length === 0 && !loading" cols="12">
         <v-alert type="info" variant="tonal" density="compact">
-          Nothing heard directly on RF yet. Reception is rolled up every few minutes — if this
-          is a fresh install, give it a moment.
+          Nothing heard directly on RF yet. Reception is rolled up every few minutes — if this is a
+          fresh install, give it a moment.
         </v-alert>
       </v-col>
     </v-row>

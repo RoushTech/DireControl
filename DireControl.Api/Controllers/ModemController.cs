@@ -37,6 +37,8 @@ public class ModemController(
         ErrorMessage = s.ErrorMessage,
         AudioLevel = s.AudioLevel,
         CarrierDetected = s.CarrierDetected,
+        CarrierStuck = s.CarrierStuck,
+        CsmaTimeouts = s.CsmaTimeouts,
         DecodedFrames = s.DecodedFrames,
         InvalidFrames = s.InvalidFrames,
         TxEnabled = s.TxEnabled,

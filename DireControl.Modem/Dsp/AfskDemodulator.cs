@@ -21,10 +21,10 @@ public sealed class AfskDemodulator
     private readonly HdlcDeframer _deframer = new();
 
     private readonly int _dcdHoldSamples;
-    private readonly int _dcdFlagPairWindowSamples;
     private long _sampleIndex;
-    private long _prevFlagSampleIndex = long.MinValue;
     private long _dcdArmedSampleIndex = long.MinValue;
+    private bool _frameQualified;
+    private bool _lastFrameValid;
 
     /// <summary>Raised with the AX.25 frame bytes (FCS stripped) on each valid decode.</summary>
     public event Action<byte[]>? FrameDemodulated;
@@ -53,18 +53,42 @@ public sealed class AfskDemodulator
 
         // DCD holds for half a second after arming.
         _dcdHoldSamples = profile.SampleRate / 2;
-        // Random noise demodulates into lone 0x7E patterns surprisingly often, so a
-        // single flag must not arm DCD (it made "Carrier: detected" show on a dead
-        // band). A real transmission opens with a preamble of back-to-back flags, so
-        // arm only when two flags land within three flag-widths (24 bit times).
-        _dcdFlagPairWindowSamples = (int)(profile.SampleRate * 24 / profile.Baud);
-        _deframer.FrameReceived += frame => FrameDemodulated?.Invoke(frame);
-        _deframer.FlagDetected += () =>
+        _deframer.FrameReceived += frame =>
         {
-            if (_sampleIndex - _prevFlagSampleIndex <= _dcdFlagPairWindowSamples)
-                _dcdArmedSampleIndex = _sampleIndex;
-            _prevFlagSampleIndex = _sampleIndex;
+            _lastFrameValid = true;
+            FrameDemodulated?.Invoke(frame);
         };
+        _deframer.FlagDetected += OnFlag;
+    }
+
+    /// <summary>
+    /// Consecutive flags that arm DCD.  Random bits produce a 0x7E roughly
+    /// 4–5 times a second and a second flag lands within a few octets often
+    /// enough that a two-flag rule held DCD ~20% of the time on pure noise,
+    /// stalling CSMA.  Three back-to-back flags (2^-16 per noise flag) costs
+    /// ~13 ms of acquisition against a 300 ms TXDelay preamble.
+    /// </summary>
+    internal const int DcdArmFlagRun = 3;
+
+    private void OnFlag()
+    {
+        // A frame opened behind a real preamble — or immediately following a
+        // CRC-valid frame of the same transmission — is "qualified": DCD stays
+        // armed for as long as the deframer remains inside it, so carrier does
+        // not drop mid-frame on long packets once the preamble's hold expires.
+        // A lone noise flag never qualifies.
+        var followsValidFrame = _lastFrameValid && _frameQualified;
+        _lastFrameValid = false;
+
+        if (_deframer.CurrentFlagRun >= DcdArmFlagRun || followsValidFrame)
+        {
+            _frameQualified = true;
+            _dcdArmedSampleIndex = _sampleIndex;
+        }
+        else
+        {
+            _frameQualified = false;
+        }
     }
 
     /// <summary>Valid frames decoded by this demodulator.</summary>
@@ -80,8 +104,10 @@ public sealed class AfskDemodulator
     public int LongestFlagRun => _deframer.LongestFlagRun;
 
     /// <summary>
-    /// Data-carrier detect: true while consecutive HDLC flags (a real preamble,
-    /// not a lone noise-decoded flag) have been seen recently. The sentinel check
+    /// Data-carrier detect: true while a run of consecutive HDLC flags (a real
+    /// preamble, not a lone noise-decoded flag) has been seen recently, and for
+    /// as long as the deframer stays inside the frame that preamble opened.
+    /// The sentinel check
     /// matters: subtracting long.MinValue wraps negative, which made DCD read
     /// "detected" from startup until the first flag ever arrived.
     /// </summary>
@@ -110,6 +136,16 @@ public sealed class AfskDemodulator
             {
                 _deframer.ProcessBit(_nrzi.Decode(level));
                 _pll.Locked = _deframer.InFrame;
+
+                // Hold DCD through a qualified frame; an abort or runaway
+                // (InFrame dropping) ends the qualification.
+                if (_frameQualified)
+                {
+                    if (_deframer.InFrame)
+                        _dcdArmedSampleIndex = _sampleIndex;
+                    else
+                        _frameQualified = false;
+                }
             }
 
             _sampleIndex++;
@@ -127,7 +163,8 @@ public sealed class AfskDemodulator
         _pll.Reset();
         _nrzi.Reset();
         _deframer.Reset();
-        _prevFlagSampleIndex = long.MinValue;
         _dcdArmedSampleIndex = long.MinValue;
+        _frameQualified = false;
+        _lastFrameValid = false;
     }
 }

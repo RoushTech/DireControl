@@ -26,6 +26,7 @@ services
     .Configure<DireControlOptions>(config.GetSection(DireControlOptions.Section))
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
     .Configure<AudioCaptureOptions>(config.GetSection(AudioCaptureOptions.Section))
+    .Configure<ModemOptions>(config.GetSection(ModemOptions.Section))
     .AddOpenApi()
     .AddDbContext<DireControlContext>(options =>
         options.UseSqlite(config.GetConnectionString("Default") ?? "Data Source=direcontrol.db"))

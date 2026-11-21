@@ -35,6 +35,8 @@ export interface ModemStatusDto {
   errorMessage: string | null
   audioLevel: number
   carrierDetected: boolean
+  carrierStuck: boolean
+  csmaTimeouts: number
   decodedFrames: number
   invalidFrames: number
   txEnabled: boolean
