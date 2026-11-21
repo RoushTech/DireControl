@@ -167,7 +167,7 @@ public sealed class RfFrameIngestService(
             // radio appears "deaf" whenever the internet copy arrives first.
             await hubContext.Clients.All.SendAsync(
                 Hubs.PacketHub.PacketSourceUpgradedMethod,
-                new { Id = existingAprsIs.Id, Source = PacketSource.Rf },
+                new { Id = existingAprsIs.Id, Source = PacketSource.Rf, Callsign = callsign },
                 ct);
 
             logger.LogDebug(

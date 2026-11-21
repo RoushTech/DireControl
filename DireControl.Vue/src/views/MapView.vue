@@ -29,11 +29,18 @@ import {
   type WeatherManifest,
 } from '@/api/weatherApi'
 import { HeardVia, StationType, type StationDto, type SettingsDto } from '@/types/station'
-import type { PacketBroadcastDto, ResolvedPathEntry, TrackPointDto } from '@/types/packet'
+import {
+  PacketSource,
+  type PacketBroadcastDto,
+  type ResolvedPathEntry,
+  type TrackPointDto,
+} from '@/types/packet'
 import type { TriggeringStrike } from '@/types/alert'
 import type { TileProviderConfig } from '@/types/map'
 import { createAprsIcon, parseAprsSymbol } from '@/utils/aprsIcon'
 import { estimatePosition } from '@/utils/estimatedPosition'
+import { serverNow } from '@/utils/serverTime'
+import { matchesSourceFilter, type StationSourceFilter } from '@/utils/stationSource'
 import { useUnits } from '@/composables/useUnits'
 import { useMapPrefs } from '@/composables/useMapPrefs'
 import TileProviderSwitcher from '@/components/TileProviderSwitcher.vue'
@@ -197,6 +204,7 @@ const {
   trackMinutes,
   estPos: showGhostMarkers,
   stale: showStaleStations,
+  stationSource,
   zones: showOverlays,
   heatmap: showHeatmap,
   coverage: showCoverage,
@@ -215,8 +223,9 @@ const LAYER_PANEL_COLLAPSED_KEY = 'mapPrefs.layerPanelCollapsed'
 const layerPanelCollapsed = ref(localStorage.getItem(LAYER_PANEL_COLLAPSED_KEY) === 'true')
 watch(layerPanelCollapsed, (v) => localStorage.setItem(LAYER_PANEL_COLLAPSED_KEY, String(v)))
 
-/** Back to defaults: tracks + estimated positions on, everything else off. */
+/** Back to defaults: tracks + estimated positions on, every source, everything else off. */
 function resetLayers() {
+  stationSource.value = 'all'
   if (!showTracks.value) toggleTracks()
   if (!showGhostMarkers.value) toggleGhostMarkers()
   if (showStaleStations.value) toggleStaleStations()
@@ -437,6 +446,86 @@ function isRfStation(station: StationDto): boolean {
   )
 }
 
+// ─── Source filter (RF / APRS-IS / both) ──────────────────────────────────────
+// Separate from isRfStation above: that asks how the latest packets arrived, this
+// asks whether the radio heard the station at all inside the expiry window, so a
+// fringe station does not blink out each time one beacon only arrives by internet.
+const SOURCE_FILTER_OPTIONS: { label: string; value: StationSourceFilter; title: string }[] = [
+  { label: 'Both', value: 'all', title: 'Stations heard on the radio or over APRS-IS' },
+  { label: 'RF', value: 'rf', title: 'Stations heard on the radio' },
+  { label: 'IS', value: 'is', title: 'Stations heard only over APRS-IS' },
+]
+
+function expiryWindowMs(): number {
+  return (settingsCache?.stationExpiryTimeoutMinutes ?? 120) * 60_000
+}
+
+/** The selected station is always shown, so selecting one never points at an empty map. */
+function stationShown(station: StationDto, stale = false): boolean {
+  if (station.callsign === selectionStore.selectedCallsign) return true
+  return matchesSourceFilter(stationSource.value, station, expiryWindowMs(), serverNow(), stale)
+}
+
+/** Stations the cache has not caught up with yet are shown until it does. */
+function callsignShown(callsign: string): boolean {
+  const station = stationCache.get(callsign)
+  return !station || stationShown(station)
+}
+
+/** Best guess for a station we know only from one live packet. */
+function packetSourceShown(source: PacketSource): boolean {
+  if (stationSource.value === 'all') return true
+  return (source !== PacketSource.AprsIs) === (stationSource.value === 'rf')
+}
+
+function setOnMap(layer: L.Layer, on: boolean) {
+  if (!map.value) return
+  if (!on) layer.remove()
+  else if (!map.value.hasLayer(layer)) layer.addTo(map.value)
+}
+
+/** Shows or hides one active station's marker, track, ghost and path to match the filter. */
+function syncStationVisibility(callsign: string) {
+  const station = stationCache.get(callsign)
+  if (!station) return
+  const shown = stationShown(station)
+  const marker = markers.get(callsign)
+  if (marker) setOnMap(marker, shown)
+  const track = trackLayers.get(callsign)
+  if (track) setOnMap(track, shown && showTracks.value)
+  if (!shown) {
+    removeGhostLayer(callsign)
+    removePath(callsign)
+  }
+}
+
+function syncStaleMarkers() {
+  for (const s of staleStationCache.values()) {
+    const shown =
+      showStaleStations.value && s.lastLat != null && s.lastLon != null && stationShown(s, true)
+    const marker = staleMarkers.get(s.callsign)
+    if (shown && !marker) {
+      addStaleMarker(s)
+    } else if (!shown && marker) {
+      marker.remove()
+      staleMarkers.delete(s.callsign)
+    }
+  }
+}
+
+/** Re-evaluates every station against the source filter. */
+function applyStationFilter() {
+  if (!map.value) return
+  for (const callsign of stationCache.keys()) syncStationVisibility(callsign)
+  syncStaleMarkers()
+  updateStationsList()
+  updateStaleStationsList()
+  if (showGhostMarkers.value) updateGhostLayers()
+  void loadTracksForMobileStations()
+  // Re-added markers get a fresh element, so their age classes need restoring.
+  updateStaleDecayClasses()
+}
+
 /**
  * Tags RF-heard markers with `station-rf` so they can fade while the receiver
  * is deaf — the map must not look healthy on APRS-IS alone.
@@ -478,11 +567,11 @@ function isMobileStation(station: StationDto): boolean {
 }
 
 function updateStationsList() {
-  stationsList.value = [...stationCache.values()]
+  stationsList.value = [...stationCache.values()].filter((s) => stationShown(s))
 }
 
 function updateStaleStationsList() {
-  staleStationsList.value = [...staleStationCache.values()]
+  staleStationsList.value = [...staleStationCache.values()].filter((s) => stationShown(s, true))
 }
 
 function buildStaleIcon(station: StationDto): L.DivIcon {
@@ -537,6 +626,7 @@ function addStaleMarker(station: StationDto) {
     existing.remove()
     staleMarkers.delete(station.callsign)
   }
+  if (!stationShown(station, true)) return
   const icon = buildStaleIcon(station)
   const marker = L.marker([station.lastLat, station.lastLon], { icon, opacity: 0.5 }).bindPopup(
     `<strong>${station.callsign}</strong><br><em>Stale</em><br>Last seen: ${formatTime(station.lastSeen)}`,
@@ -1681,7 +1771,7 @@ function drawTrack(callsign: string) {
     group.addLayer(circle)
   }
   trackLayers.set(callsign, group)
-  if (showTracks.value) {
+  if (showTracks.value && callsignShown(callsign)) {
     group.addTo(map.value)
   }
 }
@@ -1718,7 +1808,12 @@ function toggleTracks() {
   if (!map.value) return
   if (showTracks.value) {
     for (const [callsign, station] of stationCache) {
-      if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
+      if (
+        isMobileStation(station) &&
+        station.lastLat != null &&
+        station.lastLon != null &&
+        stationShown(station)
+      ) {
         if (trackPoints.has(callsign)) {
           drawTrack(callsign)
         } else {
@@ -1736,7 +1831,12 @@ function toggleTracks() {
 async function loadTracksForMobileStations() {
   if (!showTracks.value) return
   for (const [callsign, station] of stationCache) {
-    if (isMobileStation(station) && station.lastLat != null && station.lastLon != null) {
+    if (
+      isMobileStation(station) &&
+      station.lastLat != null &&
+      station.lastLon != null &&
+      stationShown(station)
+    ) {
       if (!trackPoints.has(callsign)) {
         await fetchAndDrawTrack(callsign)
       }
@@ -1757,7 +1857,12 @@ function removeGhostLayer(callsign: string) {
 function updateGhostLayers() {
   if (!map.value) return
   for (const [callsign, station] of stationCache) {
-    if (!isMobileStation(station) || station.lastLat == null || station.lastLon == null) {
+    if (
+      !isMobileStation(station) ||
+      station.lastLat == null ||
+      station.lastLon == null ||
+      !stationShown(station)
+    ) {
       removeGhostLayer(callsign)
       continue
     }
@@ -2189,7 +2294,7 @@ function drawConfirmationLine(dto: DigiConfirmationBroadcastDto) {
 
 function updateStaleDecayClasses() {
   const now = Date.now()
-  const expiryMs = (settingsCache?.stationExpiryTimeoutMinutes ?? 120) * 60 * 1000
+  const expiryMs = expiryWindowMs()
   for (const [callsign, station] of stationCache) {
     const marker = markers.get(callsign)
     if (!marker) continue
@@ -2206,7 +2311,13 @@ function updateStaleDecayClasses() {
 
 // --- Marker Management ---
 
-function addOrUpdateMarker(callsign: string, lat: number, lon: number, lastSeen: string) {
+function addOrUpdateMarker(
+  callsign: string,
+  lat: number,
+  lon: number,
+  lastSeen: string,
+  shownIfUnknown = true,
+) {
   if (!map.value) return
   const station = stationCache.get(callsign)
   const existing = markers.get(callsign)
@@ -2215,9 +2326,10 @@ function addOrUpdateMarker(callsign: string, lat: number, lon: number, lastSeen:
     existing.setPopupContent(popupContent(callsign, lastSeen, lat, lon))
   } else {
     const icon = buildIcon(station)
-    const marker = L.marker([lat, lon], { icon })
-      .bindPopup(popupContent(callsign, lastSeen, lat, lon))
-      .addTo(map.value)
+    const marker = L.marker([lat, lon], { icon }).bindPopup(
+      popupContent(callsign, lastSeen, lat, lon),
+    )
+    if (station ? stationShown(station) : shownIfUnknown) marker.addTo(map.value)
     marker.on('click', (e: L.LeafletMouseEvent) => {
       L.DomEvent.stopPropagation(e)
       onMarkerClick(callsign)
@@ -2306,6 +2418,7 @@ async function loadStations() {
           addOrUpdateMarker(s.callsign, s.lastLat, s.lastLon, s.lastSeen)
         }
       }
+      syncStationVisibility(s.callsign)
     }
     const activeCallsigns = new Set(stations.map((s) => s.callsign))
     for (const [callsign, marker] of markers) {
@@ -2340,12 +2453,32 @@ function onHubPacketReceived(packet: PacketBroadcastDto) {
     sessionPacketCounts.value[packet.callsign] =
       (sessionPacketCounts.value[packet.callsign] ?? 0) + 1
 
+    // Keep stationCache in sync for all packet types — ensures lastSeen, position
+    // and the per-source heard times are always current so the station list stays
+    // reactive. Runs first: everything below asks whether the station is shown.
+    const cachedStation = stationCache.get(packet.callsign)
+    if (cachedStation) {
+      stationCache.set(packet.callsign, {
+        ...cachedStation,
+        lastSeen: packet.receivedAt,
+        ...(packet.source === PacketSource.AprsIs
+          ? { lastHeardAprsIs: packet.receivedAt }
+          : { lastHeardRf: packet.receivedAt }),
+        ...(packet.latitude != null && packet.longitude != null
+          ? { lastLat: packet.latitude, lastLon: packet.longitude }
+          : {}),
+      })
+      syncStationVisibility(packet.callsign)
+      updateStationsList()
+    }
+    const shown = cachedStation ? callsignShown(packet.callsign) : packetSourceShown(packet.source)
+
     // Trigger detail panel refresh for the selected station.
     // Re-fetch the persistent path from the API so it reflects the latest packet.
     if (packet.callsign === selectionStore.selectedCallsign) {
       detailRefreshKey.value++
       showPacketPath(packet.callsign)
-    } else if (packet.resolvedPath && packet.resolvedPath.length >= 2) {
+    } else if (shown && packet.resolvedPath && packet.resolvedPath.length >= 2) {
       // Auto-draw a fading path for non-selected stations.
       drawAutoPath(packet.callsign, packet.resolvedPath)
     }
@@ -2359,33 +2492,25 @@ function onHubPacketReceived(packet: PacketBroadcastDto) {
       markerEl.classList.remove('stale-light', 'stale-medium', 'stale-heavy')
     }
 
-    // Keep stationCache in sync for all packet types — ensures lastSeen and
-    // position are always current so the station list stays reactive.
-    const cachedStation = stationCache.get(packet.callsign)
-    if (cachedStation) {
-      stationCache.set(packet.callsign, {
-        ...cachedStation,
-        lastSeen: packet.receivedAt,
-        ...(packet.latitude != null && packet.longitude != null
-          ? { lastLat: packet.latitude, lastLon: packet.longitude }
-          : {}),
-      })
-      updateStationsList()
-    }
-
     if (packet.latitude != null && packet.longitude != null) {
       // A fresh real position supersedes the ghost
       removeGhostLayer(packet.callsign)
 
       const isNew = !markers.has(packet.callsign)
-      addOrUpdateMarker(packet.callsign, packet.latitude, packet.longitude, packet.receivedAt)
+      addOrUpdateMarker(
+        packet.callsign,
+        packet.latitude,
+        packet.longitude,
+        packet.receivedAt,
+        shown,
+      )
       if (isNew) {
         // loadStations() will call updateStationsList() once the REST response
         // arrives and populates full station data for the new callsign.
         loadStations()
       } else {
         const station = stationCache.get(packet.callsign)
-        if (showTracks.value && station && isMobileStation(station)) {
+        if (showTracks.value && shown && station && isMobileStation(station)) {
           fetchAndDrawTrack(packet.callsign)
         }
       }
@@ -2417,6 +2542,20 @@ function onHubStationsStale(callsigns: string[]) {
   }
 }
 
+/** An APRS-IS copy the radio then also decoded: the station now counts as heard on RF. */
+function onHubPacketSourceUpgraded(upgrade: { callsign?: string }) {
+  const station = upgrade.callsign ? stationCache.get(upgrade.callsign) : undefined
+  if (!station) return
+  stationCache.set(station.callsign, {
+    ...station,
+    lastHeardRf: new Date(serverNow()).toISOString(),
+  })
+  if (stationSource.value === 'all') return
+  syncStationVisibility(station.callsign)
+  updateStationsList()
+  void loadTracksForMobileStations()
+}
+
 function onHubOwnBeaconReceived() {
   triggerHomeMarkerFlash()
 }
@@ -2428,6 +2567,7 @@ function onHubDigiConfirmation(dto: DigiConfirmationBroadcastDto) {
 function registerHubHandlers() {
   packetHub.on('packetReceived', onHubPacketReceived)
   packetHub.on('stationsStale', onHubStationsStale)
+  packetHub.on('packetSourceUpgraded', onHubPacketSourceUpgraded)
   packetHub.on('ownBeaconReceived', onHubOwnBeaconReceived)
   packetHub.on('digiConfirmation', onHubDigiConfirmation)
 }
@@ -2435,6 +2575,7 @@ function registerHubHandlers() {
 function unregisterHubHandlers() {
   packetHub.off('packetReceived', onHubPacketReceived)
   packetHub.off('stationsStale', onHubStationsStale)
+  packetHub.off('packetSourceUpgraded', onHubPacketSourceUpgraded)
   packetHub.off('ownBeaconReceived', onHubOwnBeaconReceived)
   packetHub.off('digiConfirmation', onHubDigiConfirmation)
 }
@@ -2488,6 +2629,9 @@ watch(trackMinutes, (minutes, prev) => {
   }
 })
 
+// Watch: source filter (RF / APRS-IS / both)
+watch(stationSource, applyStationFilter)
+
 // Watch: weather overlay opacity — apply immediately to live layers
 watch(radarOpacity, (v) => radarFrameLayers[currentRadarFrame]?.setOpacity(v))
 watch(windOpacity, (v) => windLayer?.setOpacity(v))
@@ -2497,6 +2641,9 @@ watch(lightningOpacity, () => refreshLightningView())
 watch(
   () => selectionStore.selectedCallsign,
   (callsign, prev) => {
+    // The selected station is exempt from the source filter, so a change of
+    // selection can show one station and hide another.
+    if (stationSource.value !== 'all') applyStationFilter()
     if (callsign && callsign !== prev) {
       if (prev) removePath(prev)
       showPacketPath(callsign)
@@ -2568,6 +2715,8 @@ onMounted(async () => {
   map.value.on('click', () => {
     if (selectionStore.selectedCallsign) onDetailClose()
   })
+  // The source filter measures against the station expiry window.
+  await ensureSettings()
   await loadStations()
   await loadStaleStations()
   registerHubHandlers()
@@ -2592,7 +2741,12 @@ onMounted(async () => {
 
   // Initial stale decay pass + periodic update every 60 s
   updateStaleDecayClasses()
-  staleDecayInterval = setInterval(updateStaleDecayClasses, 60_000)
+  staleDecayInterval = setInterval(() => {
+    // RF receptions age out of the expiry window on their own, so the filter
+    // is re-evaluated on the same tick (it restores the age classes itself).
+    if (stationSource.value !== 'all') applyStationFilter()
+    else updateStaleDecayClasses()
+  }, 60_000)
 
   // Track tails expire on their own — re-clip every 30 s even without new beacons
   trackPruneInterval = setInterval(pruneTracks, 30_000)
@@ -2796,6 +2950,32 @@ defineExpose({ TILE_PROVIDERS })
         <div v-show="!layerPanelCollapsed" class="layer-panel-body">
           <div class="layer-group">
             <div class="layer-group-label">Stations</div>
+            <div class="layer-row">
+              <v-icon size="16" :color="stationSource !== 'all' ? 'primary' : 'grey'"
+                >mdi-radio-tower</v-icon
+              >
+              <span class="layer-row-label">Heard via</span>
+              <v-btn-toggle
+                v-model="stationSource"
+                mandatory
+                density="compact"
+                variant="outlined"
+                divided
+                color="primary"
+                class="source-toggle"
+                aria-label="Station source"
+              >
+                <v-btn
+                  v-for="option in SOURCE_FILTER_OPTIONS"
+                  :key="option.value"
+                  :value="option.value"
+                  :title="option.title"
+                  size="x-small"
+                >
+                  {{ option.label }}
+                </v-btn>
+              </v-btn-toggle>
+            </div>
             <div class="layer-row">
               <v-icon size="16" :color="showTracks ? 'primary' : 'grey'"
                 >mdi-map-marker-path</v-icon
@@ -3258,6 +3438,31 @@ defineExpose({ TILE_PROVIDERS })
               showStaleStations ? 'Hide Stale' : 'Show Stale'
             }}</v-list-item-title>
           </v-list-item>
+          <div class="mobile-layer-sub">
+            <div class="d-flex align-center ga-2">
+              <span class="layer-opacity-label">Heard via</span>
+              <v-btn-toggle
+                v-model="stationSource"
+                mandatory
+                density="compact"
+                variant="outlined"
+                divided
+                color="primary"
+                class="source-toggle"
+                aria-label="Station source"
+              >
+                <v-btn
+                  v-for="option in SOURCE_FILTER_OPTIONS"
+                  :key="option.value"
+                  :value="option.value"
+                  :title="option.title"
+                  size="x-small"
+                >
+                  {{ option.label }}
+                </v-btn>
+              </v-btn-toggle>
+            </div>
+          </div>
           <v-list-item @click="toggleOverlays">
             <template #prepend
               ><v-icon :color="showOverlays ? 'teal-darken-1' : 'grey'"
@@ -3745,6 +3950,11 @@ defineExpose({ TILE_PROVIDERS })
 .track-window-select {
   width: 104px;
   flex-shrink: 0;
+}
+
+.source-toggle {
+  height: 26px;
+  flex: none;
 }
 
 /* ── Lightning proximity alerts ─────────────────────────────────────────────── */
