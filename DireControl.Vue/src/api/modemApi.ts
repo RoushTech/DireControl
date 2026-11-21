@@ -57,6 +57,8 @@ export interface ModemStatusDto {
   lastDecodedAt: string | null
   runningSince: string | null
   invalidFrames: number
+  /** Decoded frames that needed a bit repair to pass their checksum. */
+  repairedFrames: number
   txEnabled: boolean
   transmitting: boolean
   transmittedFrames: number
@@ -161,6 +163,8 @@ export interface ModemDiagnosticsDto {
   carrierStuckSeconds: number
   decodedFrames: number
   invalidFrames: number
+  /** Decoded frames that needed a bit repair to pass their checksum. */
+  repairedFrames: number
   decodedByProfile: Record<string, number> | null
   ingestDropped: number
   captureDevice: string | null

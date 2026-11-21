@@ -19,8 +19,8 @@ public sealed class AfskReceiver
     private long _samplesSincePeakReset;
     private readonly int _peakWindowSamples;
 
-    /// <summary>Raised with the frame bytes and the profile that decoded it first.</summary>
-    public event Action<byte[], DemodProfile>? FrameReceived;
+    /// <summary>Raised with the frame bytes and how the first profile to decode it got there.</summary>
+    public event Action<byte[], DecodeInfo>? FrameReceived;
 
     public AfskReceiver(params IReadOnlyList<DemodProfile> profiles)
     {
@@ -35,14 +35,16 @@ public sealed class AfskReceiver
         {
             var demod = new AfskDemodulator(profiles[i]);
             var profile = profiles[i];
-            demod.FrameDemodulated += frame =>
+            demod.FrameDemodulated += (frame, repairedBits) =>
             {
                 var now = DateTime.UtcNow;
                 if (_deduper.IsNewFrame(frame, now))
                 {
                     ValidFrameCount++;
+                    if (repairedBits > 0)
+                        RepairedFrameCount++;
                     LastFrameAt = now;
-                    FrameReceived?.Invoke(frame, profile);
+                    FrameReceived?.Invoke(frame, new DecodeInfo(profile, repairedBits));
                 }
             };
             _demodulators[i] = demod;
@@ -50,14 +52,20 @@ public sealed class AfskReceiver
     }
 
     /// <summary>Creates a receiver with the standard single profile.</summary>
-    public static AfskReceiver CreateStandard(int sampleRate) =>
-        new(DemodProfile.Standard(sampleRate));
+    /// <param name="sampleRate">Audio sample rate in Hz.</param>
+    /// <param name="maxRepairBits">FCS-guided bit repair depth: 0 off, 1 (default) or 2.</param>
+    public static AfskReceiver CreateStandard(
+        int sampleRate, int maxRepairBits = DemodProfile.DefaultMaxRepairBits) =>
+        new(DemodProfile.Standard(sampleRate, maxRepairBits));
 
     /// <summary>True while any demodulator profile reports carrier.</summary>
     public bool CarrierDetected => _demodulators.Any(d => d.CarrierDetected);
 
     /// <summary>Total unique valid frames emitted.</summary>
     public long ValidFrameCount { get; private set; }
+
+    /// <summary>Unique valid frames that needed a bit repair to pass the FCS.</summary>
+    public long RepairedFrameCount { get; private set; }
 
     /// <summary>UTC time of the last unique valid frame, or null before the first.</summary>
     public DateTime? LastFrameAt { get; private set; }
@@ -96,3 +104,11 @@ public sealed class AfskReceiver
 
     public IReadOnlyList<AfskDemodulator> Demodulators => _demodulators;
 }
+
+/// <summary>How a received frame was decoded.</summary>
+/// <param name="Profile">The demodulator profile that decoded it first.</param>
+/// <param name="RepairedBits">
+/// Bit decisions inverted to make the FCS pass — 0 for a frame that was valid
+/// as received.  A repaired frame is very likely right but is not guaranteed.
+/// </param>
+public readonly record struct DecodeInfo(DemodProfile Profile, int RepairedBits);

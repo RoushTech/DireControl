@@ -145,6 +145,8 @@ export interface SignalData {
   frequencyOffsetHz: number | null
   audioLevel: number | null
   demodProfile: string | null
+  /** Bit decisions the modem inverted to make the checksum pass; null when valid as received. */
+  repairedBits?: number | null
 }
 
 export interface SignalPointDto {

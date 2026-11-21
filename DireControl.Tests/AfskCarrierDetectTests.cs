@@ -54,6 +54,106 @@ public sealed class AfskCarrierDetectTests
             "band noise must not hold DCD armed");
     }
 
+    /// <summary>
+    /// Renders an arbitrary pre-NRZI bit stream as phase-continuous AFSK.
+    /// </summary>
+    internal static float[] RenderBits(IReadOnlyList<bool> bits, float amplitude = 0.5f)
+    {
+        var samplesPerBit = SampleRate / 1200.0;
+        var samples = new List<float>((int)(bits.Count * samplesPerBit) + 1);
+        var level = true;
+        var phase = 0.0;
+        var boundary = 0.0;
+        foreach (var bit in bits)
+        {
+            if (!bit)
+                level = !level;
+            var freq = level ? 1200.0 : 2200.0;
+            boundary += samplesPerBit;
+            while (samples.Count < (int)Math.Round(boundary))
+            {
+                samples.Add((float)(Math.Sin(phase) * amplitude));
+                phase += 2 * Math.PI * freq / SampleRate;
+                if (phase > 2 * Math.PI)
+                    phase -= 2 * Math.PI;
+            }
+        }
+        return [.. samples];
+    }
+
+    /// <summary>
+    /// A transmission the way many TNCs and digipeaters send it: TXDelay filled
+    /// with zero bits (alternating tones), then only two flags before the frame.
+    /// </summary>
+    internal static List<bool> ZeroFillTransmission(byte[] frame, int zeroBits = 160)
+    {
+        var bits = new List<bool>(Enumerable.Repeat(false, zeroBits));
+        bits.AddRange(AfskModulator.BuildHdlcBitStream(frame, leadFlags: 2, tailFlags: 2));
+        return bits;
+    }
+
+    [Test]
+    public void ZeroFillPreamble_ArmsCarrierDetectBeforeTheFrameAndHoldsThroughIt()
+    {
+        // A long frame, so the zero-fill's own half-second hold would expire
+        // mid-frame if the two flags after it did not qualify the frame.
+        var frame = Ax25Encoder.EncodeUiFrame("N4WR-1", new string('x', 220), "WIDE1-1,WIDE2-1");
+        var bits = ZeroFillTransmission(frame);
+        var audio = RenderBits(bits);
+        var samplesPerBit = SampleRate / 1200;
+
+        var receiver = AfskReceiver.CreateStandard(SampleRate);
+        var decoded = 0;
+        receiver.FrameReceived += (_, _) => decoded++;
+
+        var preambleEnd = 160 * samplesPerBit;
+        var frameEnd = audio.Length - 2 * 8 * samplesPerBit;
+        var armedDuringPreamble = false;
+        var droppedMidFrame = false;
+        for (var pos = 0; pos < audio.Length; pos += 256)
+        {
+            receiver.ProcessSamples(audio.AsSpan(pos, Math.Min(256, audio.Length - pos)));
+            if (pos < preambleEnd && receiver.CarrierDetected)
+                armedDuringPreamble = true;
+            if (pos >= preambleEnd && pos < frameEnd && !receiver.CarrierDetected)
+                droppedMidFrame = true;
+        }
+        receiver.ProcessSamples(new float[SampleRate / 10]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(armedDuringPreamble, Is.True, "a zero-fill preamble is a carrier");
+            Assert.That(droppedMidFrame, Is.False, "carrier must hold from the preamble to the closing flag");
+            Assert.That(decoded, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ZeroFillPreamble_CountsAsOnePreamble()
+    {
+        var frame = Ax25Encoder.EncodeUiFrame("N4WR-1", "!3518.00N/08508.00W-zero fill", "WIDE1-1");
+        var receiver = AfskReceiver.CreateStandard(SampleRate);
+        receiver.ProcessSamples(RenderBits(ZeroFillTransmission(frame)));
+        receiver.ProcessSamples(new float[SampleRate / 10]);
+
+        Assert.That(receiver.Demodulators.Sum(d => d.PreambleCount), Is.EqualTo(1));
+        Assert.That(receiver.ValidFrameCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ZeroFillThenLongFlagRun_IsStillOnePreamble()
+    {
+        var frame = Ax25Encoder.EncodeUiFrame("N4WR-1", "!3518.00N/08508.00W-both", "WIDE1-1");
+        var bits = new List<bool>(Enumerable.Repeat(false, 120));
+        bits.AddRange(AfskModulator.BuildHdlcBitStream(frame, leadFlags: 20, tailFlags: 2));
+
+        var receiver = AfskReceiver.CreateStandard(SampleRate);
+        receiver.ProcessSamples(RenderBits(bits));
+        receiver.ProcessSamples(new float[SampleRate / 10]);
+
+        Assert.That(receiver.Demodulators.Sum(d => d.PreambleCount), Is.EqualTo(1));
+    }
+
     private static double Gaussian(Random rng)
     {
         var u1 = 1.0 - rng.NextDouble();

@@ -377,7 +377,8 @@ function heardViaLabel(p: PacketDto): string {
               (packet.signalData.decodeQuality != null ||
                 packet.signalData.frequencyOffsetHz != null ||
                 packet.signalData.audioLevel != null ||
-                packet.signalData.demodProfile != null)
+                packet.signalData.demodProfile != null ||
+                packet.signalData.repairedBits)
             "
           >
             <div class="section-label">Signal</div>
@@ -400,6 +401,19 @@ function heardViaLabel(p: PacketDto): string {
               <template v-if="packet.signalData.demodProfile != null">
                 <div class="field-key">Demod Profile</div>
                 <div class="field-val">{{ packet.signalData.demodProfile }}</div>
+              </template>
+              <template v-if="packet.signalData.repairedBits">
+                <div class="field-key">Bit Repair</div>
+                <div class="field-val">
+                  <v-chip size="x-small" color="warning" variant="tonal" label>
+                    Recovered — {{ packet.signalData.repairedBits }}
+                    {{ packet.signalData.repairedBits === 1 ? 'bit' : 'bits' }} corrected
+                  </v-chip>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    The checksum failed as received and passed after the modem corrected its
+                    least-certain bit decisions.
+                  </div>
+                </div>
               </template>
             </div>
           </template>

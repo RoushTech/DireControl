@@ -91,6 +91,9 @@ public sealed record ModemStatusSnapshot
     /// <summary>UTC time the capture device last came up (state became Running).</summary>
     public DateTime? RunningSince { get; init; }
     public long InvalidFrames { get; init; }
+
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public long RepairedFrames { get; init; }
     public bool TxEnabled { get; init; }
     public bool Transmitting { get; init; }
     public long TransmittedFrames { get; init; }
@@ -243,6 +246,7 @@ public sealed class SoundModemService(
                 DecodedFrames = receiver.ValidFrameCount,
                 LastDecodedAt = receiver.LastFrameAt,
                 InvalidFrames = receiver.Demodulators.Sum(d => d.InvalidFrameCount),
+                RepairedFrames = receiver.RepairedFrameCount,
                 TxEnabled = TxChannel is not null,
                 TxQueueDepth = (TxChannel?.Reader.Count ?? 0)
                     + (PriorityTxChannel?.Reader.Count ?? 0)
@@ -285,6 +289,7 @@ public sealed class SoundModemService(
                     CarrierStuckSeconds = Math.Max(1, opts.CarrierStuckSeconds),
                     DecodedFrames = s.DecodedFrames,
                     InvalidFrames = s.InvalidFrames,
+                    RepairedFrames = s.RepairedFrames,
                     DecodedByProfile = s.DecodedByProfile,
                     IngestDropped = s.IngestDropped,
                     CaptureDevice = s.CaptureDevice,
@@ -596,13 +601,15 @@ public sealed class SoundModemService(
         // Decoded frames are handed off to their own consumer: this callback
         // runs on the ALSA capture thread, which must never wait on the database.
         var ingest = new RfIngestDispatcher();
-        var receiver = AfskReceiver.CreateStandard(SampleRate);
-        receiver.FrameReceived += (frame, profile) =>
+        var receiver = AfskReceiver.CreateStandard(
+            SampleRate, Math.Clamp(radio.RxBitRepair, 0, 2));
+        receiver.FrameReceived += (frame, decode) =>
         {
             var signalData = new SignalData
             {
                 AudioLevel = Math.Round(receiver.PeakAudioLevel, 3),
-                DemodProfile = profile.Name,
+                DemodProfile = decode.Profile.Name,
+                RepairedBits = decode.RepairedBits > 0 ? decode.RepairedBits : null,
             };
             ingest.Post(new RfIngestItem(frame, radio.ChannelNumber, signalData));
         };
@@ -853,9 +860,10 @@ public sealed class SoundModemService(
                 // Burst length includes the demodulator's carrier hold, so a
                 // very short transmission still reports at least that long.
                 // The longest flag run is a running high-water mark, not a
-                // per-burst figure: transmitters send 32-45 opening flags, so a
-                // number stuck in the low single digits means the start of
-                // every transmission is being lost before the demodulator.
+                // per-burst figure.  It is only meaningful for transmitters
+                // that fill TXDelay with flags (32-45 of them); ones that fill
+                // it with zeros send just one or two, and are recognised by
+                // the zero-fill run instead.
                 _channelActivity.LogInformation(
                     "{Radio} channel activity: {Ms} ms, peak {Peak:F3}, {Preambles} preamble(s), "
                     + "{Decoded} decoded, {Failed} CRC failure(s), longest flag run {FlagRun} "

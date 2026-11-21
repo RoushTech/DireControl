@@ -1098,6 +1098,11 @@ watch(tab, (newTab) => {
                 >mdi-crosshairs-gps</v-icon
               >
             </div>
+            <div v-if="p.signalData?.repairedBits" class="mt-1">
+              <v-chip size="x-small" color="warning" variant="tonal" label>
+                Recovered ({{ p.signalData.repairedBits }}-bit repair)
+              </v-chip>
+            </div>
             <div
               v-if="
                 p.signalData &&

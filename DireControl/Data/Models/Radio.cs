@@ -58,6 +58,16 @@ public class Radio : IEntityTypeConfiguration<Radio>
     /// <summary>ALSA playback device driving this radio's TX audio.</summary>
     public string ModemPlaybackDevice { get; set; } = "default";
 
+    /// <summary>
+    /// Receive bit repair: when a frame fails its checksum, how many of the
+    /// least-certain bit decisions the modem may invert to make it pass.
+    /// 0 turns repair off; 1 (the default) is worth about 0.6–0.9 dB of
+    /// sensitivity with no measurable rate of wrong packets; 2 decodes a
+    /// little more again but roughly 1 in 400 repaired packets is then wrong.
+    /// Repaired packets are marked in their signal data either way.
+    /// </summary>
+    public int RxBitRepair { get; set; } = 1;
+
     /// <summary>Whether this radio's modem transmits.</summary>
     public bool TxEnabled { get; set; } = false;
 

@@ -10,4 +10,11 @@ public class SignalData
 
     /// <summary>Name of the demodulator profile that decoded the frame. Native modem only.</summary>
     public string? DemodProfile { get; set; }
+
+    /// <summary>
+    /// Bit decisions the modem inverted to make this frame pass its checksum
+    /// (1 or 2), or null for a frame that was valid as received.  A repaired
+    /// packet is very likely right but is not guaranteed.  Native modem only.
+    /// </summary>
+    public int? RepairedBits { get; set; }
 }

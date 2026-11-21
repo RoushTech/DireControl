@@ -248,6 +248,8 @@ public sealed class ModemStatusDto
     public DateTime? LastDecodedAt { get; init; }
     public DateTime? RunningSince { get; init; }
     public long InvalidFrames { get; init; }
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public long RepairedFrames { get; init; }
     public bool TxEnabled { get; init; }
     public bool Transmitting { get; init; }
     public long TransmittedFrames { get; init; }
@@ -316,6 +318,8 @@ public sealed class ModemDiagnosticsDto
     public int CarrierStuckSeconds { get; init; }
     public long DecodedFrames { get; init; }
     public long InvalidFrames { get; init; }
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public long RepairedFrames { get; init; }
     public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
     public long IngestDropped { get; init; }
 
@@ -768,6 +772,8 @@ public sealed class RadioModemConfigDto
     public bool ModemEnabled { get; init; }
     public string ModemCaptureDevice { get; init; } = "default";
     public string ModemPlaybackDevice { get; init; } = "default";
+    /// <summary>Receive bit repair depth: 0 off, 1 (default) or 2 bits.</summary>
+    public int RxBitRepair { get; init; } = 1;
     public bool TxEnabled { get; init; }
     public int TxAudioLevelPct { get; init; } = 80;
     public double TxSpaceBoostDb { get; init; }

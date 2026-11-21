@@ -238,6 +238,10 @@ async function doForceUnkey(d: ModemDiagnosticsDto) {
                       {{ d.invalidFrames.toLocaleString() }}
                     </td>
                   </tr>
+                  <tr v-if="d.repairedFrames">
+                    <td>Recovered by bit repair</td>
+                    <td class="text-right">{{ d.repairedFrames.toLocaleString() }}</td>
+                  </tr>
                   <tr v-for="[name, n] in profiles(d)" :key="name">
                     <td class="text-medium-emphasis">Profile {{ name }}</td>
                     <td class="text-right">{{ n.toLocaleString() }}</td>

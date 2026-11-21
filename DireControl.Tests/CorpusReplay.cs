@@ -60,12 +60,13 @@ public static class CorpusReplay
         var receiver = AfskReceiver.CreateStandard(audio.SampleRate);
 
         var decoded = new List<string>();
-        receiver.FrameReceived += (frame, profile) =>
+        receiver.FrameReceived += (frame, decode) =>
         {
             var line = Ax25Decoder.TryDecode(frame, out var ax25)
                 ? ax25.ToTnc2()
                 : $"<CRC ok but undecodable, {frame.Length} bytes>";
-            decoded.Add($"[{profile.Name}] {line}");
+            var repaired = decode.RepairedBits > 0 ? $" (repaired {decode.RepairedBits} bit)" : "";
+            decoded.Add($"[{decode.Profile.Name}]{repaired} {line}");
         };
 
         var (peak, rms, clippedPercent, dcOffset) = Measure(audio.Samples);

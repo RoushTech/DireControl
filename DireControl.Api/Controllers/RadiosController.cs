@@ -420,6 +420,7 @@ public class RadiosController(
                 ModemEnabled = radio.ModemEnabled,
                 ModemCaptureDevice = radio.ModemCaptureDevice,
                 ModemPlaybackDevice = radio.ModemPlaybackDevice,
+                RxBitRepair = radio.RxBitRepair,
                 TxEnabled = radio.TxEnabled,
                 TxAudioLevelPct = radio.TxAudioLevelPct,
                 TxSpaceBoostDb = radio.TxSpaceBoostDb,
@@ -456,6 +457,8 @@ public class RadiosController(
 
         if (string.IsNullOrWhiteSpace(modem.ModemCaptureDevice))
             return "Capture device is required (e.g. \"default\").";
+        if (modem.RxBitRepair is < 0 or > 2)
+            return "Bit repair must be 0 (off), 1 or 2 bits.";
 
         if (!modem.TxEnabled)
             return null;
@@ -503,6 +506,7 @@ public class RadiosController(
         radio.ModemPlaybackDevice = string.IsNullOrWhiteSpace(modem.ModemPlaybackDevice)
             ? "default"
             : modem.ModemPlaybackDevice.Trim();
+        radio.RxBitRepair = Math.Clamp(modem.RxBitRepair, 0, 2);
         radio.TxEnabled = modem.TxEnabled;
         radio.TxAudioLevelPct = modem.TxAudioLevelPct;
         radio.TxSpaceBoostDb = modem.TxSpaceBoostDb;

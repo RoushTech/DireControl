@@ -65,6 +65,7 @@ public class ModemController(
         LastDecodedAt = s.LastDecodedAt,
         RunningSince = s.RunningSince,
         InvalidFrames = s.InvalidFrames,
+        RepairedFrames = s.RepairedFrames,
         TxEnabled = s.TxEnabled,
         Transmitting = s.Transmitting,
         TransmittedFrames = s.TransmittedFrames,

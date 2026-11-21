@@ -5,6 +5,8 @@ export interface RadioModemConfig {
   modemEnabled: boolean
   modemCaptureDevice: string
   modemPlaybackDevice: string
+  /** Receive bit repair depth: 0 off, 1 (default) or 2 bits. */
+  rxBitRepair: number
   txEnabled: boolean
   txAudioLevelPct: number
   /** Space (2200 Hz) tone boost over mark, dB 0–6; 0 = equal levels. */
@@ -31,6 +33,7 @@ export function defaultRadioModemConfig(): RadioModemConfig {
     modemEnabled: false,
     modemCaptureDevice: 'default',
     modemPlaybackDevice: 'default',
+    rxBitRepair: 1,
     txEnabled: false,
     txAudioLevelPct: 80,
     txSpaceBoostDb: 0,

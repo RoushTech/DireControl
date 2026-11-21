@@ -1,23 +1,35 @@
+using System.Numerics;
+
 namespace DireControl.Modem.Dsp;
 
 /// <summary>
-/// Direct-form FIR filter with a circular history buffer.  Coefficient
-/// factories generate windowed-sinc (lowpass/bandpass) and windowed-quadrature
-/// (correlator) tap sets.
+/// Direct-form FIR filter.  Coefficient factories generate windowed-sinc
+/// (lowpass/bandpass) and rectangular-quadrature (correlator) tap sets.
 /// </summary>
+/// <remarks>
+/// The history is written twice, <c>Length</c> apart, so the most recent
+/// <c>Length</c> samples are always one contiguous span and the dot product
+/// vectorises — about four times faster than walking a circular buffer, and
+/// these filters are essentially the whole cost of the receiver.
+/// </remarks>
 public sealed class FirFilter
 {
-    private readonly float[] _taps;
+    // Taps reversed, so index 0 pairs with the oldest sample in the window.
+    private readonly float[] _reversedTaps;
     private readonly float[] _history;
+    private readonly int _length;
     private int _position;
 
     public FirFilter(float[] taps)
     {
-        _taps = taps;
-        _history = new float[taps.Length];
+        _length = taps.Length;
+        _reversedTaps = new float[_length];
+        for (var i = 0; i < _length; i++)
+            _reversedTaps[i] = taps[_length - 1 - i];
+        _history = new float[_length * 2];
     }
 
-    public int Length => _taps.Length;
+    public int Length => _length;
 
     /// <summary>
     /// Pushes one sample through the filter and returns the filtered output.
@@ -25,17 +37,23 @@ public sealed class FirFilter
     public float Process(float sample)
     {
         _history[_position] = sample;
+        _history[_position + _length] = sample;
+        if (++_position == _length)
+            _position = 0;
 
-        var acc = 0f;
-        var idx = _position;
-        for (var i = 0; i < _taps.Length; i++)
-        {
-            acc += _taps[i] * _history[idx];
-            idx = idx == 0 ? _history.Length - 1 : idx - 1;
-        }
+        // Oldest → newest, contiguous.
+        var window = _history.AsSpan(_position, _length);
+        var taps = _reversedTaps.AsSpan();
 
-        _position = (_position + 1) % _history.Length;
-        return acc;
+        var acc = Vector<float>.Zero;
+        var i = 0;
+        for (; i <= _length - Vector<float>.Count; i += Vector<float>.Count)
+            acc += new Vector<float>(window[i..]) * new Vector<float>(taps[i..]);
+
+        var sum = Vector.Sum(acc);
+        for (; i < _length; i++)
+            sum += window[i] * taps[i];
+        return sum;
     }
 
     public void Reset()
@@ -73,27 +91,41 @@ public sealed class FirFilter
     }
 
     /// <summary>
-    /// Windowed-sinc bandpass filter taps (Blackman window), built as the
-    /// difference of two lowpass responses and normalised to unity gain at the
-    /// band centre.
+    /// Kaiser-windowed-sinc bandpass taps (linear phase, unity passband gain).
+    /// <paramref name="beta"/> trades stopband depth against transition width;
+    /// 5 gives roughly 50 dB of rejection.
     /// </summary>
-    public static float[] BandpassTaps(int sampleRate, float lowHz, float highHz, int tapCount)
+    public static float[] KaiserBandpassTaps(
+        int sampleRate, float lowHz, float highHz, int tapCount, double beta = 5.0)
     {
-        var low = LowpassTaps(sampleRate, lowHz, tapCount);
-        var high = LowpassTaps(sampleRate, highHz, tapCount);
-
         var taps = new float[tapCount];
-        for (var i = 0; i < tapCount; i++)
-            taps[i] = high[i] - low[i];
+        var center = (tapCount - 1) / 2.0;
+        var i0Beta = BesselI0(beta);
 
-        // Normalise gain at the geometric band centre.
-        var centerHz = Math.Sqrt((double)lowHz * highHz);
-        var gain = GainAt(taps, centerHz / sampleRate);
-        if (gain > 1e-9)
-            for (var i = 0; i < tapCount; i++)
-                taps[i] = (float)(taps[i] / gain);
+        for (var i = 0; i < tapCount; i++)
+        {
+            var x = i - center;
+            var ideal = x == 0
+                ? 2.0 * (highHz - lowHz) / sampleRate
+                : (Math.Sin(2 * Math.PI * highHz / sampleRate * x)
+                    - Math.Sin(2 * Math.PI * lowHz / sampleRate * x)) / (Math.PI * x);
+            var r = 2.0 * i / (tapCount - 1) - 1;
+            taps[i] = (float)(ideal * BesselI0(beta * Math.Sqrt(1 - r * r)) / i0Beta);
+        }
 
         return taps;
+    }
+
+    /// <summary>Zeroth-order modified Bessel function of the first kind (series).</summary>
+    private static double BesselI0(double x)
+    {
+        double sum = 1, term = 1;
+        for (var k = 1; k < 30; k++)
+        {
+            term *= (x / (2 * k)) * (x / (2 * k));
+            sum += term;
+        }
+        return sum;
     }
 
     /// <summary>
@@ -126,17 +158,5 @@ public sealed class FirFilter
     {
         var t = (double)i / (tapCount - 1);
         return 0.42 - 0.5 * Math.Cos(2 * Math.PI * t) + 0.08 * Math.Cos(4 * Math.PI * t);
-    }
-
-    private static double GainAt(float[] taps, double normalizedFreq)
-    {
-        double re = 0, im = 0;
-        for (var i = 0; i < taps.Length; i++)
-        {
-            var angle = 2 * Math.PI * normalizedFreq * i;
-            re += taps[i] * Math.Cos(angle);
-            im += taps[i] * Math.Sin(angle);
-        }
-        return Math.Sqrt(re * re + im * im);
     }
 }

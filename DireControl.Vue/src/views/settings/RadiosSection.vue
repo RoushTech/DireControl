@@ -48,6 +48,23 @@ const pttMethodItems = [
   { title: 'Hamlib rigctld', value: PttMethods.Rigctld },
 ]
 
+/** Receive bit repair depth: how many doubtful bits the modem may correct on a bad checksum. */
+const rxBitRepairItems = [
+  { title: 'Off', value: 0 },
+  { title: '1 bit (recommended)', value: 1 },
+  { title: '2 bits', value: 2 },
+]
+const rxBitRepairHint = computed(() => {
+  switch (rModem.value.rxBitRepair) {
+    case 0:
+      return 'Packets that fail their checksum are dropped.'
+    case 2:
+      return 'Recovers the most weak packets, but about 1 in 400 recovered packets is wrong. Recovered packets are marked.'
+    default:
+      return 'Recovers weak packets that fail their checksum by one doubtful bit. Recovered packets are marked.'
+  }
+})
+
 const modemCaptureDeviceItems = computed(() =>
   modemDevices.value.audio
     .filter((d) => d.supportsCapture)
@@ -829,6 +846,16 @@ onUnmounted(() => {
                       label="Playback device"
                       density="compact"
                       :return-object="false"
+                    />
+                  </div>
+                  <div class="radio-form-row">
+                    <v-select
+                      v-model="rModem.rxBitRepair"
+                      :items="rxBitRepairItems"
+                      label="Bit repair"
+                      density="compact"
+                      :hint="rxBitRepairHint"
+                      persistent-hint
                     />
                   </div>
                   <v-switch

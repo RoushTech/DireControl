@@ -584,6 +584,10 @@ onUnmounted(() => {
                   <dd>{{ m.decodedFrames.toLocaleString() }}</dd>
                   <dt>Bad CRC</dt>
                   <dd>{{ m.invalidFrames.toLocaleString() }}</dd>
+                  <template v-if="m.repairedFrames">
+                    <dt>Recovered by bit repair</dt>
+                    <dd>{{ m.repairedFrames.toLocaleString() }}</dd>
+                  </template>
                   <template v-if="m.decodedByProfile && Object.keys(m.decodedByProfile).length > 1">
                     <dt>By profile</dt>
                     <dd class="kv-mono">

@@ -18,25 +18,32 @@ public sealed class AfskDemodulator
     private readonly FirFilter? _postFilter;
     private readonly BitClockPll _pll;
     private readonly NrziDecoder _nrzi = new();
-    private readonly HdlcDeframer _deframer = new();
+    private readonly HdlcDeframer _deframer;
 
     private readonly int _dcdHoldSamples;
+    private readonly int _zeroPreambleWindowSamples;
+    private long _zeroPreambleSampleIndex = long.MinValue;
     private long _sampleIndex;
     private long _dcdArmedSampleIndex = long.MinValue;
     private bool _frameQualified;
     private bool _lastFrameValid;
 
-    /// <summary>Raised with the AX.25 frame bytes (FCS stripped) on each valid decode.</summary>
-    public event Action<byte[]>? FrameDemodulated;
+    /// <summary>
+    /// Raised with the AX.25 frame bytes (FCS stripped) on each valid decode,
+    /// and the number of bit decisions repaired to make the FCS pass (0 for a
+    /// frame that was valid as received).
+    /// </summary>
+    public event Action<byte[], int>? FrameDemodulated;
 
     public DemodProfile Profile { get; }
 
     public AfskDemodulator(DemodProfile profile)
     {
         Profile = profile;
+        _deframer = new HdlcDeframer { MaxRepairBits = profile.MaxRepairBits };
 
         if (profile.PreFilterTaps > 0)
-            _preFilter = new FirFilter(FirFilter.BandpassTaps(
+            _preFilter = new FirFilter(FirFilter.KaiserBandpassTaps(
                 profile.SampleRate, profile.PreFilterLowHz, profile.PreFilterHighHz, profile.PreFilterTaps));
 
         _mark = new ToneCorrelator(profile.SampleRate, profile.MarkFreq, profile.CorrelatorTaps);
@@ -53,10 +60,11 @@ public sealed class AfskDemodulator
 
         // DCD holds for half a second after arming.
         _dcdHoldSamples = profile.SampleRate / 2;
+        _zeroPreambleWindowSamples = (int)(ZeroPreambleFlagWindowBits * profile.SampleRate / profile.Baud);
         _deframer.FrameReceived += frame =>
         {
             _lastFrameValid = true;
-            FrameDemodulated?.Invoke(frame);
+            FrameDemodulated?.Invoke(frame, _deframer.LastFrameRepairedBits);
         };
         _deframer.FlagDetected += OnFlag;
     }
@@ -70,6 +78,14 @@ public sealed class AfskDemodulator
     /// </summary>
     internal const int DcdArmFlagRun = 3;
 
+    /// <summary>
+    /// Bit periods after a zero-fill preamble within which a flag still counts
+    /// as opening a real transmission.  Stations that fill TXDelay with zeros
+    /// follow it with only one or two flags — never the three-flag run — so
+    /// the zero-fill itself has to qualify the frame those flags open.
+    /// </summary>
+    internal const int ZeroPreambleFlagWindowBits = 40;
+
     private void OnFlag()
     {
         // A frame opened behind a real preamble — or immediately following a
@@ -80,7 +96,10 @@ public sealed class AfskDemodulator
         var followsValidFrame = _lastFrameValid && _frameQualified;
         _lastFrameValid = false;
 
-        if (_deframer.CurrentFlagRun >= DcdArmFlagRun || followsValidFrame)
+        var followsZeroPreamble = _zeroPreambleSampleIndex != long.MinValue
+            && _sampleIndex - _zeroPreambleSampleIndex <= _zeroPreambleWindowSamples;
+
+        if (_deframer.CurrentFlagRun >= DcdArmFlagRun || followsValidFrame || followsZeroPreamble)
         {
             _frameQualified = true;
             _dcdArmedSampleIndex = _sampleIndex;
@@ -97,6 +116,9 @@ public sealed class AfskDemodulator
     /// <summary>Frames that failed the FCS/length checks.</summary>
     public long InvalidFrameCount => _deframer.InvalidFrameCount;
 
+    /// <summary>Valid frames that needed a bit repair to pass the FCS.</summary>
+    public long RepairedFrameCount => _deframer.RepairedFrameCount;
+
     /// <summary>Transmission preambles seen, whether or not a frame resulted.</summary>
     public long PreambleCount => _deframer.PreambleCount;
 
@@ -104,8 +126,9 @@ public sealed class AfskDemodulator
     public int LongestFlagRun => _deframer.LongestFlagRun;
 
     /// <summary>
-    /// Data-carrier detect: true while a run of consecutive HDLC flags (a real
-    /// preamble, not a lone noise-decoded flag) has been seen recently, and for
+    /// Data-carrier detect: true while a run of consecutive HDLC flags or a
+    /// zero-fill run (a real preamble, not a lone noise-decoded flag) has been
+    /// seen recently, and for
     /// as long as the deframer stays inside the frame that preamble opened.
     /// The sentinel check
     /// matters: subtracting long.MinValue wraps negative, which made DCD read
@@ -134,8 +157,18 @@ public sealed class AfskDemodulator
 
             if (_pll.Advance(level))
             {
-                _deframer.ProcessBit(_nrzi.Decode(level));
+                // |diff| at the sampling instant is how decisively this bit
+                // cell was sliced — the ranking the deframer repairs by.
+                _deframer.ProcessBit(_nrzi.Decode(level), MathF.Abs(diff));
                 _pll.Locked = _deframer.InFrame;
+
+                // A zero-fill preamble is carrier in its own right, and
+                // qualifies the frame opened by the flag(s) that follow it.
+                if (_deframer.InZeroPreamble)
+                {
+                    _dcdArmedSampleIndex = _sampleIndex;
+                    _zeroPreambleSampleIndex = _sampleIndex;
+                }
 
                 // Hold DCD through a qualified frame; an abort or runaway
                 // (InFrame dropping) ends the qualification.
@@ -164,6 +197,7 @@ public sealed class AfskDemodulator
         _nrzi.Reset();
         _deframer.Reset();
         _dcdArmedSampleIndex = long.MinValue;
+        _zeroPreambleSampleIndex = long.MinValue;
         _frameQualified = false;
         _lastFrameValid = false;
     }

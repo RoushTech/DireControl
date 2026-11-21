@@ -611,6 +611,9 @@ namespace DireControl.Migrations
                     b.Property<bool>("PttSerialUseRts")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("RxBitRepair")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Ssid")
                         .HasMaxLength(4)
                         .HasColumnType("TEXT");
