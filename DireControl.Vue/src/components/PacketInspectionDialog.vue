@@ -406,7 +406,7 @@ function heardViaLabel(p: PacketDto): string {
                 <div class="field-key">Bit Repair</div>
                 <div class="field-val">
                   <v-chip size="x-small" color="warning" variant="tonal" label>
-                    Recovered — {{ packet.signalData.repairedBits }}
+                    Recovered: {{ packet.signalData.repairedBits }}
                     {{ packet.signalData.repairedBits === 1 ? 'bit' : 'bits' }} corrected
                   </v-chip>
                   <div class="text-caption text-medium-emphasis mt-1">

@@ -64,7 +64,7 @@ function selectSymbol(table: string, code: string) {
         label="Symbol"
         density="compact"
         placeholder="e.g. /-"
-        hint="Table+code — click the icon to browse"
+        hint="Table+code. Click the icon to browse."
         persistent-hint
         maxlength="2"
         style="flex: 1"

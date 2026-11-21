@@ -99,11 +99,11 @@ export const useLightningAlertsStore = defineStore('lightningAlerts', () => {
   function showBrowserNotification(body: string) {
     if (!('Notification' in window)) return
     if (Notification.permission === 'granted') {
-      new Notification('DireControl — Lightning', { body, icon: '/favicon.ico' })
+      new Notification('DireControl · Lightning', { body, icon: '/favicon.ico' })
     } else if (Notification.permission === 'default') {
       Notification.requestPermission().then((permission) => {
         if (permission === 'granted') {
-          new Notification('DireControl — Lightning', { body, icon: '/favicon.ico' })
+          new Notification('DireControl · Lightning', { body, icon: '/favicon.ico' })
         }
       })
     }

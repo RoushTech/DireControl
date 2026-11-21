@@ -55,8 +55,8 @@ const shortcuts = [
 ]
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
-// One flat set of destinations in three groups; no hover menus anywhere
-// (review 1.20). Desktop: labelled rail. Tablet / collapsed: icons only,
+// One flat set of destinations in three groups; no hover menus anywhere.
+// Desktop: labelled rail. Tablet / collapsed: icons only,
 // names on hover. Phone: bottom nav with the four most-used pages plus More.
 interface NavItem {
   to: string
@@ -139,18 +139,18 @@ const showSetupChip = computed(
   () => healthStore.settingsLoaded && !healthStore.setupComplete && !uiStore.setupDismissed,
 )
 
-// Tell the operator what a reconnect refetched (review 1.7).
+// Tell the operator what a reconnect refetched.
 watch(
   () => packetHub.lastResync,
   (r) => {
     if (!r) return
     if (r.failed.length)
       toastStore.toast(
-        `Reconnected — could not resync ${r.failed.join(', ')}; showing what was last loaded`,
+        `Reconnected, but could not resync ${r.failed.join(', ')}. Showing what was last loaded.`,
         'warning',
         10_000,
       )
-    else if (r.ok.length) toastStore.toast(`Reconnected — resynced ${r.ok.join(', ')}`, 'success')
+    else if (r.ok.length) toastStore.toast(`Reconnected and resynced ${r.ok.join(', ')}`, 'success')
   },
 )
 

@@ -250,7 +250,7 @@ onMounted(async () => {
           density="compact"
           :type="showCartoKey ? 'text' : 'password'"
           :append-inner-icon="showCartoKey ? 'mdi-eye-off' : 'mdi-eye'"
-          hint="Required for the Carto Light / Carto Dark Matter tile providers — CARTO's
+          hint="Required for the Carto Light / Carto Dark Matter tile providers. CARTO's
                   basemaps now stamp unkeyed tiles. Get a key at carto.com."
           persistent-hint
           class="mb-3"
@@ -272,10 +272,10 @@ onMounted(async () => {
         <v-select
           v-model="selectedRadarProvider"
           :items="[
-            { title: 'IEM NEXRAD — Free · US · zoom 8 · 5-min updates', value: 0 },
-            { title: 'RainViewer — Free · Global · zoom 7 · 10-min updates', value: 1 },
+            { title: 'IEM NEXRAD: Free · US · zoom 8 · 5-min updates', value: 0 },
+            { title: 'RainViewer: Free · Global · zoom 7 · 10-min updates', value: 1 },
             {
-              title: 'RainViewer Pro — $40/yr · Global · zoom 12 · 10-min updates',
+              title: 'RainViewer Pro: $40/yr · Global · zoom 12 · 10-min updates',
               value: 2,
             },
           ]"
@@ -294,7 +294,7 @@ onMounted(async () => {
             density="compact"
             :type="showRainViewerProKey ? 'text' : 'password'"
             :append-inner-icon="showRainViewerProKey ? 'mdi-eye-off' : 'mdi-eye'"
-            :placeholder="rvProKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
+            :placeholder="rvProKeyConfigured ? 'Key saved. Enter a new value to replace it.' : ''"
             class="mb-1"
             :prepend-inner-icon="
               rainViewerProApiKey.trim() || rvProKeyConfigured
@@ -320,7 +320,7 @@ onMounted(async () => {
           density="compact"
           :type="showOwmKey ? 'text' : 'password'"
           :append-inner-icon="showOwmKey ? 'mdi-eye-off' : 'mdi-eye'"
-          :placeholder="owmKeyConfigured ? 'Key saved — enter a new value to replace' : ''"
+          :placeholder="owmKeyConfigured ? 'Key saved. Enter a new value to replace it.' : ''"
           class="mb-1"
           :prepend-inner-icon="
             owmApiKey.trim() || owmKeyConfigured ? 'mdi-check-circle' : 'mdi-alert-circle-outline'

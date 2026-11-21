@@ -31,7 +31,7 @@ function serverDetail(err: unknown): string | null {
 /** Human-readable message for a failed API call, for error banners and toasts. */
 function apiErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
-    if (err.code === 'ECONNABORTED') return 'Request timed out — the backend may be unreachable.'
+    if (err.code === 'ECONNABORTED') return 'Request timed out. The backend may be unreachable.'
     if (!err.response) return 'Backend unreachable.'
     return `Request failed (HTTP ${err.response.status}).`
   }

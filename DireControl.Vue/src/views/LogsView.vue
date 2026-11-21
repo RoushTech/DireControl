@@ -210,7 +210,7 @@ function openPopOut() {
           <v-card>
             <v-card-title>Clear the log view?</v-card-title>
             <v-card-text>
-              This empties the on-screen buffer only — the server keeps its log files, and new
+              This empties the on-screen buffer only. The server keeps its log files, and new
               entries keep streaming in.
             </v-card-text>
             <v-card-actions>

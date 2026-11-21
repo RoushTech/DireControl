@@ -74,7 +74,7 @@ function hopColor(beacon: OwnBeaconHistoryItemDto): string {
     <v-card>
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-2" size="20">mdi-radio-tower</v-icon>
-        Beacon History — {{ radioName }}
+        Beacon History · {{ radioName }}
         <v-spacer />
         <v-btn
           aria-label="Close"

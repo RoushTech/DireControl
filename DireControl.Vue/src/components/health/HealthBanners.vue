@@ -72,7 +72,7 @@ async function stopModem() {
   try {
     await toggleRadioActive(target.radioId)
     await radiosStore.fetchRadios()
-    toast.toast(`${target.name} deactivated — its modem is stopped`, 'warning', 10_000, {
+    toast.toast(`${target.name} deactivated and its modem stopped`, 'warning', 10_000, {
       label: 'Settings',
       to: '/settings/radios',
     })

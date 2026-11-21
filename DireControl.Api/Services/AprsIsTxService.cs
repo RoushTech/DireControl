@@ -110,7 +110,7 @@ public sealed class AprsIsTxService(
                     if (line.StartsWith('#'))
                     {
                         if (line.Contains("unverified", StringComparison.OrdinalIgnoreCase))
-                            logger.LogError("APRS-IS TX login unverified — the server will drop gated packets and ACKs. Check the passcode.");
+                            logger.LogError("APRS-IS TX login unverified. The server will drop gated packets and ACKs. Check the passcode.");
                         continue;
                     }
 
@@ -122,7 +122,7 @@ public sealed class AprsIsTxService(
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"No data on the APRS-IS TX connection for {InactivityTimeout.TotalSeconds:F0} s — reconnecting.");
+                    $"No data on the APRS-IS TX connection for {InactivityTimeout.TotalSeconds:F0} s. Reconnecting.");
             }
         }, ct);
 

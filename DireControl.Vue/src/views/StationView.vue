@@ -279,7 +279,7 @@ async function toggleWatchStatus() {
       'info',
     )
   } catch {
-    toastStore.toast(`Couldn't update the watchlist — the backend may be unreachable.`, 'error')
+    toastStore.toast(`Couldn't update the watchlist. The backend may be unreachable.`, 'error')
   } finally {
     watchLoading.value = false
   }
@@ -443,7 +443,7 @@ onUnmounted(() => {
           <!-- Headline: the latest packet's resolved RF path, hop by hop -->
           <v-card v-if="pathHops.length > 0" variant="outlined">
             <div class="d-flex align-center ga-2 card-head">
-              <span class="card-title">Last packet — how it reached us</span>
+              <span class="card-title">How the last packet reached us</span>
               <v-chip size="x-small" variant="tonal" :color="latestPacketSource.color">
                 {{ latestPacketSource.label }}
               </v-chip>
@@ -479,7 +479,7 @@ onUnmounted(() => {
           <!-- hourly packet spark -->
           <v-card variant="outlined">
             <div class="d-flex align-center card-head">
-              <span class="card-title">Activity — last 24h</span>
+              <span class="card-title">Activity · last 24h</span>
               <v-spacer />
               <span v-if="stats" class="text-caption text-medium-emphasis">
                 {{ stats.packetsToday.toLocaleString() }} today

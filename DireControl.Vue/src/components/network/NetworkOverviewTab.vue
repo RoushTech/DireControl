@@ -52,7 +52,7 @@ const stationTo = (callsign: string) => `/stations/${encodeURIComponent(callsign
         <v-progress-linear v-if="loading && !stats" indeterminate class="mb-2" />
         <PacketsPerHourChart :rf="rf" :is="is" :as-of="asOf" />
         <div v-if="rfDeaf" class="text-caption text-warning mt-2">
-          The receiver isn't decoding right now, so RF bars stay low while APRS-IS carries on.
+          The receiver is not decoding, so RF counts are low.
         </div>
       </v-card-text>
     </v-card>

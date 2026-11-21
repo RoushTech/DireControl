@@ -84,7 +84,7 @@ async function toggleRecording(id: string) {
   } catch {
     recordError.value = isRecording(id)
       ? 'Could not stop the recording.'
-      : 'Could not start recording — the radio needs a running modem.'
+      : 'Could not start recording. The radio needs a running modem.'
   }
   await refreshCaptureState()
 }

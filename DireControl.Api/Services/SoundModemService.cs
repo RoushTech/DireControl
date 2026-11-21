@@ -843,7 +843,7 @@ public sealed class SoundModemService(
                 {
                     instance.CarrierStuck = true;
                     logger.LogWarning(
-                        "{Radio} carrier detect held {Seconds} s with no preamble — treating it as stuck "
+                        "{Radio} carrier detect held {Seconds} s with no preamble, treating it as stuck "
                         + "(check squelch and audio level); CSMA will ignore it until it clears.",
                         instance.Radio.FullCallsign, stuckSamples / SampleRate);
                 }
@@ -866,8 +866,8 @@ public sealed class SoundModemService(
                 // the zero-fill run instead.
                 _channelActivity.LogInformation(
                     "{Radio} channel activity: {Ms} ms, peak {Peak:F3}, {Preambles} preamble(s), "
-                    + "{Decoded} decoded, {Failed} CRC failure(s), longest flag run {FlagRun} "
-                    + "— {Verdict}.",
+                    + "{Decoded} decoded, {Failed} CRC failure(s), longest flag run {FlagRun}: "
+                    + "{Verdict}.",
                     instance.Radio.FullCallsign,
                     (samplesSeen - burstStartSample) * 1000 / SampleRate,
                     burstPeakLevel,
@@ -1228,7 +1228,7 @@ public sealed class SoundModemService(
         {
             instance.PttStuck = true;
             throw new InvalidOperationException(
-                $"PTT for {radio.FullCallsign} could not be released — tearing the modem session down.",
+                $"PTT for {radio.FullCallsign} could not be released. Tearing the modem session down.",
                 result.Error);
         }
 
@@ -1286,12 +1286,12 @@ public sealed class SoundModemService(
         // noise is as loud as a signal, so level says nothing about whether a
         // transmission occurred.  A run of opening flags does.
         if (preambles == 0)
-            return "no preamble — carrier detect tripped on noise, not a transmission";
+            return "no preamble (carrier detect tripped on noise, not a transmission)";
         if (decoded > 0)
             return failed == 0 ? "decoded cleanly" : "partially decoded";
         if (failed > 0)
-            return "a frame arrived but failed CRC — audio quality or level";
-        return "preamble arrived but no frame formed — cut short, or too damaged to assemble";
+            return "a frame arrived but failed CRC (audio quality or level)";
+        return "preamble arrived but no frame formed (cut short, or too damaged to assemble)";
     }
 
     private void PublishTransmitAudio(string radioId, float[] audio)

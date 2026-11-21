@@ -53,10 +53,10 @@ async function saveAprsIsSettings() {
     })
     form.markClean()
     if (aprsIsEnabled.value) {
-      toastStore.toast('APRS-IS settings saved — reconnecting…', 'info', 4000)
+      toastStore.toast('APRS-IS settings saved. Reconnecting…', 'info', 4000)
       void watchAprsIsOutcome()
     } else {
-      toastStore.toast('APRS-IS settings saved — connection closed', 'info', 4000)
+      toastStore.toast('APRS-IS settings saved. Connection closed.', 'info', 4000)
       aprsIsOutcome.value = null
     }
     void healthStore.refreshStatus()
@@ -113,7 +113,7 @@ async function watchAprsIsOutcome() {
     const s = await getStatus().catch(() => null)
     aprsIsOutcome.value = {
       type: 'warning',
-      text: `Still not connected after 15 s${s?.aprsIsLastError ? ` — ${s.aprsIsLastError}` : ''}. Check the host and port.`,
+      text: `Still not connected after 15 s${s?.aprsIsLastError ? ` (${s.aprsIsLastError})` : ''}. Check the host and port.`,
     }
   }
 }
@@ -205,7 +205,7 @@ onUnmounted(() => {
         label="Server-side filter"
         density="compact"
         class="mb-2"
-        hint="e.g. r/39.0/-98.0/500 — stations within 500 km. Terms are OR'd: an unscoped t/m pulls messages from the whole network"
+        hint="e.g. r/39.0/-98.0/500 for stations within 500 km. Terms are OR'd: an unscoped t/m pulls messages from the whole network"
         persistent-hint
       />
 

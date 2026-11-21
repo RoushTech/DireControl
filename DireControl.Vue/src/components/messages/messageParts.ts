@@ -105,7 +105,7 @@ export function retryBadge(msg: InboxMessageDto): { color: string; text: string 
     default:
       // A later part of a multi-part message waits for the previous part's ACK.
       return isHeld(msg)
-        ? { color: 'info', text: 'Queued — waits for previous part' }
+        ? { color: 'info', text: 'Queued: waits for previous part' }
         : { color: 'info', text: 'Pending' }
   }
 }

@@ -115,7 +115,7 @@ export const useMessagesStore = defineStore('messages', () => {
     }
     // Announced app-wide: a give-up matters on whatever screen is open.
     toastStore.toast(
-      `Message to ${data.toCallsign} failed after ${data.retryCount} attempt(s) — no ACK received.`,
+      `Message to ${data.toCallsign} failed after ${data.retryCount} attempt(s): no ACK received.`,
       'error',
       10000,
       { label: 'View', to: '/messages' },

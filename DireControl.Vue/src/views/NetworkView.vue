@@ -186,10 +186,7 @@ onMounted(load)
     <div class="d-flex align-center ga-3 mb-3 flex-wrap">
       <div>
         <div class="page-title">Network</div>
-        <div class="text-caption text-medium-emphasis">
-          Statistics, reach and digipeaters in one place
-          <template v-if="asOfLabel"> · {{ asOfLabel }}</template>
-        </div>
+        <div v-if="asOfLabel" class="text-caption text-medium-emphasis">{{ asOfLabel }}</div>
       </div>
       <v-spacer />
       <v-btn variant="tonal" prepend-icon="mdi-refresh" :loading="loading" @click="load">
@@ -198,7 +195,7 @@ onMounted(load)
     </div>
 
     <v-alert v-if="loadFailed" type="error" variant="tonal" density="compact" class="mb-4">
-      Couldn't load network data — the backend may be unreachable.
+      Couldn't load network data. The backend may be unreachable.
       <template #append>
         <v-btn variant="text" @click="load">Retry</v-btn>
       </template>

@@ -13,7 +13,7 @@ import { levelColor } from './healthUi'
 /**
  * The detail behind the status strip: one group per lane with the raw facts
  * it was judged on, and the action that fixes it. Tap/click to open — never
- * hover (review 1.20).
+ * hover.
  */
 const emit = defineEmits<{ close: [] }>()
 
@@ -121,8 +121,7 @@ async function reconnectHub() {
       </template>
     </v-card-item>
     <v-card-text class="pt-0 text-body-2 text-medium-emphasis">
-      Worst of the four lanes below. RF and APRS-IS are judged separately, so internet traffic can't
-      hide a deaf receiver.
+      Worst of the four lanes below. RF and APRS-IS are rated separately.
     </v-card-text>
 
     <v-divider />

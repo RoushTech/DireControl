@@ -4,7 +4,7 @@ using NUnit.Framework;
 
 namespace DireControl.Tests;
 
-/// <summary>Editable message retry policy (review 1.25): stored overrides onto the live options.</summary>
+/// <summary>Editable message retry policy: stored overrides onto the live options.</summary>
 [TestFixture]
 public sealed class MessageRetrySettingsTests
 {

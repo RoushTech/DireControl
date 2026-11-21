@@ -1,6 +1,6 @@
 /**
  * Settings sections, in nav order. `restart` is what a save of that section
- * restarts (review 1.10); `instant` sections apply without a save.
+ * restarts; `instant` sections apply without a save.
  */
 export interface SettingsSectionMeta {
   id: string

@@ -88,11 +88,11 @@ async function doRestartModem() {
   modemRestarting.value = true
   try {
     await restartModem()
-    toastStore.toast('Modem restarting — audio devices are being re-opened…', 'info')
+    toastStore.toast('Modem restarting. Audio devices are being re-opened…', 'info')
     // Give the backend a moment, then refresh so the state chip catches up.
     setTimeout(refresh, 1500)
   } catch {
-    toastStore.toast('Modem restart failed — the backend may be unreachable.', 'error')
+    toastStore.toast('Modem restart failed. The backend may be unreachable.', 'error')
   } finally {
     modemRestarting.value = false
   }
@@ -522,7 +522,7 @@ onUnmounted(() => {
                 class="mb-3"
                 icon="mdi-alert-octagon"
               >
-                PTT could not be released — the radio may still be transmitting. Check the PTT
+                PTT could not be released. The radio may still be transmitting. Check the PTT
                 interface and the radio now.
               </v-alert>
               <v-alert
@@ -544,7 +544,7 @@ onUnmounted(() => {
                 Carrier detect has been on for
                 {{ radiosStore.carrierHeldSeconds(m.radioId) }} s without decoding anything, so
                 transmissions are waiting for a clear channel. Usually an open squelch or receive
-                audio set too high — close the squelch or lower the input level.
+                audio set too high. Close the squelch or lower the input level.
               </v-alert>
               <div class="modem-body">
                 <!-- Left: meters + waterfall -->
@@ -743,7 +743,7 @@ onUnmounted(() => {
           <div class="text-subtitle-1 font-weight-medium mb-1">Sound Modem</div>
           <template v-if="refreshFailed || radiosLoadFailed">
             <div class="text-caption text-medium-emphasis mb-2">
-              Couldn't reach the backend — modem status is unknown.
+              Couldn't reach the backend. Modem status is unknown.
             </div>
             <v-btn size="small" color="primary" variant="tonal" @click="refresh">Retry</v-btn>
           </template>
@@ -868,7 +868,7 @@ onUnmounted(() => {
     <!-- Capture, auto-capture, the log pack and the RF internals moved to Diagnostics. -->
     <div class="mt-4">
       <v-btn variant="tonal" prepend-icon="mdi-stethoscope" to="/radio/diagnostics">
-        Diagnostics — carrier, TX lanes, PTT, capture &amp; log pack
+        Diagnostics: carrier, TX lanes, PTT, capture &amp; log pack
       </v-btn>
     </div>
 

@@ -12,7 +12,7 @@ import { formatTimeOfDay } from '@/utils/time'
 import TxLifecycle from './TxLifecycle.vue'
 
 /**
- * Every frame DireControl sends, with its real state (review 1.2). Right-hand
+ * Every frame DireControl sends and its state. Right-hand
  * drawer on desktop, bottom sheet on a phone; opened from the app-bar TX chip
  * and from toasts.
  */
@@ -45,7 +45,7 @@ function heardLine(it: (typeof items.value)[number]): string | null {
 function unverifiedLine(it: (typeof items.value)[number]): string | null {
   if (it.outcome !== 'unverified') return null
   return health.health.lanes.rf.level === 'warn' || health.health.lanes.rf.level === 'err'
-    ? 'Sent, but no digipeater echo heard within 30 s — your receiver may be deaf, so this is unverified.'
+    ? 'Sent, but no digipeater echo heard within 30 s. Your receiver may be deaf, so this is unverified.'
     : 'Sent, but no digipeater echo heard within 30 s.'
 }
 </script>
@@ -71,8 +71,8 @@ function unverifiedLine(it: (typeof items.value)[number]): string | null {
         </template>
       </v-card-item>
       <v-card-text class="pt-0 text-body-2 text-medium-emphasis">
-        Every frame DireControl sends, with its real state. <strong>Queued</strong> isn't sent; it's
-        sent once it's <strong>on air</strong>.
+        Outgoing frames and their state. A <strong>queued</strong> frame has not been transmitted
+        yet.
       </v-card-text>
       <v-alert
         v-if="health.health.txBlockedReason"
@@ -89,7 +89,7 @@ function unverifiedLine(it: (typeof items.value)[number]): string | null {
           v-if="items.length === 0"
           icon="mdi-radio-tower"
           title="Nothing sent this session"
-          text="Beacons, messages, ACKs and digipeats appear here from queued to on air to confirmed."
+          text="Beacons, messages, ACKs and digipeats are listed here."
         />
         <div v-for="it in items" :key="it.id" class="tx-row">
           <div class="tx-top">

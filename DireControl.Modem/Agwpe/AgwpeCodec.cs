@@ -55,7 +55,7 @@ public static class AgwpeCodec
 
         var dataLength = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(28, 4));
         if (dataLength > MaxDataLength)
-            throw new InvalidDataException($"AGWPE frame claims {dataLength} data bytes — stream desynchronised.");
+            throw new InvalidDataException($"AGWPE frame claims {dataLength} data bytes: stream desynchronised.");
 
         var total = HeaderLength + (int)dataLength;
         if (buffer.Count < total)

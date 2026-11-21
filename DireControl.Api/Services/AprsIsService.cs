@@ -150,7 +150,7 @@ public sealed class AprsIsService(
         // receiveTask completes and the channel drains.
         inactivityCts.Token.Register(() =>
         {
-            logger.LogWarning("No data from APRS-IS for {Timeout} — forcing reconnect", InactivityTimeout);
+            logger.LogWarning("No data from APRS-IS for {Timeout}, forcing reconnect", InactivityTimeout);
             client.Disconnect();
         });
         inactivityCts.CancelAfter(InactivityTimeout);
@@ -404,6 +404,6 @@ public sealed class AprsIsService(
 
     private sealed class AuthFailedException : Exception
     {
-        public AuthFailedException() : base("APRS-IS passcode rejected — check configuration") { }
+        public AuthFailedException() : base("APRS-IS passcode rejected. Check configuration.") { }
     }
 }

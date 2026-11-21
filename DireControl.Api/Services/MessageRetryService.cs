@@ -101,7 +101,7 @@ public sealed class MessageRetryService(
             if (failed)
             {
                 logger.LogInformation(
-                    "Message {Id} to {ToCallsign} failed after {Count} attempts — no ACK received.",
+                    "Message {Id} to {ToCallsign} failed after {Count} attempts: no ACK received.",
                     message.Id, message.ToCallsign, retryCount);
 
                 await hubContext.Clients.All.SendAsync(

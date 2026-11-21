@@ -22,7 +22,7 @@ import CaptureDiagnostics from '@/components/CaptureDiagnostics.vue'
 
 /**
  * The RF internals that used to be hidden under the headphones button or not
- * shown at all (review 1.4, 1.18, 3.11, 3.12, 3.21, 3.24): carrier-detect duty
+ * shown at all: carrier-detect duty
  * and the stuck rule, TX lanes and drops, CSMA waits and timeouts, ALSA
  * period and overruns, PTT state and watchdog, decodes per profile, plus
  * recording, auto-capture and the log pack.
@@ -104,7 +104,7 @@ async function testPtt(d: ModemDiagnosticsDto) {
     const res = await sendTestTone(d.radioId, TestToneKinds.PttOnly, 1000)
     const f = res.txFrameIds[0] ? await txStore.waitFor(res.txFrameIds[0], 30_000) : undefined
     if (f?.state === TxFrameStates.Sent) {
-      toast.toast('Keyed ✓ — PTT held for 1 s and released.', 'success')
+      toast.toast('Keyed. PTT held for 1 s and released.', 'success')
       health.markPttTested()
     } else toast.toast(`PTT test did not key: ${f?.reason ?? 'no result'}`, 'error', 10_000)
   } catch (e) {
@@ -297,7 +297,7 @@ async function doForceUnkey(d: ModemDiagnosticsDto) {
             <v-card-title class="text-subtitle-2">Transmit</v-card-title>
             <v-card-text>
               <div v-if="!d.txEnabled" class="text-body-2 text-medium-emphasis">
-                Receive only — TX is not enabled for this radio.
+                Receive only. TX is not enabled for this radio.
               </div>
               <template v-else>
                 <v-table density="compact">

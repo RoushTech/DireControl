@@ -42,7 +42,7 @@ public sealed class PmsHostService(
                     }
                     else
                     {
-                        logger.LogWarning("PMS could not claim {Callsign} — already registered.", pmsCallsign);
+                        logger.LogWarning("PMS could not claim {Callsign}: already registered.", pmsCallsign);
                     }
                 }
 

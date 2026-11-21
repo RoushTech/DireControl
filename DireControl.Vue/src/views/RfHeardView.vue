@@ -254,7 +254,7 @@ const hasChartData = computed(() =>
  */
 const emptyChartMessage = computed(() =>
   status.value?.backfillInProgress
-    ? 'Still classifying stored packets — the trend fills in from today backwards as it goes.'
+    ? 'Still classifying stored packets. The trend fills in from today backwards.'
     : 'No direct receptions recorded in this range. Only packets heard without a digipeater count here.',
 )
 
@@ -301,7 +301,7 @@ onMounted(load)
     <div class="d-flex align-center ga-3 mb-4 flex-wrap">
       <div class="text-h5 font-weight-bold">RF Heard</div>
       <span class="text-caption text-medium-emphasis">
-        Stations heard directly on RF — no digipeater in between
+        Stations heard directly on RF, with no digipeater in between
       </span>
       <span v-if="asOfLabel" class="text-caption text-medium-emphasis">{{ asOfLabel }}</span>
       <v-spacer />
@@ -338,9 +338,9 @@ onMounted(load)
     >
       <div class="d-flex align-center ga-3 flex-wrap">
         <span>
-          Classifying stored packets — {{ backfillPercent }}% done,
+          Classifying stored packets: {{ backfillPercent }}% done,
           {{ status.packetsRemaining.toLocaleString() }} to go. Counts below cover only what has
-          been classified so far and will keep growing; the daily trend appears once this finishes.
+          been classified so far. The daily trend appears once this finishes.
         </span>
       </div>
       <v-progress-linear :model-value="backfillPercent" height="4" rounded class="mt-2" />
@@ -388,7 +388,7 @@ onMounted(load)
         <v-empty-state
           icon="mdi-antenna"
           title="Nothing heard direct yet"
-          text="RF Heard counts direct receptions only: stations your own receiver decodes with no digipeater in between. Digipeated and APRS-IS packets never appear here. Reception is rolled up every few minutes, so on a fresh install give it a moment."
+          text="RF Heard counts stations your receiver decodes directly, with no digipeater in between. Updated every few minutes."
         >
           <template #actions>
             <v-btn variant="tonal" color="primary" to="/radio">Open radio</v-btn>

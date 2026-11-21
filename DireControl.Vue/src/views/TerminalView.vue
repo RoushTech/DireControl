@@ -340,7 +340,7 @@ onMounted(async () => {
             · {{ session.localCallsign }} ↔ {{ session.remoteCallsign }}
             <template v-if="session.digiPath"> via {{ session.digiPath }}</template>
             <template v-if="isEnded(session) && session.endReason">
-              — {{ session.endReason }}
+              · {{ session.endReason }}
             </template>
           </v-banner-text>
           <template #actions>

@@ -261,7 +261,7 @@ function openPopOut() {
         <span class="fresh-v">{{ freshIs.text }}</span>
       </span>
       <v-chip v-if="!healthStore.health.live" size="small" color="warning" variant="tonal">
-        Not live — frozen as of the drop
+        Not live: frozen as of the drop
       </v-chip>
       <v-btn
         v-if="freshRf.color === 'warning'"
@@ -281,7 +281,7 @@ function openPopOut() {
       <button
         class="beacon-cell beacon-time beacon-th text-caption font-weight-medium text-medium-emphasis"
         :title="
-          absoluteTime ? 'Showing UTC — click for relative' : 'Showing relative — click for UTC'
+          absoluteTime ? 'Showing UTC. Click for relative.' : 'Showing relative. Click for UTC.'
         "
         @click="absoluteTime = !absoluteTime"
       >
@@ -304,7 +304,7 @@ function openPopOut() {
     <!-- Paused banner -->
     <div v-if="store.paused" class="beacon-paused-banner">
       <v-icon size="14">mdi-pause</v-icon>
-      Paused — {{ store.pendingCount }} new packet{{ store.pendingCount === 1 ? '' : 's' }} buffered
+      Paused: {{ store.pendingCount }} new packet{{ store.pendingCount === 1 ? '' : 's' }} buffered
       <v-btn size="x-small" variant="text" color="primary" @click="store.unpause()">Resume</v-btn>
     </div>
 
@@ -313,7 +313,7 @@ function openPopOut() {
       v-if="seedFailed && store.displayedPackets.length === 0"
       class="text-center text-medium-emphasis py-8"
     >
-      <div class="mb-2">Couldn't load packet history — the backend may be unreachable.</div>
+      <div class="mb-2">Couldn't load packet history. The backend may be unreachable.</div>
       <div class="text-caption mb-3">
         Live packets will still appear when the connection recovers.
       </div>
@@ -322,9 +322,7 @@ function openPopOut() {
     <div v-else-if="store.displayedPackets.length === 0" class="text-center py-8">
       <v-icon size="36" class="text-medium-emphasis mb-2">mdi-radio-tower</v-icon>
       <div class="text-body-1 font-weight-medium mb-1">No packets heard yet</div>
-      <div class="text-caption text-medium-emphasis">
-        The sound modem is listening — packets appear here as they decode.
-      </div>
+      <div class="text-caption text-medium-emphasis">The sound modem is listening.</div>
     </div>
     <div
       v-else-if="store.filteredPackets.length === 0"

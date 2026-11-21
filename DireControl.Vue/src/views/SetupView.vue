@@ -10,7 +10,7 @@ import { apiErrorDetail } from '@/api/axios'
 import HomePicker from '@/components/HomePicker.vue'
 
 /**
- * First-run checklist (review 1.8): Callsign → Home position → Radio and
+ * First-run checklist: Callsign → Home position → Radio and
  * audio → PTT test ("did it key?") → APRS-IS (optional). Derived live from
  * settings, radios and status; it can be hidden but never blocks anything —
  * transmit is blocked server-side while the callsign is N0CALL regardless.
@@ -57,10 +57,7 @@ async function saveCallsign() {
       homeLat: health.home?.lat ?? null,
       homeLon: health.home?.lon ?? null,
     })
-    toast.toast(
-      'Callsign saved — APRS-IS reconnects and PMS/terminal listeners restart.',
-      'success',
-    )
+    toast.toast('Callsign saved. APRS-IS reconnects and PMS/terminal listeners restart.', 'success')
     await health.refreshSettings()
   } catch (e) {
     toast.toast(apiErrorDetail(e, 'Could not save the callsign'), 'error')
@@ -134,7 +131,7 @@ function confirmKeyed(yes: boolean) {
   if (yes) {
     health.markPttTested()
     pttPhase.value = null
-    toast.toast('PTT confirmed — the radio keys and releases.', 'success')
+    toast.toast('PTT confirmed. The radio keys and releases.', 'success')
   } else pttPhase.value = 'no'
 }
 </script>
@@ -198,8 +195,7 @@ function confirmKeyed(yes: boolean) {
             <!-- Home -->
             <div v-else-if="step.key === 'home'">
               <p class="text-body-2 mb-2">
-                Tap the map, type the coordinates, or enter a grid square. There is no GPS on this
-                station.
+                Tap the map, type the coordinates, or enter a grid square.
               </p>
               <HomePicker v-model="home" />
               <v-btn
@@ -265,7 +261,7 @@ function confirmKeyed(yes: boolean) {
                   density="compact"
                   class="mt-3"
                 >
-                  DireControl keyed and released PTT. Did the radio actually transmit?
+                  PTT was keyed and released. Did the radio transmit?
                   <div class="d-flex ga-2 mt-2">
                     <v-btn size="small" color="success" variant="flat" @click="confirmKeyed(true)">
                       Yes, it keyed

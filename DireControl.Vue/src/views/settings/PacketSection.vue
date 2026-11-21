@@ -108,7 +108,7 @@ async function savePacketSettings() {
       terminalTranscriptRetentionDays: terminalTranscriptRetentionDays.value,
     })
     form.markClean()
-    toastStore.toast('Packet settings saved — restarting PMS, terminal listener and AGWPE…', 'info')
+    toastStore.toast('Packet settings saved. Restarting PMS, terminal listener and AGWPE…', 'info')
   } catch (e: unknown) {
     packetSaveError.value = apiErrorDetail(e)
   } finally {
@@ -141,7 +141,7 @@ onMounted(async () => {
     <v-card variant="outlined" class="mb-6 pa-4">
       <div class="text-subtitle-2 font-weight-medium mb-1">Connected mode</div>
       <div class="text-caption text-medium-emphasis mb-2">
-        AX.25 connected-mode sessions — the Terminal view, inbound connects, and the link parameters
+        AX.25 connected-mode sessions: the Terminal view, inbound connects, and the link parameters
         used when a session doesn't override them.
       </div>
       <v-switch
@@ -321,7 +321,7 @@ onMounted(async () => {
         density="compact"
         class="mb-2"
       >
-        The AGWPE protocol has no authentication — binding to anything other than
+        The AGWPE protocol has no authentication. Binding to anything other than
         <code>127.0.0.1</code> lets any host that can reach this machine key your radios.
       </v-alert>
     </v-card>

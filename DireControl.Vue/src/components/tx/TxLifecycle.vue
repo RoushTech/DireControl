@@ -9,7 +9,7 @@ import { useHealthStore } from '@/stores/health'
  * One frame's lifecycle as steps: Queued → Clear channel → On air → done
  * (Heard / Acked / Sent). Failures mark the step where it stopped with the
  * reason. "Queued" is never "sent" — only the last step means it left the
- * radio (review 1.2).
+ * radio.
  */
 const props = defineProps<{
   item: TxItem

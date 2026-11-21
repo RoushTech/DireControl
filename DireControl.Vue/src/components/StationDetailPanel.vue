@@ -1194,8 +1194,8 @@ watch(tab, (newTab) => {
 
           <template v-if="!signalLoading && signalPoints.length === 0">
             <div class="px-3 py-4 text-caption text-medium-emphasis">
-              No RF packets from this station in the selected window — signal data comes from
-              packets the modem decodes off the air.
+              No RF packets from this station in the selected window. Signal data comes from packets
+              the modem decodes off the air.
             </div>
           </template>
 

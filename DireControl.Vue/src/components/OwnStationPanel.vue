@@ -161,7 +161,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
       size="small"
       variant="elevated"
       prepend-icon="mdi-radio-handheld"
-      :aria-label="`${radio.fullCallsign}: ${txChip(radio).label} — show station panel`"
+      :aria-label="`${radio.fullCallsign}: ${txChip(radio).label}, show station panel`"
       @click="expanded = true"
     >
       {{ radio.fullCallsign }} · {{ txChip(radio).label }}
@@ -266,16 +266,14 @@ function txChip(radio: RadioDto): { label: string; color: string } {
           @click="openHistory(radio.id)"
         />
       </div>
-      <!-- TX blocked: keep the button visible and say why (review 1.2). -->
+      <!-- TX blocked: keep the button visible and say why. -->
       <div v-if="txBlocked(radio)" class="own-blocked text-warning">{{ txBlocked(radio) }}</div>
     </div>
   </div>
   <!-- No radio yet: say so, rather than the panel silently not existing. -->
   <div v-else-if="radiosStore.loaded" class="own-station-panel">
     <div class="own-station-card">
-      <div class="text-body-2 mb-2">
-        No radio set up yet — DireControl has nothing to beacon with.
-      </div>
+      <div class="text-body-2 mb-2">No radio configured.</div>
       <v-btn size="small" variant="tonal" color="primary" to="/settings/radios">
         Add a radio
       </v-btn>

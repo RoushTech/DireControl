@@ -182,7 +182,7 @@ public sealed class TerminalSessionService(
             var baseCallsign = options.Value.OurCallsign;
             var registered = sessionManager.RegisterListener(baseCallsign, this);
             if (!registered)
-                logger.LogWarning("Terminal could not claim {Callsign} — already registered.", baseCallsign);
+                logger.LogWarning("Terminal could not claim {Callsign}: already registered.", baseCallsign);
 
             try
             {
@@ -328,7 +328,7 @@ public sealed class TerminalSessionService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Preset upsert failed — session opened regardless.");
+            logger.LogError(ex, "Preset upsert failed. Session opened regardless.");
         }
     }
 

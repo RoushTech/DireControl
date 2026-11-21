@@ -106,7 +106,7 @@ async function save() {
       externalTnc.markClean()
       restarted.push('reconnecting to the external TNC')
     }
-    toastStore.toast(`RF services saved — ${restarted.join('; ')}…`, 'info')
+    toastStore.toast(`RF services saved: ${restarted.join('; ')}…`, 'info')
   } catch (e) {
     saveError.value = `Save failed: ${apiErrorDetail(e)}`
   } finally {
@@ -190,7 +190,7 @@ onMounted(async () => {
           v-model="kissServerBindAddress"
           label="Bind address"
           density="compact"
-          hint="KISS has no authentication — 127.0.0.1 keeps it on this host"
+          hint="KISS has no authentication. 127.0.0.1 keeps it on this host."
           persistent-hint
           style="max-width: 260px"
         />
@@ -249,8 +249,7 @@ onMounted(async () => {
         density="compact"
       />
       <div class="text-caption text-medium-emphasis mb-2">
-        Leave off when using the native sound modem — otherwise DireControl keeps trying to reach a
-        TNC that isn't there.
+        Leave off when using the native sound modem.
       </div>
       <div v-if="direwolfEnabled" class="d-flex ga-4 align-center flex-wrap mt-1">
         <v-text-field

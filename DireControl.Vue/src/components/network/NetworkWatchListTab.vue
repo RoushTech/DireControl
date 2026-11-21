@@ -22,7 +22,7 @@ async function unwatch(station: StationDto) {
     emit('removed', station.callsign)
     toastStore.toast(`${station.callsign} removed from the watch list`, 'info')
   } catch {
-    toastStore.toast(`Couldn't update the watch list — the backend may be unreachable.`, 'error')
+    toastStore.toast(`Couldn't update the watch list. The backend may be unreachable.`, 'error')
   } finally {
     unwatching.value[station.callsign] = false
   }

@@ -68,17 +68,17 @@ const rxBitRepairHint = computed(() => {
 const modemCaptureDeviceItems = computed(() =>
   modemDevices.value.audio
     .filter((d) => d.supportsCapture)
-    .map((d) => ({ title: `${d.name} — ${d.description}`, value: d.name })),
+    .map((d) => ({ title: `${d.name} · ${d.description}`, value: d.name })),
 )
 
 const modemPlaybackDeviceItems = computed(() =>
   modemDevices.value.audio
     .filter((d) => d.supportsPlayback)
-    .map((d) => ({ title: `${d.name} — ${d.description}`, value: d.name })),
+    .map((d) => ({ title: `${d.name} · ${d.description}`, value: d.name })),
 )
 
 const modemHidDeviceItems = computed(() =>
-  modemDevices.value.hidDevices.map((d) => ({ title: `${d.path} — ${d.name}`, value: d.path })),
+  modemDevices.value.hidDevices.map((d) => ({ title: `${d.path} · ${d.name}`, value: d.path })),
 )
 
 // ─── Radios ───────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ const healthStore = useHealthStore()
 
 /** A radio save restarts that radio's modem session (KISS clients stay connected). */
 function announceModemRestart(what: string) {
-  toastStore.toast(`${what} — restarting that radio's modem…`, 'info', 4000)
+  toastStore.toast(`${what}. Restarting that radio's modem…`, 'info', 4000)
 }
 const editorLevel = ref<ModemLevelDto | null>(null)
 const editorWaterfall = ref<InstanceType<typeof WaterfallCanvas> | null>(null)
@@ -181,7 +181,7 @@ async function doTestPtt() {
     // Queued is not keyed: wait for the keyup to actually finish.
     const f = res.txFrameIds[0] ? await txStore.waitFor(res.txFrameIds[0], 30_000) : undefined
     if (f?.state === TxFrameStates.Sent) {
-      toastStore.toast('Keyed ✓ — PTT held for 1 s and released.', 'success', 5000)
+      toastStore.toast('Keyed. PTT held for 1 s and released.', 'success', 5000)
       healthStore.markPttTested()
     } else
       toastStore.toast(
@@ -458,7 +458,7 @@ async function saveRadio() {
     radioSaveError.value =
       typeof detail === 'string' && detail
         ? detail
-        : 'Failed to save the radio — check the values and that the backend is reachable.'
+        : 'Failed to save the radio. Check the values and that the backend is reachable.'
   } finally {
     radioSaving.value = false
   }
@@ -639,7 +639,7 @@ onUnmounted(() => {
         </tbody>
       </v-table>
       <div v-else class="text-center text-medium-emphasis py-6">
-        <div class="mb-3">No radios configured — add your radio to start decoding.</div>
+        <div class="mb-3">No radios configured. Add your radio to start decoding.</div>
         <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="openAddRadio">
           Add Radio
         </v-btn>
@@ -735,7 +735,7 @@ onUnmounted(() => {
               <div class="radio-form-section">
                 <div class="text-subtitle-2 font-weight-medium">Frequency</div>
                 <div class="text-caption text-medium-emphasis mb-2">
-                  Used for labels and the frequencies table — not rig control.
+                  Used for labels and the frequencies table, not rig control.
                 </div>
                 <div class="radio-form-row">
                   <v-text-field
@@ -877,7 +877,7 @@ onUnmounted(() => {
               <div class="radio-form-section">
                 <div class="text-subtitle-2 font-weight-medium">Calibration</div>
                 <div class="text-caption text-medium-emphasis mb-2">
-                  Set levels against the live modem — what it hears and what it sends.
+                  Set RX and TX levels against the live modem.
                 </div>
 
                 <!-- Live calibration — mirrors the Radio page so levels are set
@@ -891,7 +891,7 @@ onUnmounted(() => {
                       color="warning"
                       size="x-small"
                       variant="tonal"
-                      title="Carrier is on with nothing decoding — squelch open or input too hot"
+                      title="Carrier is on with nothing decoding: squelch open or input too hot"
                     >
                       carrier held {{ radiosStore.carrierHeldSeconds(editingRadioId) }} s
                     </v-chip>
@@ -991,10 +991,10 @@ onUnmounted(() => {
                         Test PTT (key 1 s)
                       </v-btn>
                       <span v-if="pttFieldsDirty" class="text-caption text-warning">
-                        Save first — the test uses the saved PTT settings
+                        Save first. The test uses the saved PTT settings.
                       </span>
                       <span v-else class="text-caption text-medium-emphasis">
-                        no tone — wiring check
+                        wiring check, no tone
                       </span>
                     </div>
                   </template>
@@ -1002,8 +1002,8 @@ onUnmounted(() => {
 
                 <template v-else>
                   <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-                    Save the radio first — the live meter and waterfall need the modem running on
-                    the saved config.
+                    Save the radio first. The live meter and waterfall need the modem running on the
+                    saved config.
                   </v-alert>
                   <div v-if="rModem.txEnabled" class="radio-form-row">
                     <v-text-field
@@ -1011,7 +1011,7 @@ onUnmounted(() => {
                       label="TX level (%)"
                       density="compact"
                       type="number"
-                      hint="Starting TX gain — calibrate live after saving"
+                      hint="Starting TX gain. Calibrate live after saving."
                       persistent-hint
                     />
                   </div>
@@ -1024,7 +1024,7 @@ onUnmounted(() => {
               <div v-if="rModem.modemEnabled && rModem.txEnabled" class="radio-form-section">
                 <div class="text-subtitle-2 font-weight-medium">PTT</div>
                 <div class="text-caption text-medium-emphasis mb-2">
-                  How transmit is keyed — the fields follow the chosen method.
+                  How transmit is keyed. The fields follow the chosen method.
                 </div>
                 <div class="radio-form-row">
                   <v-select

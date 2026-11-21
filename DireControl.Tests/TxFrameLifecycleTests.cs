@@ -8,7 +8,7 @@ using NUnit.Framework;
 namespace DireControl.Tests;
 
 /// <summary>
-/// The TX lifecycle the UI shows (review 1.2): every queued frame gets an id
+/// The TX lifecycle the UI shows: every queued frame gets an id
 /// and moves Queued → WaitingForChannel → OnAir → Sent, or ends Failed /
 /// Dropped with a reason. These drive the same registry calls, reasons and
 /// lane the modem's transmit loop uses.

@@ -86,7 +86,7 @@ async function saveRetention() {
     retentionAprsIsDays.value = payload.aprsIsDays
     retentionOwnDays.value = payload.ownDays
     retention.markClean()
-    toastStore.toast('Retention saved — applies at the next cleanup', 'success', 3000)
+    toastStore.toast('Retention saved. Applies at the next cleanup.', 'success', 3000)
   } catch (e) {
     retentionSaveError.value = `Failed to save retention settings: ${apiErrorDetail(e)}`
   } finally {
@@ -154,11 +154,11 @@ async function startReprocessNow() {
   reprocessStarting.value = true
   try {
     await startReprocess({ force: reprocessForce.value })
-    showToast('Reprocess started — packets are being re-parsed in the background.', 'success')
+    showToast('Reprocess started. Packets are being re-parsed in the background.', 'success')
     startReprocessPolling()
     await loadReprocess()
   } catch {
-    showToast('Couldn’t start the reprocess — one may already be running.', 'error')
+    showToast('Couldn’t start the reprocess. One may already be running.', 'error')
     await loadReprocess()
   } finally {
     reprocessStarting.value = false
@@ -185,7 +185,7 @@ async function runCleanupNow() {
     startCleanupPolling()
   } catch {
     cleanupRunning.value = false
-    showToast('Cleanup failed to start — the backend may be unreachable.', 'error')
+    showToast('Cleanup failed to start. The backend may be unreachable.', 'error')
   }
 }
 onMounted(() => Promise.all([loadMaintenance(), loadReprocess()]))
@@ -224,7 +224,7 @@ onUnmounted(() => {
       </div>
 
       <div class="text-body-2 mb-2">
-        Packet retention — how long to keep received packets before pruning.
+        Packet retention: how long to keep received packets before pruning.
         <strong>0 = keep forever.</strong>
       </div>
 
@@ -318,8 +318,8 @@ onUnmounted(() => {
 
     <v-card variant="outlined" class="mb-6 pa-4">
       <div class="text-body-2 mb-3">
-        Re-derives positions, weather, telemetry, and resolved paths from the stored raw packets —
-        useful after a parser fix. Runs in the background; parser version
+        Re-derives positions, weather, telemetry, and resolved paths from the stored raw packets.
+        Useful after a parser fix. Runs in the background; parser version
         <strong>{{ reprocessStatus?.currentParserVersion ?? '…' }}</strong>.
       </div>
 
@@ -344,7 +344,7 @@ onUnmounted(() => {
       <div class="d-flex align-center ga-4 flex-wrap">
         <v-switch
           v-model="reprocessForce"
-          label="Force — re-parse every packet, not just outdated ones"
+          label="Force: re-parse every packet, not just outdated ones"
           density="compact"
           hide-details
           color="primary"
@@ -409,11 +409,11 @@ onUnmounted(() => {
           density="compact"
           class="mb-3"
         >
-          The retention changes below are not saved yet — save them first, or cleanup uses the
+          The retention changes below are not saved yet. Save them first, or cleanup uses the
           previously saved windows.
         </v-alert>
         <p class="mb-3">
-          This permanently deletes packets outside the retention windows — RF packets
+          This permanently deletes packets outside the retention windows: RF packets
           {{ retentionLabel(retentionRfDays) }}, APRS-IS packets
           {{ retentionLabel(retentionAprsIsDays) }}, own beacons
           {{ retentionLabel(retentionOwnDays) }}. This cannot be undone.

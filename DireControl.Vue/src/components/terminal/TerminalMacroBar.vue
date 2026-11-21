@@ -126,7 +126,7 @@ async function removeMacro(macro: TerminalMacroDto) {
       {{ macro.label }}
     </v-chip>
     <span v-if="sortedMacros.length === 0" class="text-caption text-medium-emphasis">
-      No macros yet — add canned commands for one-click sending.
+      No macros yet. Add canned commands for one-click sending.
     </span>
     <v-spacer />
     <v-btn

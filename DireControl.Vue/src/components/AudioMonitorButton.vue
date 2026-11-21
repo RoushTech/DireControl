@@ -182,7 +182,7 @@ function volumeIcon() {
           class="ml-1"
         />
         <div class="text-caption text-medium-emphasis mb-2 ml-1">
-          Only stream while carrier is detected. Leave off to hear raw audio — noise, hum, and
+          Only stream while carrier is detected. Leave off to hear raw audio: noise, hum, and
           signals too weak to decode.
         </div>
 
@@ -202,7 +202,7 @@ function volumeIcon() {
           class="d-flex align-center text-caption text-warning mt-2 ml-1"
         >
           <v-icon size="14" class="mr-1">mdi-wifi-alert</v-icon>
-          Audio is breaking up — the connection can't keep up.
+          Audio is dropping out: the connection is too slow.
         </div>
       </v-card-text>
     </v-card>

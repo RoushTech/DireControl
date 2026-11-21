@@ -116,7 +116,7 @@ async function acknowledge(id: number) {
     await alertsStore.acknowledge(id)
     toastStore.toast('Alert acknowledged', 'success')
   } catch {
-    toastStore.toast("Couldn't acknowledge the alert — the backend may be unreachable.", 'error')
+    toastStore.toast("Couldn't acknowledge the alert. The backend may be unreachable.", 'error')
   }
 }
 
@@ -138,7 +138,7 @@ function goToStation(callsign: string) {
       </div>
 
       <v-alert v-if="!healthStore.health.live" type="warning" variant="tonal" density="compact">
-        Live feed lost — alerts raised meanwhile appear once it reconnects.
+        Live feed lost. Alerts raised meanwhile appear once it reconnects.
       </v-alert>
 
       <div class="filter-scroll">
@@ -166,7 +166,7 @@ function goToStation(callsign: string) {
         :title="rows.length === 0 ? 'No alerts yet' : 'Nothing matches'"
         :text="
           rows.length === 0
-            ? 'Set up geofences, proximity rules, lightning alerts or a watch list and alerts land here.'
+            ? 'Alerts come from geofences, proximity rules, lightning alerts and the watch list.'
             : 'Try another filter.'
         "
       />

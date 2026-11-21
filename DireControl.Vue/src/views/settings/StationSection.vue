@@ -133,7 +133,7 @@ async function save() {
     }
     if (callsignChanged)
       toastStore.toast(
-        'Callsign saved — reconnecting APRS-IS and restarting PMS and terminal listeners…',
+        'Callsign saved. Reconnecting APRS-IS and restarting PMS and terminal listeners…',
         'info',
       )
     else toastStore.toast('Station settings saved', 'success', 3000)
@@ -174,7 +174,7 @@ onMounted(async () => {
         class="mb-4"
       >
         Your callsign is still the placeholder N0CALL. Set your own callsign below before
-        transmitting or connecting to APRS-IS — DireControl identifies with it on air.
+        transmitting or connecting to APRS-IS. DireControl identifies with it on air.
       </v-alert>
       <v-alert v-if="loadError" type="error" variant="tonal" density="compact" class="mb-4">
         {{ loadError }}
@@ -203,8 +203,7 @@ onMounted(async () => {
 
         <div class="text-subtitle-2 font-weight-medium mb-1">Home position</div>
         <div class="text-caption text-medium-emphasis mb-2">
-          Where your beacons say you are — also anchors range rings and distance columns. There is
-          no GPS input on this hardware, so it's set by hand.
+          Beacon position. Also the origin for range rings and distances.
         </div>
         <HomePicker v-model="home" v-model:valid="homeValid" />
       </v-card>

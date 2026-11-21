@@ -39,7 +39,7 @@ public sealed class KissTcpService(
                 if (!settings.DirewolfEnabled)
                 {
                     logger.LogInformation(
-                        "External TNC (KISS TCP) disabled — using the native sound modem only.");
+                        "External TNC (KISS TCP) disabled. Using the native sound modem only.");
                     // Sleep until a settings change wakes us to re-evaluate.
                     await Task.Delay(Timeout.Infinite, ct);
                     continue;

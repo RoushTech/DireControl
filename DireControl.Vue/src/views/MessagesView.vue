@@ -419,7 +419,7 @@ const partialSendWarning = ref('')
 function checkPartialSend(sentCount: number, expected: number) {
   partialSendWarning.value =
     sentCount < expected
-      ? `Only ${sentCount} of ${expected} parts were queued — the transmitter became unavailable mid-send. Send the rest again once TX is back.`
+      ? `Only ${sentCount} of ${expected} parts were queued because the transmitter became unavailable mid-send. Send the rest again once TX is back.`
       : ''
 }
 
@@ -836,7 +836,7 @@ onUnmounted(() => {
             <v-icon size="36" class="text-medium-emphasis mb-2">mdi-forum-outline</v-icon>
             <div class="text-body-2 font-weight-medium mb-1">No conversations yet</div>
             <div class="text-caption text-medium-emphasis mb-3">
-              Anything addressed to {{ ourCallsign || 'your station' }} lands here.
+              Messages addressed to {{ ourCallsign || 'your station' }} appear here.
             </div>
             <v-btn
               size="small"
@@ -1252,9 +1252,7 @@ onUnmounted(() => {
                 </td>
               </tr>
               <tr v-if="outboxMessages.length === 0">
-                <td colspan="4" class="text-center text-medium-emphasis py-6">
-                  Outbox is empty. Everything was acknowledged or dismissed.
-                </td>
+                <td colspan="4" class="text-center text-medium-emphasis py-6">Outbox is empty.</td>
               </tr>
             </tbody>
           </v-table>
@@ -1496,7 +1494,7 @@ onUnmounted(() => {
                     </v-icon>
                     <div class="text-body-2 font-weight-medium mb-1">The mailbox is empty</div>
                     <div class="text-caption text-medium-emphasis">
-                      Messages left by stations connecting to your PMS land here.
+                      Messages left on your PMS appear here.
                     </div>
                   </td>
                 </tr>

@@ -1178,7 +1178,7 @@ public sealed class AprsPacketParsingService(
         if (alreadyConfirmed)
         {
             logger.LogDebug(
-                "Skipping duplicate own-beacon KISS echo for {Callsign} — already confirmed within 30 s.",
+                "Skipping duplicate own-beacon KISS echo for {Callsign}: already confirmed within 30 s.",
                 radio.FullCallsign);
             return;
         }
@@ -1307,7 +1307,7 @@ public sealed class AprsPacketParsingService(
         if (existingConfirmation != null)
         {
             logger.LogDebug(
-                "Duplicate confirmation from {Digi} for beacon {Id} — ignoring.",
+                "Duplicate confirmation from {Digi} for beacon {Id}, ignoring.",
                 digiCallsign, ownBeacon.Id);
             return;
         }

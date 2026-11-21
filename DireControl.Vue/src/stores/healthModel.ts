@@ -5,7 +5,7 @@
  * banners and kiosk chip can never disagree.
  *
  * RF and APRS-IS are separate lanes on purpose: internet traffic flowing says
- * nothing about whether the radio hears anything (review 1.1).
+ * nothing about whether the radio hears anything.
  */
 import { ModemStates, type ModemState } from '@/api/modemApi'
 import { AprsIsStates, type AprsIsState } from '@/api/statusApi'
@@ -260,7 +260,7 @@ function txLane(r: RadioHealthInput, x: HealthInput): Lane {
       level: 'err',
       key: 'TX',
       value: 'PTT stuck',
-      detail: `${name}: unkey failed — the radio may still be transmitting`,
+      detail: `${name}: unkey failed and the radio may still be transmitting`,
       action: { label: 'Open Radio', to: '/radio' },
     }
   if (r.modemEnabled) {
@@ -345,7 +345,7 @@ function linkLane(x: HealthInput): Lane {
       level: 'err',
       key: 'LIVE',
       value: 'API offline',
-      detail: 'Backend unreachable — retrying',
+      detail: 'Backend unreachable: retrying',
     }
   switch (x.hubState) {
     case 'connected':
@@ -355,7 +355,7 @@ function linkLane(x: HealthInput): Lane {
         level: 'warn',
         key: 'LIVE',
         value: 'Resyncing…',
-        detail: 'Reconnected — refetching messages, alerts and radios',
+        detail: 'Reconnected: refetching messages, alerts and radios',
       }
     default:
       if (!x.hubEverConnected)
@@ -365,7 +365,7 @@ function linkLane(x: HealthInput): Lane {
         key: 'LIVE',
         value:
           x.hubDownSince != null ? `Offline ${durationShort(x.now - x.hubDownSince)}` : 'Offline',
-        detail: 'Live feed lost — reconnecting',
+        detail: 'Live feed lost: reconnecting',
       }
   }
 }

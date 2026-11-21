@@ -190,7 +190,7 @@ onUnmounted(() => {
       ref="mapEl"
       class="home-picker-map"
       role="application"
-      aria-label="Map — click or tap to set the home position"
+      aria-label="Map: click or tap to set the home position"
     />
     <div class="home-picker-fields">
       <v-text-field

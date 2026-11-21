@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * One save bar per settings section (review 1.10): names what the save
+ * One save bar per settings section: names what the save
  * restarts, flags unsaved changes, and holds the section's Save button.
  */
 withDefaults(

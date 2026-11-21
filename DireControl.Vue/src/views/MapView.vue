@@ -439,7 +439,7 @@ function isRfStation(station: StationDto): boolean {
 
 /**
  * Tags RF-heard markers with `station-rf` so they can fade while the receiver
- * is deaf — the map must not look healthy on APRS-IS alone (review 1.1).
+ * is deaf — the map must not look healthy on APRS-IS alone.
  */
 function buildIcon(station: StationDto | undefined): L.DivIcon {
   const icon = buildBaseIcon(station)
@@ -1800,7 +1800,7 @@ function updateGhostLayers() {
     const ghostIcon = createAprsIcon(table, code, station.lastHeading, false, 0.45, false)
     const elapsedStr = est.elapsedMinutes < 1 ? '<1m' : `${Math.round(est.elapsedMinutes)}m`
     L.marker([est.lat, est.lon], { icon: ghostIcon })
-      .bindTooltip(`Est. — ${elapsedStr} ago`, {
+      .bindTooltip(`Est. · ${elapsedStr} ago`, {
         permanent: true,
         direction: 'top',
         className: 'ghost-label',
@@ -2993,7 +2993,7 @@ defineExpose({ TILE_PROVIDERS })
               :disabled="weatherStatus?.wind.available ?? false"
               :text="
                 weatherStatus?.wind.reason ??
-                'OpenWeatherMap API key required — configure in Settings.'
+                'OpenWeatherMap API key required. Configure in Settings.'
               "
               location="right"
             >
@@ -3176,7 +3176,7 @@ defineExpose({ TILE_PROVIDERS })
               v-for="strike in alertStack"
               :key="strike.key"
               class="strike-alert-item"
-              :title="`Center on this strike — struck ${formatTime(strike.strikeTimeUtc)}, alerted ${formatStrikeAge(strike.feedLagSeconds)}`"
+              :title="`Center on this strike (struck ${formatTime(strike.strikeTimeUtc)}, alerted ${formatStrikeAge(strike.feedLagSeconds)})`"
               @click="focusAlertStrike(strike)"
             >
               <v-icon size="14" color="deep-orange-accent-3">mdi-flash</v-icon>
@@ -3495,7 +3495,7 @@ defineExpose({ TILE_PROVIDERS })
 
   <!-- Station load failure — persistent until a load succeeds -->
   <v-snackbar v-model="stationsLoadFailed" :timeout="-1" color="error" location="bottom">
-    Couldn't load stations — the map may be empty or out of date.
+    Couldn't load stations. The map may be empty or out of date.
     <template #actions>
       <v-btn variant="text" @click="loadStations()">Retry</v-btn>
       <v-btn
@@ -3842,7 +3842,7 @@ defineExpose({ TILE_PROVIDERS })
 </style>
 
 <style>
-/* Health fades (review 1.1, 1.7): markers are Leaflet DOM, so unscoped. */
+/* Health fades: markers are Leaflet DOM, so unscoped. */
 .map--rf-deaf .leaflet-marker-pane .station-rf {
   opacity: 0.4 !important;
   filter: grayscale(0.7);

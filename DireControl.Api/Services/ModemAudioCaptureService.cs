@@ -255,7 +255,7 @@ public sealed class ModemAudioCaptureService(
                 FileName(label, "missed"), spare, count, sampleRate, "missed-decode", state)))
         {
             Volatile.Write(ref state.Spare, spare);
-            _logger.LogWarning("Audio capture dropped — write queue is full.");
+            _logger.LogWarning("Audio capture dropped: write queue is full.");
         }
     }
 
@@ -326,7 +326,7 @@ public sealed class ModemAudioCaptureService(
     private void Enqueue(string name, float[] samples, int count, int sampleRate, string reason)
     {
         if (!_writes.Writer.TryWrite(new PendingWrite(name, samples, count, sampleRate, reason)))
-            _logger.LogWarning("Audio capture \"{Name}\" dropped — write queue is full.", name);
+            _logger.LogWarning("Audio capture \"{Name}\" dropped: write queue is full.", name);
     }
 
     private static string FileName(string label, string kind)

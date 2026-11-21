@@ -48,7 +48,7 @@ const radioItems = computed(() =>
   radiosStore.activeRadios.map((r) => {
     const canTx = r.modem.modemEnabled && r.modem.txEnabled
     return {
-      title: `${r.name} — ch ${r.channelNumber} (${r.fullCallsign})${canTx ? '' : ' · RX only'}`,
+      title: `${r.name} · ch ${r.channelNumber} (${r.fullCallsign})${canTx ? '' : ' · RX only'}`,
       value: r.id,
       props: { disabled: !canTx },
     }
@@ -261,7 +261,7 @@ onMounted(async () => {
         class="mb-3"
       >
         <template #no-data>
-          <v-list-item to="/settings/radios" title="No active radios — add one" />
+          <v-list-item to="/settings/radios" title="No active radios. Add one." />
         </template>
       </v-select>
 

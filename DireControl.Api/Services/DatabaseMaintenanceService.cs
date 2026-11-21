@@ -79,7 +79,7 @@ public sealed class DatabaseMaintenanceService(
         var sizeBefore = await GetSizeBytesAsync(conn, ct);
 
         logger.LogInformation(
-            "Database cleanup started (retention days — RF: {Rf}, APRS-IS: {Is}, Own: {Own}).",
+            "Database cleanup started (retention days: RF {Rf}, APRS-IS {Is}, Own {Own}).",
             RetentionLabel(settings.PacketRetentionRfDays),
             RetentionLabel(settings.PacketRetentionAprsIsDays),
             RetentionLabel(settings.PacketRetentionOwnDays));

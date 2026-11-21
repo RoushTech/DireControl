@@ -51,7 +51,7 @@ const TOAST_FAILURES = new Set<TxFrameKind>([
 
 /**
  * Every frame this station transmits, keyed by frame id, from queued to on
- * air to sent — or failed with the reason (review 1.2). Fed by the
+ * air to sent — or failed with the reason. Fed by the
  * txFrameStateChanged hub event; resyncs from GET api/v0/tx/recent on start
  * and after every reconnect.
  */
@@ -146,7 +146,7 @@ export const useTxStore = defineStore('tx', () => {
     b.heardAt = at ?? new Date().toISOString()
     if (requested.has(b.id))
       toast.toast(
-        via ? `Beacon heard — digipeated by ${via}.` : 'Beacon heard — the network repeated it.',
+        via ? `Beacon digipeated by ${via}.` : 'Beacon repeated by a digipeater.',
         'success',
       )
     requested.delete(b.id)

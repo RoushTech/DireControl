@@ -237,7 +237,7 @@ onUnmounted(() => {
             </template>
             <v-list-item-title>{{ gf.name }}</v-list-item-title>
             <v-list-item-subtitle>
-              {{ gf.centerLat.toFixed(5) }}, {{ gf.centerLon.toFixed(5) }} —
+              {{ gf.centerLat.toFixed(5) }}, {{ gf.centerLon.toFixed(5) }} ·
               {{ formatDistance(gf.radiusMeters / 1000) }}
               <span v-if="gf.alertOnEnter" class="ml-1 text-caption">↓Enter</span>
               <span v-if="gf.alertOnExit" class="ml-1 text-caption">↑Exit</span>
@@ -279,8 +279,8 @@ onUnmounted(() => {
             </template>
             <v-list-item-title>{{ rule.name }}</v-list-item-title>
             <v-list-item-subtitle>
-              <span v-if="rule.targetCallsign">{{ rule.targetCallsign }} — </span>
-              {{ rule.centerLat.toFixed(5) }}, {{ rule.centerLon.toFixed(5) }} —
+              <span v-if="rule.targetCallsign">{{ rule.targetCallsign }} · </span>
+              {{ rule.centerLat.toFixed(5) }}, {{ rule.centerLon.toFixed(5) }} ·
               {{ formatDistance(rule.radiusMetres / 1000) }}
             </v-list-item-subtitle>
             <template #append>
@@ -361,7 +361,7 @@ onUnmounted(() => {
         <v-text-field v-model="prName" label="Name" density="compact" class="mb-2" />
         <v-text-field
           v-model="prCallsign"
-          label="Target callsign (optional — leave blank for any station)"
+          label="Target callsign (optional, leave blank for any station)"
           density="compact"
           class="mb-2"
         />

@@ -84,7 +84,7 @@ internal static class KeyupRunner
                 {
                     Interlocked.Exchange(ref watchdogTripped, 1);
                     logger.LogError(
-                        "{Radio} PTT watchdog: still keyed after {Seconds:F1} s — forcing unkey.",
+                        "{Radio} PTT watchdog: still keyed after {Seconds:F1} s, forcing unkey.",
                         radioName, watchdogLimit.TotalSeconds);
                     try { ptt.SetPtt(false); }
                     catch (Exception ex) { logger.LogError(ex, "{Radio} watchdog unkey failed.", radioName); }

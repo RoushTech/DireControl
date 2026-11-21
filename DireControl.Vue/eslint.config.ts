@@ -6,7 +6,7 @@ import skipFormatting from 'eslint-config-prettier/flat'
 import type { Rule } from 'eslint'
 
 /**
- * Icon-only buttons must carry an accessible name (review 1.22): a v-btn with
+ * Icon-only buttons must carry an accessible name: a v-btn with
  * an `icon` prop and no `aria-label` (static or bound) is reported.
  */
 const iconButtonLabel: Rule.RuleModule = {
@@ -57,7 +57,7 @@ export default defineConfigWithVueTs(
     rules: {
       'app/icon-button-label': 'error',
       // Every displayed time goes through utils/time.ts so the UTC/local
-      // preference applies everywhere (review 1.16).
+      // preference applies everywhere.
       'no-restricted-syntax': [
         'error',
         {
