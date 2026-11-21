@@ -15,18 +15,22 @@ interface AudioStreamFormat {
 const VOLUME_STORAGE_KEY = 'direcontrol-audio-volume'
 
 /**
- * Playback buffer depth to aim for after an underrun. Long enough to absorb
- * normal network jitter, short enough that listening still feels live.
+ * Playback buffer depth to aim for after an underrun. Frames are 64 ms and are
+ * scheduled from the main thread, so this has to ride out several late frames
+ * in a row (a busy tab, a network hiccup) without the queue running dry, which
+ * is heard as a gap of silence. Listening lags the radio by about this much.
  */
-const TARGET_BUFFER_SEC = 0.18
+const TARGET_BUFFER_SEC = 0.35
 
 /**
- * Buffer depth past which frames are dropped to catch back up. Transmit
- * monitoring needs a far looser cap: a keyup is rendered in one go and arrives
- * faster than real time, so a tight cap would discard the middle of our own
- * packet rather than play it.
+ * Buffer depth past which frames are dropped to catch back up. The gap between
+ * this and the target is how long a stall can be before the burst of frames
+ * that follows it overflows, which is heard as a chunk missing mid-packet, so
+ * it is kept well above a second. Transmit monitoring needs a looser cap
+ * still: a keyup is rendered in one go and arrives faster than real time, so a
+ * tight cap would discard the middle of our own packet rather than play it.
  */
-const MAX_BUFFER_RX_SEC = 0.6
+const MAX_BUFFER_RX_SEC = 1.5
 const MAX_BUFFER_TX_SEC = 2.5
 
 /**
