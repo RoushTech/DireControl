@@ -33,6 +33,8 @@ export interface InboxMessageDto {
   nextRetryAt: string | null
   retryState: RetryState
   lastSentAt: string | null
+  /** Send responses only: TX frame id of the part just queued (null for held parts). */
+  txFrameId?: number | null
 }
 
 export interface AllMessagePacketDto {

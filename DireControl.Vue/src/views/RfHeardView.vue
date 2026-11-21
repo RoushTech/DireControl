@@ -25,10 +25,12 @@ import type {
   RfHeardSummaryDto,
 } from '@/types/rfHeard'
 import { StationType } from '@/types/station'
-import { timeAgo } from '@/utils/time'
+import { formatTimeOfDay, timeAgo } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
 import { useTick } from '@/composables/useTick'
 import { useUnits } from '@/composables/useUnits'
+import { useHealthStore } from '@/stores/health'
+import { axisColors, sourceColors, withAlpha } from '@/components/network/chartColors'
 
 ChartJS.register(
   CategoryScale,
@@ -43,6 +45,23 @@ ChartJS.register(
 const theme = useTheme()
 const { now } = useTick(5000)
 const { distanceUnit, formatDistance } = useUnits()
+const healthStore = useHealthStore()
+
+/**
+ * The receiver is silent, deaf, held by a carrier or the modem errored: nothing new can be
+ * heard direct, so today's figures stop growing. Say so rather than let them read as quiet.
+ */
+const rfDeaf = computed(() => {
+  const level = healthStore.health.lanes.rf.level
+  return level === 'warn' || level === 'err'
+})
+
+const deafMessage = computed(() => {
+  const last = healthStore.status?.modemLastDecodedAt
+  return last
+    ? `The receiver has decoded nothing since ${formatTimeOfDay(last, { seconds: false })}, so today's figures stop there.`
+    : `The receiver isn't decoding (${healthStore.health.lanes.rf.value}), so today's figures aren't growing.`
+})
 
 const summary = ref<RfHeardSummaryDto[]>([])
 const daily = ref<RfHeardDailyDto[]>([])
@@ -140,15 +159,21 @@ async function load() {
 
 // Follow the active Vuetify theme so the lines, grid, and ticks stay legible in dark mode
 // instead of falling back to Chart.js's light defaults.
-const chartInk = computed(() =>
-  theme.global.current.value.dark ? 'rgba(230, 237, 243, 0.75)' : 'rgba(27, 39, 51, 0.75)',
-)
-const chartGrid = computed(() =>
-  theme.global.current.value.dark ? 'rgba(230, 237, 243, 0.10)' : 'rgba(27, 39, 51, 0.10)',
-)
+const themeColors = computed(() => theme.current.value.colors)
+const chartInk = computed(() => axisColors(themeColors.value).ink)
+const chartGrid = computed(() => axisColors(themeColors.value).grid)
 
-/** One stable colour per radio, so a series keeps its colour as the range changes. */
-const SERIES_COLORS = ['#42A5F5', '#66BB6A', '#FFA726', '#AB47BC', '#EF5350', '#26C6DA']
+/**
+ * One stable colour per radio, so a series keeps its colour as the range changes. The first
+ * radio takes the RF colour (this page is RF-only); further radios take other theme roles.
+ */
+const seriesColors = computed(() => {
+  const c = themeColors.value as Readonly<Record<string, unknown>>
+  const extra = ['info', 'success', 'secondary', 'error', 'primary']
+    .map((name) => c[name])
+    .filter((v): v is string => typeof v === 'string')
+  return [sourceColors(c).rf, ...extra]
+})
 
 const chartData = computed(() => {
   const days = [...new Set(daily.value.map((d) => d.day))].sort()
@@ -159,7 +184,8 @@ const chartData = computed(() => {
   return {
     labels: days.map((d) => d.slice(5)), // MM-DD — the year is implied by the range
     datasets: channels.map((ch, i) => {
-      const color = SERIES_COLORS[i % SERIES_COLORS.length]!
+      const palette = seriesColors.value
+      const color = palette[i % palette.length]!
       return {
         label: daily.value.find((d) => d.channelNumber === ch)?.radioName ?? `Channel ${ch}`,
         data: days.map((day) => {
@@ -168,7 +194,7 @@ const chartData = computed(() => {
           return metricIsDistance.value ? toDisplayDistance(value) : value
         }),
         borderColor: color,
-        backgroundColor: `${color}33`,
+        backgroundColor: withAlpha(color, 0.2),
         borderWidth: 2,
         pointRadius: days.length > 60 ? 0 : 2,
         pointHoverRadius: 4,
@@ -229,7 +255,7 @@ const hasChartData = computed(() =>
 const emptyChartMessage = computed(() =>
   status.value?.backfillInProgress
     ? 'Still classifying stored packets — the trend fills in from today backwards as it goes.'
-    : 'No direct receptions recorded in this range.',
+    : 'No direct receptions recorded in this range. Only packets heard without a digipeater count here.',
 )
 
 // ---- Station table ----
@@ -289,6 +315,13 @@ onMounted(load)
         Refresh
       </v-btn>
     </div>
+
+    <v-alert v-if="rfDeaf" type="warning" variant="tonal" density="compact" class="mb-4">
+      <div class="d-flex align-center ga-3 flex-wrap">
+        <span class="flex-1-1">{{ deafMessage }}</span>
+        <v-btn size="small" variant="tonal" color="warning" to="/radio">Check radio</v-btn>
+      </div>
+    </v-alert>
 
     <v-alert v-if="error" type="warning" variant="tonal" density="compact" class="mb-4">
       Could not load RF reception data. Is the API running?
@@ -351,11 +384,16 @@ onMounted(load)
           </v-card-text>
         </v-card>
       </v-col>
-      <v-col v-if="summary.length === 0 && !loading" cols="12">
-        <v-alert type="info" variant="tonal" density="compact">
-          Nothing heard directly on RF yet. Reception is rolled up every few minutes — if this is a
-          fresh install, give it a moment.
-        </v-alert>
+      <v-col v-if="summary.length === 0 && !loading && !error" cols="12">
+        <v-empty-state
+          icon="mdi-antenna"
+          title="Nothing heard direct yet"
+          text="RF Heard counts direct receptions only: stations your own receiver decodes with no digipeater in between. Digipeated and APRS-IS packets never appear here. Reception is rolled up every few minutes, so on a fresh install give it a moment."
+        >
+          <template #actions>
+            <v-btn variant="tonal" color="primary" to="/radio">Open radio</v-btn>
+          </template>
+        </v-empty-state>
       </v-col>
     </v-row>
 
@@ -405,7 +443,9 @@ onMounted(load)
 
     <!-- Stations heard direct -->
     <v-card variant="outlined">
-      <v-card-title class="text-body-2 font-weight-medium pa-3 pb-1 d-flex align-center ga-2">
+      <v-card-title
+        class="text-body-2 font-weight-medium pa-3 pb-1 d-flex align-center ga-2 flex-wrap"
+      >
         Stations heard direct
         <v-chip size="x-small" color="green" variant="tonal">{{ stations.length }}</v-chip>
         <v-spacer />

@@ -1,3 +1,5 @@
+using DireControl.Enums;
+
 namespace DireControl.Api.Services;
 
 /// <summary>Transmit urgency for an outbound AX.25 frame.</summary>
@@ -49,6 +51,21 @@ public interface IFrameTransmitter
         TxPriority priority,
         TaskCompletionSource<bool>? txCompletion,
         bool exactChannelOnly = false);
+
+    /// <summary>
+    /// Queues the frame and tracks it through <see cref="TxFrameRegistry"/>:
+    /// returns its frame id (lifecycle reported on the <c>txFrameStateChanged</c>
+    /// hub event), or <see langword="null"/> when nothing can transmit.
+    /// Implementations without tracking return 0 for an accepted frame.
+    /// </summary>
+    long? Send(
+        byte[] ax25Frame,
+        int channel,
+        TxFrameInfo info,
+        TxPriority priority = TxPriority.Normal,
+        TaskCompletionSource<bool>? txCompletion = null,
+        bool exactChannelOnly = false) =>
+        TrySend(ax25Frame, channel, priority, txCompletion, exactChannelOnly) ? 0 : null;
 }
 
 /// <summary>
@@ -64,6 +81,8 @@ public interface IFrameTransmitter
 public sealed class FrameTransmitService(
     IServiceProvider services,
     KissConnectionHolder kissConnectionHolder,
+    TxFrameRegistry registry,
+    Microsoft.Extensions.Options.IOptions<DireControlOptions> options,
     ILogger<FrameTransmitService> logger) : IFrameTransmitter
 {
     /// <summary>
@@ -91,6 +110,16 @@ public sealed class FrameTransmitService(
         int channel,
         TxPriority priority,
         TaskCompletionSource<bool>? txCompletion,
+        bool exactChannelOnly = false) =>
+        Send(ax25Frame, channel, TxFrameInfo.ForPriority(priority), priority, txCompletion, exactChannelOnly)
+            is not null;
+
+    public long? Send(
+        byte[] ax25Frame,
+        int channel,
+        TxFrameInfo info,
+        TxPriority priority = TxPriority.Normal,
+        TaskCompletionSource<bool>? txCompletion = null,
         bool exactChannelOnly = false)
     {
         if (!IsTransmittable(ax25Frame))
@@ -99,13 +128,23 @@ public sealed class FrameTransmitService(
                 "Refusing to transmit a {Bytes}-byte frame: over {Max} bytes or not valid AX.25.",
                 ax25Frame.Length, MaxFrameBytes);
             txCompletion?.TrySetCanceled();
-            return false;
+            return null;
+        }
+
+        if (StationIdentityLogic.TransmitBlockedReason(options.Value.OurCallsign) is { } blocked)
+        {
+            logger.LogWarning("Not transmitting {Kind}: {Reason}", info.Kind, blocked);
+            txCompletion?.TrySetCanceled();
+            return null;
         }
 
         _modemService ??= services.GetRequiredService<SoundModemService>();
 
-        if (_modemService.TryEnqueueTransmit(ax25Frame, channel, priority, txCompletion, exactChannelOnly))
-            return true;
+        var id = registry.Begin(info, ax25Frame);
+        // The modem reports Queued (with its radio) itself, before the TX
+        // thread can possibly report a later state.
+        if (_modemService.TryEnqueueTransmit(ax25Frame, channel, priority, txCompletion, exactChannelOnly, id))
+            return id;
 
         if (kissConnectionHolder.TrySend(ax25Frame))
         {
@@ -114,9 +153,12 @@ public sealed class FrameTransmitService(
             // (an early retransmit beats a hung timer). Operators on external
             // TNCs should configure a slightly larger T1.
             txCompletion?.TrySetResult(true);
-            return true;
+            registry.Queued(id, null, "External TNC");
+            registry.Report(id, TxFrameState.Sent, null);
+            return id;
         }
 
-        return false;
+        registry.Abandon(id);
+        return null;
     }
 }

@@ -1,3 +1,4 @@
+using DireControl.Enums;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
 using DireControl.Data;
@@ -16,6 +17,9 @@ namespace DireControl.Api.Services;
 /// regardless of whether it is heard back from RF (e.g. when a collision
 /// prevents the normal KISS echo from arriving).
 /// </summary>
+/// <summary>A queued beacon: its history row and its TX frame id (lifecycle on <c>txFrameStateChanged</c>).</summary>
+public sealed record BeaconSendResult(OwnBeacon Beacon, long FrameId);
+
 public sealed class BeaconService(
     IFrameTransmitter transmitter,
     IHubContext<PacketHub> hubContext,
@@ -66,7 +70,7 @@ public sealed class BeaconService(
     /// Returns the saved record, or <see langword="null"/> if the beacon could
     /// not be sent (no connection, or home position not configured).
     /// </summary>
-    public async Task<OwnBeacon?> BeaconNowAsync(Radio radio, CancellationToken ct = default)
+    public async Task<BeaconSendResult?> BeaconNowAsync(Radio radio, CancellationToken ct = default)
     {
         var opts = options.Value;
 
@@ -86,7 +90,9 @@ public sealed class BeaconService(
         var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", comment);
         var frame = Ax25Encoder.EncodeUiFrame(radio.FullCallsign, info, path);
 
-        if (!transmitter.TrySend(frame, radio.ChannelNumber))
+        var frameId = transmitter.Send(
+            frame, radio.ChannelNumber, new TxFrameInfo(TxFrameKind.Beacon, "Position beacon"));
+        if (frameId is null)
         {
             logger.LogWarning(
                 "Cannot beacon for {Callsign}: no RF transmit backend available.",
@@ -129,7 +135,7 @@ public sealed class BeaconService(
             Heard = false,
         }, ct);
 
-        return beacon;
+        return new BeaconSendResult(beacon, frameId.Value);
     }
 
     // ── APRS position info field ───────────────────────────────────────────────

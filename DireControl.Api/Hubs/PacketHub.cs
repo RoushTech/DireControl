@@ -19,4 +19,5 @@ public class PacketHub : Microsoft.AspNetCore.SignalR.Hub
     public const string PacketSourceUpgradedMethod = "packetSourceUpgraded";
     public const string BeaconConfirmedHeardMethod = "beaconConfirmedHeard";
     public const string LightningAlertMethod = "lightningAlert";
+    public const string TxFrameStateChangedMethod = "txFrameStateChanged";
 }

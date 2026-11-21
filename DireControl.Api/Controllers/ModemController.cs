@@ -20,12 +20,22 @@ public class ModemController(
     [FromKeyedServices(RestartSignals.Modem)] RestartSignal restartTrigger,
     ModemAudioCaptureService captureService,
     LogStreamBroadcaster logStream,
+    Microsoft.Extensions.Options.IOptions<DireControlOptions> options,
     DireControlContext db) : ControllerBase
 {
     /// <summary>Live status of every radio's modem instance.</summary>
     [HttpGet("status")]
     public ActionResult<List<ModemStatusDto>> GetStatus() =>
         Ok(modemService.Statuses.Select(ToDto).ToList());
+
+    /// <summary>
+    /// Receive/transmit internals per radio: carrier-detect duty and the stuck
+    /// rule, TX lane depths and drops, CSMA waits and timeouts, ALSA period and
+    /// overruns, PTT state and watchdog trips, decodes per demodulator profile.
+    /// </summary>
+    [HttpGet("diagnostics")]
+    public ActionResult<List<ModemDiagnosticsDto>> GetDiagnostics() =>
+        Ok(modemService.GetDiagnostics().ToList());
 
     internal static ModemStatusDto ToDto(ModemStatusSnapshot s) => new()
     {
@@ -38,11 +48,15 @@ public class ModemController(
         ErrorMessage = s.ErrorMessage,
         AudioLevel = s.AudioLevel,
         CarrierDetected = s.CarrierDetected,
+        CarrierSince = s.CarrierSince,
+        PreamblesSinceCarrier = s.PreamblesSinceCarrier,
+        LevelUpdatedAt = s.LevelUpdatedAt,
         CarrierStuck = s.CarrierStuck,
         CsmaTimeouts = s.CsmaTimeouts,
         IngestDropped = s.IngestDropped,
         TxError = s.TxError,
         PttStuck = s.PttStuck,
+        PttState = s.PttState,
         PttWatchdogTrips = s.PttWatchdogTrips,
         TxDropped = s.TxDropped,
         TxQueueDepth = s.TxQueueDepth,
@@ -106,6 +120,26 @@ public class ModemController(
     }
 
     /// <summary>
+    /// Releases a stuck PTT after its modem session faulted (unkey failed). Opens a
+    /// fresh PTT controller, sends unkey and closes it. 409 while the session runs.
+    /// </summary>
+    [HttpPost("{radioId}/force-unkey")]
+    public IActionResult ForceUnkey(string radioId) => modemService.ForceUnkey(radioId) switch
+    {
+        ForceUnkeyResult.Released => NoContent(),
+        ForceUnkeyResult.NotFound => NotFound(),
+        ForceUnkeyResult.SessionRunning => Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            detail: "The modem session is running and owns PTT. Restart the modem instead."),
+        ForceUnkeyResult.NoPtt => Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            detail: "This radio has no PTT method (VOX); nothing to unkey."),
+        _ => Problem(
+            statusCode: StatusCodes.Status502BadGateway,
+            detail: "Unkey failed again. Switch the radio off or pull the PTT line."),
+    };
+
+    /// <summary>
     /// Adjusts a radio's TX audio level (gain) live — persists the new value and
     /// applies it to the running modem immediately, with no restart or audio gap.
     /// </summary>
@@ -139,9 +173,11 @@ public class ModemController(
     {
         if (request.Kind == TestToneKind.Unknown)
             return BadRequest("Choose a test-tone kind.");
+        if (StationIdentityLogic.TransmitBlockedReason(options.Value.OurCallsign) is { } blocked)
+            return Problem(statusCode: StatusCodes.Status409Conflict, detail: blocked);
 
-        return modemService.TryEnqueueTestTone(radioId, request.Kind, request.DurationMs)
-            ? Accepted()
+        return modemService.TryEnqueueTestTone(radioId, request.Kind, request.DurationMs) is { } frameId
+            ? Accepted(new TxQueuedResponse { TxFrameIds = [frameId] })
             : Problem(
                 statusCode: StatusCodes.Status503ServiceUnavailable,
                 detail: "No running TX-capable modem for this radio. Enable the modem and TX first.");

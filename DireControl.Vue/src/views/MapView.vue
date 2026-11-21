@@ -28,7 +28,7 @@ import {
   type LightningStrike,
   type WeatherManifest,
 } from '@/api/weatherApi'
-import { StationType, type StationDto, type SettingsDto } from '@/types/station'
+import { HeardVia, StationType, type StationDto, type SettingsDto } from '@/types/station'
 import type { PacketBroadcastDto, ResolvedPathEntry, TrackPointDto } from '@/types/packet'
 import type { TriggeringStrike } from '@/types/alert'
 import type { TileProviderConfig } from '@/types/map'
@@ -43,6 +43,7 @@ import RangeRingsPanel from '@/components/RangeRingsPanel.vue'
 import OwnStationPanel from '@/components/OwnStationPanel.vue'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRadiosStore } from '@/stores/radiosStore'
+import { useHealthStore } from '@/stores/health'
 import { cardinal, formatStrikeAge, useLightningAlertsStore } from '@/stores/lightningAlertsStore'
 import type { DigiConfirmationBroadcastDto } from '@/types/radio'
 
@@ -188,7 +189,8 @@ const selectionStore = useStationSelectionStore()
 const radiosStore = useRadiosStore()
 const theme = useTheme()
 const { mobile } = useDisplay()
-const { distanceUnit, formatDistance } = useUnits()
+const healthStore = useHealthStore()
+const { distanceUnit, formatDistance, formatSpeedKnots } = useUnits()
 const lightningAlertsStore = useLightningAlertsStore()
 const {
   tracks: showTracks,
@@ -426,7 +428,29 @@ function popupContent(callsign: string, lastSeen: string, lat: number, lon: numb
   return `<strong>${callsign}</strong><br>Last seen: ${formatTime(lastSeen)}<br>Coords: ${lat.toFixed(4)}, ${lon.toFixed(4)}`
 }
 
+/** Heard over the air (directly or via a digipeater) rather than only via APRS-IS. */
+function isRfStation(station: StationDto): boolean {
+  return (
+    station.heardVia === HeardVia.Direct ||
+    station.heardVia === HeardVia.Digi ||
+    station.heardVia === HeardVia.DirectAndDigi
+  )
+}
+
+/**
+ * Tags RF-heard markers with `station-rf` so they can fade while the receiver
+ * is deaf — the map must not look healthy on APRS-IS alone (review 1.1).
+ */
 function buildIcon(station: StationDto | undefined): L.DivIcon {
+  const icon = buildBaseIcon(station)
+  if (!station || !isRfStation(station)) return icon
+  return L.divIcon({
+    ...icon.options,
+    className: `${icon.options.className ?? ''} station-rf`.trim(),
+  })
+}
+
+function buildBaseIcon(station: StationDto | undefined): L.DivIcon {
   if (!station) return createAprsIcon('/', '/')
   const { table, code } = parseAprsSymbol(station.symbol)
   const isMobile =
@@ -1650,7 +1674,7 @@ function drawTrack(callsign: string) {
       weight: 1,
       opacity,
     })
-    const speedStr = pt.speed != null ? `${pt.speed.toFixed(1)} knots` : 'N/A'
+    const speedStr = pt.speed != null ? formatSpeedKnots(pt.speed) : 'N/A'
     circle.bindPopup(
       `<strong>Track Point</strong><br>Time: ${formatTime(pt.receivedAt)}<br>Speed: ${speedStr}`,
     )
@@ -2214,7 +2238,7 @@ function setTileProvider(key: string) {
       `${provider.name} requires an API key. Fallen back to ${TILE_PROVIDERS[fallback]!.name}.`,
       'warning',
       8000,
-      { label: 'Add key', to: '/settings?tab=map' },
+      { label: 'Add key', to: '/settings/map' },
     )
     key = fallback
   }
@@ -2700,7 +2724,17 @@ defineExpose({ TILE_PROVIDERS })
 </script>
 
 <template>
-  <div class="map-layout">
+  <div
+    class="map-layout"
+    :class="{
+      // Fade RF markers while the receiver is deaf, everything while the feed is down.
+      'map--rf-deaf':
+        healthStore.health.live &&
+        (healthStore.health.lanes.rf.level === 'warn' ||
+          healthStore.health.lanes.rf.level === 'err'),
+      'map--not-live': !healthStore.health.live && healthStore.health.lanes.link.level === 'err',
+    }"
+  >
     <!-- Left sidebar (desktop only) -->
     <div v-if="!mobile" class="sidebar-left" :class="{ 'sidebar-open': showSidebar }">
       <StationListSidebar
@@ -2731,9 +2765,9 @@ defineExpose({ TILE_PROVIDERS })
         closable
         @click:close="showNoHomePositionBanner = false"
       >
-        Home position not set — set it in Settings to show range rings and distances.
+        <strong>Set your home position.</strong> Beacons, range rings and distances need it.
         <template #append>
-          <v-btn size="small" variant="text" to="/settings?tab=station">Set home</v-btn>
+          <v-btn size="small" variant="flat" color="primary" to="/setup">Set home position</v-btn>
         </template>
       </v-alert>
 
@@ -3808,6 +3842,16 @@ defineExpose({ TILE_PROVIDERS })
 </style>
 
 <style>
+/* Health fades (review 1.1, 1.7): markers are Leaflet DOM, so unscoped. */
+.map--rf-deaf .leaflet-marker-pane .station-rf {
+  opacity: 0.4 !important;
+  filter: grayscale(0.7);
+}
+.map--not-live .leaflet-marker-pane,
+.map--not-live .leaflet-overlay-pane {
+  opacity: 0.45;
+  filter: grayscale(0.8);
+}
 /* Radar animation cross-fades whole layers by swapping container opacity; Leaflet's
    independent per-tile fade-in (~200 ms, driven by inline styles) would leave freshly
    loaded tiles semi-transparent when a frame is revealed at fast playback speeds.

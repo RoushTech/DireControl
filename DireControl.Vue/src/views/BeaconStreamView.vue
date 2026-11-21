@@ -6,6 +6,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
 import { usePacketHubStore } from '@/stores/packetHub'
 import { useStationSelectionStore } from '@/stores/stationSelection'
+import { useHealthStore, agoShort } from '@/stores/health'
+import { useRadiosStore } from '@/stores/radiosStore'
 import { getPacketsSince } from '@/api/stationsApi'
 import {
   PacketType,
@@ -29,6 +31,41 @@ const filterFieldRef = ref<{ focus: () => void } | null>(null)
 const { now } = useTick(5000)
 
 const connectionStatus = computed(() => hub.state)
+const healthStore = useHealthStore()
+const radiosStore = useRadiosStore()
+
+/** Newest RF heard: modem decode time, or an RF packet on the hub (external TNC). */
+const freshRf = computed(() => {
+  const t = healthStore.now
+  const decodes = Object.values(radiosStore.modemStatus)
+    .map((m) => (m?.lastDecodedAt ? new Date(m.lastDecodedAt).getTime() : 0))
+    .concat(hub.lastRfAt ?? 0)
+  const last = Math.max(0, ...decodes)
+  const rf = healthStore.health.lanes.rf
+  const color = !healthStore.health.live
+    ? 'grey'
+    : rf.level === 'warn' || rf.level === 'err'
+      ? 'warning'
+      : last
+        ? 'success'
+        : 'grey'
+  return { text: last ? `${agoShort(last, t)} ago` : 'none yet', color }
+})
+
+const freshIs = computed(() => {
+  const t = healthStore.now
+  const s = healthStore.status
+  const fromStatus = s?.lastIsPacketAt ? new Date(s.lastIsPacketAt).getTime() : 0
+  const last = Math.max(fromStatus, hub.lastIsAt ?? 0)
+  const lane = healthStore.health.lanes.is
+  if (lane.level === 'off' && !lane.stale) return { text: 'APRS-IS off', color: 'grey' }
+  const color = !healthStore.health.live
+    ? 'grey'
+    : lane.level === 'err' || lane.level === 'warn'
+      ? 'warning'
+      : 'success'
+  return { text: last ? `${agoShort(last, t)} ago` : 'none yet', color }
+})
 
 const inspectedPacketId = ref<number | null>(null)
 
@@ -205,9 +242,36 @@ function openPopOut() {
           size="small"
           variant="tonal"
           :title="'Open stream in new window'"
+          aria-label="Open stream in new window"
           @click="openPopOut"
         />
       </div>
+    </div>
+
+    <!-- Freshness per source: a busy stream must not hide a deaf receiver. -->
+    <div class="beacon-fresh" role="status" aria-label="Feed freshness">
+      <span class="fresh-item">
+        <span class="fresh-dot" :class="`bg-${freshRf.color}`" />
+        <span class="fresh-k">Last RF</span>
+        <span class="fresh-v">{{ freshRf.text }}</span>
+      </span>
+      <span class="fresh-item">
+        <span class="fresh-dot" :class="`bg-${freshIs.color}`" />
+        <span class="fresh-k">Last APRS-IS</span>
+        <span class="fresh-v">{{ freshIs.text }}</span>
+      </span>
+      <v-chip v-if="!healthStore.health.live" size="small" color="warning" variant="tonal">
+        Not live — frozen as of the drop
+      </v-chip>
+      <v-btn
+        v-if="freshRf.color === 'warning'"
+        to="/radio"
+        size="small"
+        variant="text"
+        color="warning"
+      >
+        Check RX
+      </v-btn>
     </div>
 
     <v-divider />
@@ -324,6 +388,31 @@ function openPopOut() {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+.beacon-fresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 0 12px 8px;
+  font-size: 0.8125rem;
+}
+.fresh-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fresh-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.fresh-k {
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+.fresh-v {
+  font-variant-numeric: tabular-nums;
 }
 
 .beacon-toolbar {

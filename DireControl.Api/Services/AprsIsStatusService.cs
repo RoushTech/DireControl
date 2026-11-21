@@ -24,6 +24,15 @@ public interface IAprsIsStatusService
     /// <summary>Message from the most recent connection failure; null while connected.</summary>
     string? LastError { get; }
 
+    /// <summary>UTC time the last line (packet) arrived from APRS-IS; survives reconnects.</summary>
+    DateTime? LastPacketAt { get; }
+
+    /// <summary>
+    /// The server answered the login with <c>logresp … verified</c> on the current
+    /// connection. False while connecting, disconnected or rejected.
+    /// </summary>
+    bool Verified { get; }
+
     void SetState(AprsIsConnectionState state, string? serverName = null);
     void SetActiveFilter(string filter);
     void IncrementPacketCount();
@@ -55,6 +64,7 @@ public sealed class AprsIsStatusService(
     private DateTime? _lastConnectAttemptAt;
     private int _failedAttempts;
     private string? _lastError;
+    private long _lastPacketAtTicks;
 
     public AprsIsConnectionState State => _state;
     public string? ServerName => _serverName;
@@ -64,6 +74,9 @@ public sealed class AprsIsStatusService(
     public DateTime? LastConnectAttemptAt => _lastConnectAttemptAt;
     public int FailedAttempts => _failedAttempts;
     public string? LastError => _lastError;
+    public DateTime? LastPacketAt => Interlocked.Read(ref _lastPacketAtTicks) is > 0 and var t
+        ? new DateTime(t, DateTimeKind.Utc) : null;
+    public bool Verified => _state == AprsIsConnectionState.Connected;
 
     public void SetState(AprsIsConnectionState state, string? serverName = null)
     {
@@ -90,6 +103,7 @@ public sealed class AprsIsStatusService(
     public void IncrementPacketCount()
     {
         Interlocked.Increment(ref _sessionPacketCount);
+        Interlocked.Exchange(ref _lastPacketAtTicks, DateTime.UtcNow.Ticks);
     }
 
     public void ResetSessionCount()

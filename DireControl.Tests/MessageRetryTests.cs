@@ -38,7 +38,12 @@ public sealed class MessageRetryTests
 
         await using (var db = harness.CreateDb())
         {
-            var controller = new MessagesController(db, Options, sending, new NullHubContext());
+            // The controller refuses to send as N0CALL; give it a licensed identity
+            // for that check (the harness's sending service keeps its own).
+            var controllerOptions = Microsoft.Extensions.Options.Options.Create(
+                new DireControlOptions { OurCallsign = "N7DCX-10" });
+            var controller = new MessagesController(
+                db, controllerOptions, sending, new TxFrameRegistry(TimeProvider.System), new NullHubContext());
             await controller.Send(new SendMessageRequest
             {
                 ToCallsign = "K4ABC",

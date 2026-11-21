@@ -22,34 +22,56 @@ type HubHandler = (...args: any[]) => void
  */
 export const usePacketHubStore = defineStore('packetHub', () => {
   const state = ref<PacketHubState>('connecting')
-  /** serverNow() timestamp of the last packetReceived, any source. */
-  const lastPacketAt = ref<number | null>(null)
   /**
-   * Last APRS-IS packet, kept apart from RF: internet traffic flowing says
-   * nothing about whether the radio is hearing anything.  RF health comes from
-   * the modem's own last-decode time instead.
+   * serverNow() of the last packet per source. RF and APRS-IS are kept apart —
+   * internet traffic flowing says nothing about whether the radio is hearing
+   * anything — and our own transmissions (OWN) count as neither.
    */
-  const lastAprsIsPacketAt = ref<number | null>(null)
+  const lastRfAt = ref<number | null>(null)
+  const lastIsAt = ref<number | null>(null)
+  /** serverNow() when the feed dropped; null while connected. */
+  const downSince = ref<number | null>(null)
+  /** The feed has connected at least once this page load. */
+  const everConnectedRef = ref(false)
+  /** What the last resync refetched, for the "resynced" toast. */
+  const lastResync = ref<{ at: number; ok: string[]; failed: string[] } | null>(null)
 
   let connection: HubConnection | null = null
   // Events sent while the socket was down are gone for good; stores register
   // here to refetch their state once the connection is back.
-  const reconnectHandlers: Array<() => Promise<unknown> | void> = []
+  const reconnectHandlers: Array<{ name: string; run: () => Promise<unknown> | void }> = []
   let everConnected = false
 
   async function runResync() {
+    downSince.value = null
     if (reconnectHandlers.length === 0) {
       state.value = 'connected'
       return
     }
     state.value = 'resyncing'
-    await Promise.allSettled(reconnectHandlers.map((h) => Promise.resolve().then(h)))
+    const results = await Promise.allSettled(
+      reconnectHandlers.map((h) => Promise.resolve().then(h.run)),
+    )
+    lastResync.value = {
+      at: serverNow(),
+      ok: reconnectHandlers.filter((_, i) => results[i]!.status === 'fulfilled').map((h) => h.name),
+      failed: reconnectHandlers
+        .filter((_, i) => results[i]!.status === 'rejected')
+        .map((h) => h.name),
+    }
     if (state.value === 'resyncing') state.value = 'connected'
   }
 
-  /** Registers a refetch to run after every reconnect (not the first connect). */
-  function onReconnected(handler: () => Promise<unknown> | void) {
-    reconnectHandlers.push(handler)
+  /**
+   * Registers a refetch to run after every reconnect (not the first connect).
+   * `name` is what the resync toast lists ("messages", "alerts", …).
+   */
+  function onReconnected(handler: () => Promise<unknown> | void, name = 'data') {
+    reconnectHandlers.push({ name, run: handler })
+  }
+
+  function markDown() {
+    if (downSince.value === null && everConnected) downSince.value = serverNow()
   }
   let retryTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -59,6 +81,7 @@ export const usePacketHubStore = defineStore('packetHub', () => {
 
     connection.onreconnecting(() => {
       state.value = 'connecting'
+      markDown()
     })
     connection.onreconnected(() => {
       void runResync()
@@ -67,13 +90,14 @@ export const usePacketHubStore = defineStore('packetHub', () => {
       // Automatic reconnect has given up (it stops after its backoff sequence) —
       // keep trying forever; a dashboard can sit open for days.
       state.value = 'disconnected'
+      markDown()
       scheduleRetry()
     })
 
     connection.on('packetReceived', (p: PacketBroadcastDto) => {
       const at = serverNow()
-      lastPacketAt.value = at
-      if (p?.source === PacketSource.AprsIs) lastAprsIsPacketAt.value = at
+      if (p?.source === PacketSource.AprsIs) lastIsAt.value = at
+      else if (p?.source === PacketSource.Rf) lastRfAt.value = at
     })
 
     // ModemStatusBroadcaster pushes these to every client at up to 10 Hz, and
@@ -85,6 +109,19 @@ export const usePacketHubStore = defineStore('packetHub', () => {
     connection.on('modemSpectrum', noop)
     connection.on('modemStatusChanged', noop)
     return connection
+  }
+
+  /** Skip the backoff and try the feed now (banner "Reconnect now"). */
+  async function reconnectNow() {
+    if (retryTimer) {
+      clearTimeout(retryTimer)
+      retryTimer = null
+    }
+    if (connection && connection.state !== HubConnectionState.Disconnected) {
+      // Mid automatic-reconnect: restart the attempt instead of waiting out the backoff.
+      await connection.stop().catch(() => {})
+    }
+    await start()
   }
 
   function scheduleRetry() {
@@ -105,8 +142,10 @@ export const usePacketHubStore = defineStore('packetHub', () => {
       if (everConnected) void runResync()
       else state.value = 'connected'
       everConnected = true
+      everConnectedRef.value = true
     } catch {
       state.value = 'disconnected'
+      markDown()
       scheduleRetry()
     }
   }
@@ -119,5 +158,17 @@ export const usePacketHubStore = defineStore('packetHub', () => {
     connection?.off(method, handler)
   }
 
-  return { state, lastPacketAt, lastAprsIsPacketAt, start, on, off, onReconnected }
+  return {
+    state,
+    lastRfAt,
+    lastIsAt,
+    downSince,
+    everConnected: everConnectedRef,
+    lastResync,
+    start,
+    reconnectNow,
+    on,
+    off,
+    onReconnected,
+  }
 })

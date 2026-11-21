@@ -137,7 +137,7 @@ export const useMessagesStore = defineStore('messages', () => {
   hub.on('messageRetried', (data: MessageRetriedDto) => onMessageRetried(data))
   hub.on('messageAcknowledged', (data: MessageAcknowledgedDto) => onMessageAcknowledged(data))
   hub.on('messageFailed', (data: MessageFailedDto) => onMessageFailed(data))
-  hub.onReconnected(() => fetchInbox())
+  hub.onReconnected(() => fetchInbox(), 'messages')
 
   return {
     inboxMessages,

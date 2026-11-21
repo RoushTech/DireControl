@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MapView from '@/views/MapView.vue'
+import { DEFAULT_SETTINGS_SECTION, isSettingsSection } from '@/views/settings/sections'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -15,10 +16,12 @@ const router = createRouter({
       component: () => import('@/views/RadioView.vue'),
     },
     {
-      path: '/beacons',
-      name: 'beacons',
+      path: '/stream',
+      name: 'stream',
       component: () => import('@/views/BeaconStreamView.vue'),
     },
+    // Old bookmark: the beacon stream became Stream.
+    { path: '/beacons', redirect: (to) => ({ path: '/stream', query: to.query }) },
     {
       path: '/messages',
       name: 'messages',
@@ -44,20 +47,41 @@ const router = createRouter({
       name: 'alerts',
       component: () => import('@/views/AlertsView.vue'),
     },
+    // Old ?tab= bookmarks and bare /settings land on a section route.
     {
       path: '/settings',
+      redirect: (to) => {
+        const { tab, ...query } = to.query
+        return {
+          path: `/settings/${isSettingsSection(tab) ? tab : DEFAULT_SETTINGS_SECTION}`,
+          query,
+        }
+      },
+    },
+    {
+      path: '/settings/:section',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
+      beforeEnter: (to) =>
+        isSettingsSection(to.params.section)
+          ? true
+          : { path: `/settings/${DEFAULT_SETTINGS_SECTION}`, query: to.query },
     },
     {
-      // Frequencies merged into Statistics — redirect old bookmarks.
-      path: '/frequencies',
-      redirect: '/statistics',
+      path: '/setup',
+      name: 'setup',
+      component: () => import('@/views/SetupView.vue'),
     },
+    {
+      path: '/radio/diagnostics',
+      name: 'diagnostics',
+      component: () => import('@/views/DiagnosticsView.vue'),
+    },
+    // Statistics and Frequencies merged into Network tabs — keep old bookmarks.
+    { path: '/frequencies', redirect: { path: '/network', query: { tab: 'frequencies' } } },
     {
       path: '/statistics',
-      name: 'statistics',
-      component: () => import('@/views/StatisticsView.vue'),
+      redirect: (to) => ({ path: '/network', query: { tab: 'overview', ...to.query } }),
     },
     {
       path: '/network',

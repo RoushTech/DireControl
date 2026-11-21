@@ -327,6 +327,32 @@ public class SettingsController(
         return NoContent();
     }
 
+    /// <summary>
+    /// Outbound message retry policy. Applies to messages sent after the save;
+    /// messages already in flight keep the attempt count they were queued with.
+    /// </summary>
+    [HttpPut("message-retry")]
+    public async Task<ActionResult> UpdateMessageRetry(
+        [FromBody] UpdateMessageRetryRequest request,
+        CancellationToken ct)
+    {
+        if (StationIdentityLogic.ValidateRetry(request.MaxRetryAttempts, request.InitialRetryDelaySeconds) is { } error)
+            return BadRequest(error);
+
+        var setting = await db.UserSettings.FindAsync([1], ct);
+        if (setting is null)
+        {
+            setting = new UserSetting { Id = 1 };
+            db.UserSettings.Add(setting);
+        }
+
+        setting.MaxRetryAttempts = request.MaxRetryAttempts;
+        setting.InitialRetryDelaySeconds = request.InitialRetryDelaySeconds;
+        await db.SaveChangesAsync(ct);
+        stationIdentity.Apply(setting);
+        return NoContent();
+    }
+
     [HttpPut("aprs-is")]
     public async Task<ActionResult> UpdateAprsIsSettings(
         [FromBody] UpdateAprsIsSettingsRequest request,

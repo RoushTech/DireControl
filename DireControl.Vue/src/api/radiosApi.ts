@@ -1,4 +1,5 @@
 import http from './axios'
+import type { TxQueuedResponse } from './txApi'
 import type {
   RadioDto,
   CreateRadioRequest,
@@ -46,6 +47,25 @@ export async function getBeaconHistory(id: string, limit = 50): Promise<OwnBeaco
   return data
 }
 
-export async function beaconNow(id: string): Promise<void> {
-  await http.post(`/api/v0/radios/${encodeURIComponent(id)}/beacon`)
+/** Queues a beacon; returns its TX frame id(s) — queued, not yet sent. */
+export async function beaconNow(id: string): Promise<TxQueuedResponse> {
+  const { data } = await http.post<TxQueuedResponse>(
+    `/api/v0/radios/${encodeURIComponent(id)}/beacon`,
+  )
+  return data
+}
+
+export interface PttTestResultDto {
+  txFrameId: number
+  /** The keyup completed: PTT keyed for 1 s and released. */
+  keyed: boolean
+  reason: string | null
+}
+
+/** Keys the radio's saved PTT for 1 s (no RF ID) and waits for the outcome. */
+export async function pttTest(id: string): Promise<PttTestResultDto> {
+  const { data } = await http.post<PttTestResultDto>(
+    `/api/v0/radios/${encodeURIComponent(id)}/ptt-test`,
+  )
+  return data
 }

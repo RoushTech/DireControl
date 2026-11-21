@@ -1,3 +1,4 @@
+using DireControl.Enums;
 using Microsoft.Extensions.DependencyInjection;
 using System.Buffers.Binary;
 using System.Net;
@@ -280,7 +281,7 @@ public sealed class AgwpeTcpServerService(
                 if (frame.Data.Length < 2)
                     break;
                 var channel = ChannelForPort(frame.Data[0]);
-                if (transmitter.TrySend(frame.Data[1..], channel))
+                if (transmitter.Send(frame.Data[1..], channel, new TxFrameInfo(TxFrameKind.Agwpe, "AGWPE client frame")) is not null)
                     Broadcast(frame.Data[1..], channel, isOwnTransmission: true);
                 break;
             }
@@ -291,7 +292,7 @@ public sealed class AgwpeTcpServerService(
                 var pathText = string.Join(',', path);
                 var raw = Ax25Encoder.EncodeUiFrame(
                     frame.CallFrom, Encoding.ASCII.GetString(info), pathText, frame.CallTo);
-                if (transmitter.TrySend(raw, ChannelForPort(frame.Port)))
+                if (transmitter.Send(raw, ChannelForPort(frame.Port), new TxFrameInfo(TxFrameKind.Agwpe, "AGWPE client frame")) is not null)
                     Broadcast(raw, ChannelForPort(frame.Port), isOwnTransmission: true);
                 break;
             }

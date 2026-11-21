@@ -60,7 +60,7 @@ public sealed class PacketDto
     public string? GridSquare { get; init; }
 }
 
-public sealed class InboxMessageDto
+public sealed record InboxMessageDto
 {
     public int Id { get; init; }
     public required string FromCallsign { get; init; }
@@ -85,6 +85,9 @@ public sealed class InboxMessageDto
     public DateTime? NextRetryAt { get; init; }
     public RetryState RetryState { get; init; }
     public DateTime? LastSentAt { get; init; }
+
+    /// <summary>Send responses only: the TX frame id of the part just queued (null for held parts).</summary>
+    public long? TxFrameId { get; init; }
 }
 
 public sealed class AllMessagePacketDto
@@ -222,11 +225,21 @@ public sealed class ModemStatusDto
     public string? ErrorMessage { get; init; }
     public float AudioLevel { get; init; }
     public bool CarrierDetected { get; init; }
+
+    /// <summary>UTC start of the current carrier-detect burst; null while the channel is clear.</summary>
+    public DateTime? CarrierSince { get; init; }
+
+    /// <summary>Preambles (flag runs) seen since <see cref="CarrierSince"/>; 0 with a long carrier means noise.</summary>
+    public long PreamblesSinceCarrier { get; init; }
+
+    /// <summary>UTC time the capture thread last delivered audio, i.e. when <see cref="AudioLevel"/> was measured.</summary>
+    public DateTime? LevelUpdatedAt { get; init; }
     public bool CarrierStuck { get; init; }
     public long CsmaTimeouts { get; init; }
     public long IngestDropped { get; init; }
     public string? TxError { get; init; }
     public bool PttStuck { get; init; }
+    public PttState PttState { get; init; }
     public long PttWatchdogTrips { get; init; }
     public long TxDropped { get; init; }
     public int TxQueueDepth { get; init; }
@@ -244,11 +257,106 @@ public sealed class ModemStatusDto
     public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
 }
 
+/// <summary>
+/// One outbound frame's lifecycle state (hub event <c>txFrameStateChanged</c>
+/// and <c>GET api/v0/tx/recent</c>).
+/// </summary>
+public sealed record TxFrameDto
+{
+    public long Id { get; init; }
+    public string? RadioId { get; init; }
+    public string? RadioName { get; init; }
+    public TxFrameKind Kind { get; init; }
+    public TxFrameState State { get; init; }
+    /// <summary>Why the frame failed or was dropped; null otherwise.</summary>
+    public string? Reason { get; init; }
+    /// <summary>UTC time of this state.</summary>
+    public DateTime At { get; init; }
+    public DateTime QueuedAt { get; init; }
+    public DateTime? WaitingSince { get; init; }
+    public DateTime? OnAirAt { get; init; }
+    public DateTime? SentAt { get; init; }
+    /// <summary>Short human title ("Position beacon", "Message to N0XYZ").</summary>
+    public required string Title { get; init; }
+    /// <summary>TNC2 rendering of the frame.</summary>
+    public string? Detail { get; init; }
+    /// <summary>Correlation key: the APRS message number for messages and ACKs.</summary>
+    public string? Ref { get; init; }
+}
+
+/// <summary>POST api/v0/radios/{id}/ptt-test — did the radio key and release?</summary>
+public sealed class PttTestResultDto
+{
+    public long TxFrameId { get; init; }
+    public bool Keyed { get; init; }
+    public string? Reason { get; init; }
+}
+
+/// <summary>Frame ids returned by endpoints that queue a transmission.</summary>
+public sealed class TxQueuedResponse
+{
+    public required IReadOnlyList<long> TxFrameIds { get; init; }
+}
+
+/// <summary>GET api/v0/modem/diagnostics — one radio's receive/transmit internals.</summary>
+public sealed class ModemDiagnosticsDto
+{
+    public required string RadioId { get; init; }
+    public required string RadioName { get; init; }
+    public ModemState State { get; init; }
+
+    // Receive
+    /// <summary>Fraction (0–1) of the last minute with carrier detect held; null without audio.</summary>
+    public double? CarrierDutyLastMinute { get; init; }
+    public bool CarrierDetected { get; init; }
+    public DateTime? CarrierSince { get; init; }
+    public long PreamblesSinceCarrier { get; init; }
+    public bool CarrierStuck { get; init; }
+    /// <summary>Carrier held this long with no preamble counts as stuck (CSMA then ignores it).</summary>
+    public int CarrierStuckSeconds { get; init; }
+    public long DecodedFrames { get; init; }
+    public long InvalidFrames { get; init; }
+    public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
+    public long IngestDropped { get; init; }
+
+    // Audio
+    public string? CaptureDevice { get; init; }
+    /// <summary>Requested ALSA capture period in ms; 0 = the driver default.</summary>
+    public int CapturePeriodMs { get; init; }
+    /// <summary>The driver accepted the requested period.</summary>
+    public bool CaptureExplicitPeriod { get; init; }
+    public long CaptureOverruns { get; init; }
+    public DateTime? LevelUpdatedAt { get; init; }
+
+    // Transmit
+    public bool TxEnabled { get; init; }
+    public int NormalLaneDepth { get; init; }
+    public int DigipeatLaneDepth { get; init; }
+    public int SessionLaneDepth { get; init; }
+    public long TxDropped { get; init; }
+    public DateTime? CsmaWaitingSince { get; init; }
+    public long CsmaTimeouts { get; init; }
+    public int CsmaMaxWaitSeconds { get; init; }
+    public CsmaTimeoutAction CsmaTimeoutAction { get; init; }
+    public PttMethod PttMethod { get; init; }
+    public PttState PttState { get; init; }
+    public long PttWatchdogTrips { get; init; }
+    public string? TxError { get; init; }
+    public long TransmittedFrames { get; init; }
+    public DateTime? LastTxAt { get; init; }
+}
+
 public sealed class UpdateStationIdentityRequest
 {
     public string? Callsign { get; init; }
     public double? HomeLat { get; init; }
     public double? HomeLon { get; init; }
+}
+
+public sealed class UpdateMessageRetryRequest
+{
+    public int MaxRetryAttempts { get; init; }
+    public int InitialRetryDelaySeconds { get; init; }
 }
 
 public sealed class UpdateRfServicesRequest
@@ -554,7 +662,12 @@ public sealed class StatisticsDto
     public int UniqueStationsToday { get; init; }
     public int UniqueStationsThisWeek { get; init; }
     public int UniqueStationsAllTime { get; init; }
+    /// <summary>All packets per hour (every source), oldest first; index 23 is the current hour.</summary>
     public int[] PacketsPerHour { get; init; } = new int[24];
+    /// <summary>Packets heard on RF per hour, same bucketing as <see cref="PacketsPerHour"/>.</summary>
+    public int[] PacketsPerHourRf { get; init; } = new int[24];
+    /// <summary>Packets received from APRS-IS per hour, same bucketing as <see cref="PacketsPerHour"/>.</summary>
+    public int[] PacketsPerHourIs { get; init; } = new int[24];
     public IReadOnlyList<CallsignCountDto> BusiestStations { get; init; } = [];
     public IReadOnlyList<RecentlyHeardDto> RecentlyFirstHeard { get; init; } = [];
     public IReadOnlyList<string> GridSquares { get; init; } = [];
@@ -581,7 +694,13 @@ public sealed class StatusDto
     public long DigipeatedFrames { get; init; }
     public int KissServerClients { get; init; }
     public long RfToIsGatedLines { get; init; }
-    public required string AprsIsState { get; init; }
+    public AprsIsConnectionState AprsIsState { get; init; }
+
+    /// <summary>The server verified our login on the current connection (logresp … verified).</summary>
+    public bool AprsIsVerified { get; init; }
+
+    /// <summary>UTC time of the last line received from APRS-IS — IS freshness, never RF health.</summary>
+    public DateTime? LastIsPacketAt { get; init; }
     public string? AprsIsServerName { get; init; }
     public string AprsIsFilter { get; init; } = string.Empty;
     public long AprsIsSessionPacketCount { get; init; }

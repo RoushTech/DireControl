@@ -1,3 +1,4 @@
+using DireControl.Enums;
 using DireControl.Data;
 using DireControl.Modem;
 using DireControl.Modem.Ax25;
@@ -68,7 +69,9 @@ public sealed class DigipeaterService(
         }
 
         var encoded = Ax25Encoder.Encode(rewritten);
-        if (!transmitter.TrySend(encoded, channel, TxPriority.Digipeat, txCompletion: null))
+        if (transmitter.Send(
+                encoded, channel, new TxFrameInfo(TxFrameKind.Digipeat, $"Digipeat for {frame.Source}"),
+                TxPriority.Digipeat) is null)
         {
             logger.LogWarning("Cannot digipeat {Source}: no RF transmit backend available.", frame.Source);
             return;

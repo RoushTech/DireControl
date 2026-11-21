@@ -206,7 +206,7 @@ export interface SourceChip {
  * {@link isOwnCallsign}) to tell them apart from stations we actually heard.
  */
 export function sourceChip(source: PacketSource | null | undefined, isOwn = false): SourceChip {
-  if (isOwn || source === PacketSource.Own) return { label: 'OWN', color: 'primary' }
+  if (isOwn || source === PacketSource.Own) return { label: 'OWN', color: 'own' }
   return source === PacketSource.AprsIs
     ? { label: 'IS', color: 'is' }
     : { label: 'RF', color: 'rf' }

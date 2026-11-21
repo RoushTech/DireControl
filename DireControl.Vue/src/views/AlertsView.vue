@@ -3,47 +3,110 @@ import { useToastStore } from '@/stores/toastStore'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAlertsStore } from '@/stores/alertsStore'
+import { useLightningAlertsStore, cardinal } from '@/stores/lightningAlertsStore'
 import { useStationSelectionStore } from '@/stores/stationSelection'
-import { ALERT_TYPE_COLORS } from '@/types/alert'
+import { useHealthStore } from '@/stores/health'
+import { useUnits } from '@/composables/useUnits'
+import { ALERT_TYPE_COLORS, type AlertDto } from '@/types/alert'
 import { formatDateTime, timeAgo } from '@/utils/time'
 import { useTick } from '@/composables/useTick'
 
 const router = useRouter()
 const alertsStore = useAlertsStore()
+const lightningStore = useLightningAlertsStore()
 const stationSelection = useStationSelectionStore()
+const healthStore = useHealthStore()
+const { formatDistance } = useUnits()
 const { now } = useTick(5000)
 
-const typeFilter = ref<string>('')
-const showAcknowledged = ref(true)
+type FilterKey = 'all' | 'open' | 'WatchList' | 'Proximity' | 'Geofence' | 'Lightning'
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'open', label: 'Unacknowledged' },
+  { key: 'WatchList', label: 'Watch list' },
+  { key: 'Proximity', label: 'Proximity' },
+  { key: 'Geofence', label: 'Geofence' },
+  { key: 'Lightning', label: 'Lightning' },
+]
+
+const filter = ref<FilterKey>('all')
 
 onMounted(() => {
   alertsStore.fetchAlerts()
 })
 
-const filteredAlerts = computed(() => {
-  let list = alertsStore.alerts
-  if (typeFilter.value) list = list.filter((a) => a.alertTypeName === typeFilter.value)
-  if (!showAcknowledged.value) list = list.filter((a) => !a.isAcknowledged)
-  return list
-})
+/** One row in the log: a stored alert, or a lightning strike that fired an alert this session. */
+interface AlertRow {
+  key: string
+  type: string
+  label: string
+  callsign: string | null
+  text: string
+  at: string
+  /** Stored alerts can be acknowledged; lightning alerts are session-only and expire. */
+  alertId: number | null
+  isAcknowledged: boolean
+}
 
-function alertDetailText(alert: (typeof alertsStore.alerts)[0]): string {
+function typeLabel(type: string): string {
+  return type === 'WatchList' ? 'Watch list' : type
+}
+
+function alertDetailText(alert: AlertDto): string {
+  const dist = alert.distanceMeters ? ` (${formatDistance(alert.distanceMeters / 1000)})` : ''
   switch (alert.alertTypeName) {
     case 'WatchList':
       return 'Station came online after being stale'
     case 'Proximity':
       return alert.ruleName
-        ? `Entered proximity zone "${alert.ruleName}"${alert.distanceMeters ? ` (${Math.round(alert.distanceMeters)}m)` : ''}`
-        : `Within proximity radius${alert.distanceMeters ? ` (${Math.round(alert.distanceMeters)}m)` : ''}`
+        ? `Entered proximity zone "${alert.ruleName}"${dist}`
+        : `Within proximity radius${dist}`
     case 'Geofence':
       return alert.geofenceName
         ? `${alert.direction === 'entered' ? 'Entered' : 'Exited'} geofence "${alert.geofenceName}"`
         : `${alert.direction === 'entered' ? 'Entered' : 'Exited'} geofence`
-    case 'NewMessage':
-      return alert.messageText ? `Message: ${alert.messageText}` : 'New message'
     default:
       return alert.alertTypeName
   }
+}
+
+const rows = computed<AlertRow[]>(() => {
+  const stored: AlertRow[] = alertsStore.alerts.map((a) => ({
+    key: `a${a.id}`,
+    type: a.alertTypeName,
+    label: typeLabel(a.alertTypeName),
+    callsign: a.callsign,
+    text: alertDetailText(a),
+    at: a.triggeredAt,
+    alertId: a.id,
+    isAcknowledged: a.isAcknowledged,
+  }))
+  const lightning: AlertRow[] = lightningStore.triggeringStrikes.map((s) => ({
+    key: `l${s.key}`,
+    type: 'Lightning',
+    label: 'Lightning',
+    callsign: null,
+    text: `Strike ${formatDistance(s.distanceKm)} ${cardinal(s.bearingDegrees)} of home, inside the ${formatDistance(s.radiusKm)} alert radius`,
+    at: s.strikeTimeUtc,
+    alertId: null,
+    isAcknowledged: false,
+  }))
+  return [...stored, ...lightning].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+})
+
+const filteredRows = computed(() => {
+  const f = filter.value
+  if (f === 'all') return rows.value
+  if (f === 'open') return rows.value.filter((r) => r.alertId !== null && !r.isAcknowledged)
+  return rows.value.filter((r) => r.type === f)
+})
+
+const openCount = computed(() => alertsStore.unacknowledgedCount)
+
+function chipColor(type: string): string {
+  if (type === 'Lightning') return 'error'
+  return ALERT_TYPE_COLORS[type] ?? 'grey'
 }
 
 const toastStore = useToastStore()
@@ -51,6 +114,7 @@ const toastStore = useToastStore()
 async function acknowledge(id: number) {
   try {
     await alertsStore.acknowledge(id)
+    toastStore.toast('Alert acknowledged', 'success')
   } catch {
     toastStore.toast("Couldn't acknowledge the alert — the backend may be unreachable.", 'error')
   }
@@ -65,98 +129,95 @@ function goToStation(callsign: string) {
 <template>
   <div class="alerts-view">
     <!-- Toolbar -->
-    <div class="alerts-toolbar pa-3 d-flex align-center ga-3 flex-wrap">
-      <span class="text-h6 font-weight-bold">Alert Log</span>
+    <div class="alerts-toolbar pa-3 d-flex flex-column ga-3">
+      <div class="d-flex align-center ga-3 flex-wrap">
+        <span class="text-h6 font-weight-bold">Alerts</span>
+        <span class="text-caption text-medium-emphasis">{{ openCount }} not acknowledged</span>
+        <v-spacer />
+        <v-btn variant="text" color="primary" to="/settings/zones">Rules and zones</v-btn>
+      </div>
 
-      <v-select
-        v-model="typeFilter"
-        :items="[
-          { title: 'All Types', value: '' },
-          { title: 'Watch List', value: 'WatchList' },
-          { title: 'Proximity', value: 'Proximity' },
-          { title: 'Geofence', value: 'Geofence' },
-        ]"
-        item-title="title"
-        item-value="value"
-        density="compact"
-        variant="outlined"
-        hide-details
-        style="max-width: 180px"
-      />
+      <v-alert v-if="!healthStore.health.live" type="warning" variant="tonal" density="compact">
+        Live feed lost — alerts raised meanwhile appear once it reconnects.
+      </v-alert>
 
-      <v-switch
-        v-model="showAcknowledged"
-        label="Show acknowledged"
-        density="compact"
-        hide-details
-        color="primary"
-      />
-
-      <v-spacer />
-
-      <span class="text-caption text-medium-emphasis">
-        {{ filteredAlerts.length }} alert{{ filteredAlerts.length !== 1 ? 's' : '' }}
-      </span>
+      <div class="filter-scroll">
+        <v-btn-toggle
+          v-model="filter"
+          mandatory
+          density="compact"
+          variant="outlined"
+          divided
+          color="primary"
+          aria-label="Filter alerts"
+        >
+          <v-btn v-for="f in FILTERS" :key="f.key" :value="f.key">{{ f.label }}</v-btn>
+        </v-btn-toggle>
+      </div>
     </div>
 
     <v-divider />
 
     <!-- Alert list -->
     <div class="alerts-list">
-      <div v-if="filteredAlerts.length === 0" class="text-center text-medium-emphasis py-8">
-        No alerts
-      </div>
+      <v-empty-state
+        v-if="filteredRows.length === 0"
+        icon="mdi-bell-outline"
+        :title="rows.length === 0 ? 'No alerts yet' : 'Nothing matches'"
+        :text="
+          rows.length === 0
+            ? 'Set up geofences, proximity rules, lightning alerts or a watch list and alerts land here.'
+            : 'Try another filter.'
+        "
+      />
 
       <div
-        v-for="alert in filteredAlerts"
-        :key="alert.id"
+        v-for="row in filteredRows"
+        :key="row.key"
         class="alert-row"
-        :class="{ 'alert-row--acked': alert.isAcknowledged }"
+        :class="{ 'alert-row--acked': row.isAcknowledged }"
       >
         <div class="d-flex align-center ga-2 flex-wrap">
-          <!-- Type badge -->
-          <v-chip
-            :color="ALERT_TYPE_COLORS[alert.alertTypeName] ?? 'grey'"
-            size="x-small"
-            label
-            class="flex-shrink-0"
-          >
-            {{ alert.alertTypeName }}
+          <v-chip :color="chipColor(row.type)" size="small" label class="flex-shrink-0">
+            {{ row.label }}
           </v-chip>
 
-          <!-- Callsign -->
-          <span class="callsign-link font-weight-medium" @click="goToStation(alert.callsign)">
-            {{ alert.callsign }}
-          </span>
-
-          <!-- Timestamp -->
-          <span
-            class="text-caption text-medium-emphasis flex-shrink-0"
-            :title="formatDateTime(alert.triggeredAt)"
+          <a
+            v-if="row.callsign"
+            href="#"
+            class="callsign-link font-weight-medium"
+            @click.prevent="goToStation(row.callsign)"
           >
-            {{ timeAgo(alert.triggeredAt, now) }}
+            {{ row.callsign }}
+          </a>
+
+          <span class="text-caption text-medium-emphasis flex-shrink-0">
+            {{ formatDateTime(row.at) }} · {{ timeAgo(row.at, now) }}
           </span>
 
           <v-spacer />
 
-          <!-- Ack status/button -->
-          <v-icon v-if="alert.isAcknowledged" size="16" color="success" title="Acknowledged">
-            mdi-check-circle
-          </v-icon>
+          <span
+            v-if="row.isAcknowledged"
+            class="text-caption text-medium-emphasis d-inline-flex align-center ga-1"
+          >
+            <v-icon size="16" color="success">mdi-check-circle</v-icon>
+            Acknowledged
+          </span>
           <v-btn
-            v-else
-            size="x-small"
-            variant="outlined"
+            v-else-if="row.alertId !== null"
+            size="small"
+            variant="tonal"
             color="primary"
-            @click="acknowledge(alert.id)"
+            @click="acknowledge(row.alertId)"
           >
             Acknowledge
           </v-btn>
+          <span v-else class="text-caption text-medium-emphasis">Clears after 10 min</span>
         </div>
 
-        <!-- Detail text -->
         <div class="text-body-2 text-medium-emphasis mt-1">
-          {{ alertDetailText(alert) }}
+          {{ row.text }}
         </div>
       </div>
     </div>
@@ -176,6 +237,11 @@ function goToStation(callsign: string) {
   flex-shrink: 0;
 }
 
+.filter-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .alerts-list {
   flex: 1;
   overflow-y: auto;
@@ -184,24 +250,20 @@ function goToStation(callsign: string) {
 .alert-row {
   padding: 10px 16px;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
-  transition: background 0.15s;
-}
-
-.alert-row:hover {
-  background: rgba(var(--v-theme-on-surface), 0.04);
 }
 
 .alert-row--acked {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 .callsign-link {
-  cursor: pointer;
-  color: rgba(var(--v-theme-primary), 1);
+  color: rgb(var(--v-theme-primary));
   font-size: 0.9rem;
+  text-decoration: none;
 }
 
-.callsign-link:hover {
+.callsign-link:hover,
+.callsign-link:focus-visible {
   text-decoration: underline;
 }
 </style>

@@ -261,7 +261,7 @@ onMounted(async () => {
             <v-list-item
               title="Packet settings"
               prepend-icon="mdi-cog-outline"
-              to="/settings?tab=packet"
+              to="/settings/packet"
             />
           </v-list>
         </v-menu>
@@ -289,6 +289,7 @@ onMounted(async () => {
             variant="text"
             :color="telemetryOpen ? 'primary' : undefined"
             title="Link telemetry"
+            aria-label="Link telemetry"
             :disabled="!activeSession"
             @click="telemetryOpen = !telemetryOpen"
           />
@@ -297,6 +298,7 @@ onMounted(async () => {
             size="small"
             variant="text"
             title="Transcripts"
+            aria-label="Transcripts"
             @click="transcriptsOpen = true"
           />
           <v-btn
@@ -304,7 +306,8 @@ onMounted(async () => {
             size="small"
             variant="text"
             title="Packet settings"
-            to="/settings?tab=packet"
+            aria-label="Packet settings"
+            to="/settings/packet"
           />
         </template>
       </div>

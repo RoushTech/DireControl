@@ -118,6 +118,14 @@ export async function updateStationIdentity(request: UpdateStationIdentityReques
   await http.put('/api/v0/settings/station', request)
 }
 
+/** PUT api/v0/settings/message-retry — attempts 1–10, first delay 10–600 s (doubles each retry). */
+export async function updateMessageRetry(payload: {
+  maxRetryAttempts: number
+  initialRetryDelaySeconds: number
+}): Promise<void> {
+  await http.put('/api/v0/settings/message-retry', payload)
+}
+
 export async function updateOutboundPath(outboundPath: string): Promise<void> {
   await http.put('/api/v0/settings/outbound-path', { outboundPath })
 }

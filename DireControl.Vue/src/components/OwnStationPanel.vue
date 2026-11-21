@@ -2,12 +2,12 @@
 import { formatSecondsAgo } from '@/utils/time'
 import { ref } from 'vue'
 import { useDisplay } from 'vuetify'
-import { serverNow } from '@/utils/serverTime'
 import { useRadiosStore } from '@/stores/radiosStore'
-import { useToastStore } from '@/stores/toastStore'
+import { useTxStore } from '@/stores/tx'
+import { useHealthStore, agoShort } from '@/stores/health'
+import TxLifecycle from '@/components/tx/TxLifecycle.vue'
 import BeaconHistoryModal from './BeaconHistoryModal.vue'
 import { useTick } from '@/composables/useTick'
-import { beaconNow } from '@/api/radiosApi'
 import type { RadioDto, DigiConfirmationDto } from '@/types/radio'
 
 const radiosStore = useRadiosStore()
@@ -15,7 +15,8 @@ const radiosStore = useRadiosStore()
 // On a phone the full cards would cover the map; they collapse to one chip.
 const { smAndDown } = useDisplay()
 const expanded = ref(false)
-const toastStore = useToastStore()
+const txStore = useTxStore()
+const healthStore = useHealthStore()
 
 // Shared singleton tick — no extra setInterval created if already running at 1 s
 const { now } = useTick(1000)
@@ -32,49 +33,41 @@ function openHistory(radioId: string) {
 // ─── Beacon Now ───────────────────────────────────────────────────────────────
 const beaconing = ref<Record<string, boolean>>({})
 
-/** How long to wait for a queued beacon to reach the air before warning. */
-const ON_AIR_TIMEOUT_MS = 60_000
-
-/**
- * A 204 only means the frame was queued — CSMA may hold it for a long time.
- * Confirm airtime from the modem's own last-TX stamp instead.
- */
-function confirmOnAir(radio: RadioDto, queuedAt: number) {
-  if (!radiosStore.getModemStatusForRadio(radio.id)) return // external TNC: no airtime signal
-  const deadline = queuedAt + ON_AIR_TIMEOUT_MS
-  const timer = setInterval(() => {
-    const lastTx = radiosStore.getModemStatusForRadio(radio.id)?.lastTxAt
-    if (lastTx && new Date(lastTx).getTime() >= queuedAt) {
-      clearInterval(timer)
-      toastStore.toast(`Beacon for ${radio.fullCallsign} went out on air.`, 'success')
-    } else if (serverNow() > deadline) {
-      clearInterval(timer)
-      toastStore.toast(
-        `Beacon for ${radio.fullCallsign} is still queued after 60 s — channel busy or a TX fault.`,
-        'warning',
-        10000,
-        { label: 'Radio', to: '/radio' },
-      )
-    }
-  }, 1000)
-}
-
 async function doBeaconNow(radio: RadioDto) {
   beaconing.value[radio.id] = true
   try {
-    const queuedAt = serverNow()
-    await beaconNow(radio.id)
-    toastStore.toast(`Beacon queued for ${radio.fullCallsign}.`, 'info')
-    confirmOnAir(radio, queuedAt)
-    void radiosStore.fetchLastBeacon(radio.id)
-  } catch {
-    toastStore.toast(
-      `Beacon failed for ${radio.fullCallsign} — check that TX is enabled and home position is set.`,
-      'error',
-    )
+    // Queued, not sent: the lifecycle below shows when it is actually on air.
+    if (await txStore.beaconNow(radio.id, radio.fullCallsign))
+      void radiosStore.fetchLastBeacon(radio.id)
   } finally {
     beaconing.value[radio.id] = false
   }
+}
+
+/** Why this radio cannot beacon right now, or null. */
+function txBlocked(radio: RadioDto): string | null {
+  const h = healthStore.health
+  const lane = h.radios.find((r) => r.radioId === radio.id)?.tx
+  if (h.txBlockedReason) return h.txBlockedReason
+  if (!lane) return null
+  if (lane.value === 'Blocked' || lane.level === 'err' || lane.level === 'off') return lane.detail
+  return null
+}
+
+/** The latest beacon frame, while it is still worth showing (5 min). */
+function beaconFrame(radio: RadioDto) {
+  const f = txStore.latestBeacon(radio.id)
+  if (!f) return null
+  return now.value - new Date(f.queuedAt).getTime() < 5 * 60_000 ? f : null
+}
+
+function lastRfLabel(radio: RadioDto): string {
+  const m = radiosStore.getModemStatusForRadio(radio.id)
+  if (!radio.modem.modemEnabled) return 'external TNC'
+  if (!m) return '—'
+  return m.lastDecodedAt
+    ? `${agoShort(new Date(m.lastDecodedAt).getTime(), now.value)} ago`
+    : 'none yet'
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -202,6 +195,17 @@ function txChip(radio: RadioDto): { label: string; color: string } {
 
       <!-- Labeled rows -->
       <div class="own-row">
+        <span class="own-label">Last RF decode</span>
+        <span
+          class="own-value"
+          :class="{
+            'text-warning':
+              healthStore.health.radios.find((r) => r.radioId === radio.id)?.rf.level === 'warn',
+          }"
+          >{{ lastRfLabel(radio) }}</span
+        >
+      </div>
+      <div class="own-row">
         <span class="own-label">Last beacon</span>
         <span class="own-value" :class="{ 'text-warning': awaitingConfirmation(radio) }">
           {{ lastBeaconLabel(radio) }}
@@ -224,12 +228,12 @@ function txChip(radio: RadioDto): { label: string; color: string } {
         <span class="own-value">{{ nextAutoBeaconLabel(radio) }}</span>
       </div>
       <div class="own-row">
-        <span class="own-label">Confirmed</span>
-        <span class="own-value">
-          {{ radio.confirmationCount.toLocaleString() }} /
-          {{ radio.beaconCount.toLocaleString() }}
-        </span>
+        <span class="own-label">Beacon reach</span>
+        <!-- Reach figures live on Network only (one place, deaf-aware). -->
+        <router-link class="own-value own-link" to="/network?tab=reach">on Network ›</router-link>
       </div>
+
+      <TxLifecycle v-if="beaconFrame(radio)" :item="beaconFrame(radio)!" compact class="mt-2" />
 
       <div class="d-flex align-center ga-1 mt-2">
         <v-btn
@@ -239,6 +243,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
           prepend-icon="mdi-access-point"
           class="flex-grow-1"
           :loading="beaconing[radio.id]"
+          :disabled="!!txBlocked(radio)"
           @click="doBeaconNow(radio)"
         >
           Beacon now
@@ -250,9 +255,12 @@ function txChip(radio: RadioDto): { label: string; color: string } {
           density="comfortable"
           class="flex-shrink-0"
           title="Beacon history"
+          aria-label="Beacon history"
           @click="openHistory(radio.id)"
         />
       </div>
+      <!-- TX blocked: keep the button visible and say why (review 1.2). -->
+      <div v-if="txBlocked(radio)" class="own-blocked text-warning">{{ txBlocked(radio) }}</div>
     </div>
   </div>
   <!-- No radio yet: say so, rather than the panel silently not existing. -->
@@ -261,7 +269,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
       <div class="text-body-2 mb-2">
         No radio set up yet — DireControl has nothing to beacon with.
       </div>
-      <v-btn size="small" variant="tonal" color="primary" to="/settings?tab=radios">
+      <v-btn size="small" variant="tonal" color="primary" to="/settings/radios">
         Add a radio
       </v-btn>
     </div>
@@ -323,6 +331,16 @@ function txChip(radio: RadioDto): { label: string; color: string } {
 
 .own-tx-chip {
   max-width: none;
+}
+
+.own-link {
+  color: rgb(var(--v-theme-primary));
+  text-decoration: none;
+}
+
+.own-blocked {
+  font-size: 0.72rem;
+  margin-top: 4px;
 }
 
 .own-row {

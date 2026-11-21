@@ -67,7 +67,7 @@ export const useAlertsStore = defineStore('alerts', () => {
   // Store-level hub subscription — alerts arrive on any screen.
   const hub = usePacketHubStore()
   hub.on('alertReceived', (dto: AlertBroadcastDto) => onAlertReceived(dto))
-  hub.onReconnected(() => fetchAlerts())
+  hub.onReconnected(() => fetchAlerts(), 'alerts')
 
   return {
     alerts,

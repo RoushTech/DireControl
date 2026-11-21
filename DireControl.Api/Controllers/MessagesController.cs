@@ -17,6 +17,7 @@ public class MessagesController(
     DireControlContext db,
     IOptions<DireControlOptions> options,
     MessageSendingService messageSendingService,
+    TxFrameRegistry txFrames,
     IHubContext<PacketHub> hubContext) : ControllerBase
 {
     [HttpGet("inbox")]
@@ -164,6 +165,9 @@ public class MessagesController(
         if (string.IsNullOrWhiteSpace(request.ToCallsign))
             return BadRequest("ToCallsign is required.");
 
+        if (StationIdentityLogic.TransmitBlockedReason(options.Value.OurCallsign) is { } blocked)
+            return Problem(statusCode: StatusCodes.Status409Conflict, detail: blocked);
+
         var parts = MessageSplitter.Split(request.Body ?? string.Empty);
         if (parts.Count == 0)
             return BadRequest("Body is required.");
@@ -192,7 +196,11 @@ public class MessagesController(
             toCallsign, parts[0], await messageSendingService.NextMessageIdAsync(db, ct), path, ct);
         if (first is null)
             return StatusCode(503, "No transmitter available (modem TX off or external TNC down).");
-        sent.Add(ToInboxDto(first));
+        // Queued, not sent: the part's lifecycle follows on txFrameStateChanged.
+        sent.Add(ToInboxDto(first) with
+        {
+            TxFrameId = txFrames.LatestByRef(TxFrameKind.Message, first.MessageId)?.Id,
+        });
 
         foreach (var part in parts.Skip(1))
         {

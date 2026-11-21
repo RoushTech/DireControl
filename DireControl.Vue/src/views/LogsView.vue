@@ -5,11 +5,17 @@ import { useRoute } from 'vue-router'
 import { useLogStreamStore } from '@/stores/logStream'
 import { LOG_LEVEL_COLORS, shortCategory, type LogEntryDto } from '@/types/log'
 import { getLogLevels, setLogLevel } from '@/api/loggingApi'
+import { useHealthStore } from '@/stores/health'
 
 const route = useRoute()
 const store = useLogStreamStore()
 
+const healthStore = useHealthStore()
+
 const connectionStatus = computed(() => store.connectionStatus)
+
+/** The list is only current while both the log stream and the live feed are up. */
+const notLive = computed(() => !healthStore.health.live || connectionStatus.value !== 'connected')
 
 const selectedEntry = ref<LogEntryDto | null>(null)
 const clearConfirmOpen = ref(false)
@@ -21,11 +27,11 @@ function confirmClear() {
 
 // Minimum-level filter (shows the chosen level and everything more severe).
 const levelOptions = [
-  { label: 'All Levels', value: '' },
+  { label: 'All', value: '' },
   { label: 'Debug+', value: 'Debug' },
   { label: 'Info+', value: 'Information' },
-  { label: 'Warning+', value: 'Warning' },
-  { label: 'Error+', value: 'Error' },
+  { label: 'Warn+', value: 'Warning' },
+  { label: 'Errors', value: 'Error' },
 ]
 
 function levelColor(level: string): string {
@@ -125,20 +131,25 @@ function openPopOut() {
           clearable
           class="log-filter-input"
         />
-        <v-select
+        <v-btn-toggle
           v-model="store.levelFilter"
-          :items="levelOptions"
-          item-title="label"
-          item-value="value"
-          label="Level"
+          mandatory
           density="compact"
           variant="outlined"
-          hide-details
-          class="log-level-select"
-        />
+          divided
+          color="primary"
+          aria-label="Minimum log level"
+          class="log-level-toggle"
+        >
+          <v-btn v-for="o in levelOptions" :key="o.value" :value="o.value">{{ o.label }}</v-btn>
+        </v-btn-toggle>
       </div>
 
-      <div class="d-flex align-center ga-2">
+      <div class="d-flex align-center ga-2 flex-wrap">
+        <v-chip v-if="notLive" color="warning" size="small" variant="tonal" label>
+          <v-icon start size="14">mdi-pause-circle-outline</v-icon>
+          Not live
+        </v-chip>
         <v-chip
           :color="
             connectionStatus === 'connected'
@@ -197,15 +208,15 @@ function openPopOut() {
 
         <v-dialog v-model="clearConfirmOpen" max-width="400">
           <v-card>
-            <v-card-title>Clear log buffer?</v-card-title>
+            <v-card-title>Clear the log view?</v-card-title>
             <v-card-text>
-              This discards the buffered log entries in this view. It can't be undone, but new
+              This empties the on-screen buffer only — the server keeps its log files, and new
               entries keep streaming in.
             </v-card-text>
             <v-card-actions>
               <v-spacer />
               <v-btn variant="text" @click="clearConfirmOpen = false">Cancel</v-btn>
-              <v-btn color="error" variant="tonal" @click="confirmClear">Clear</v-btn>
+              <v-btn color="error" variant="tonal" @click="confirmClear">Clear view</v-btn>
             </v-card-actions>
           </v-card>
         </v-dialog>
@@ -216,6 +227,7 @@ function openPopOut() {
           size="small"
           variant="tonal"
           title="Open logs in new window"
+          aria-label="Open logs in new window"
           @click="openPopOut"
         />
       </div>
@@ -240,38 +252,41 @@ function openPopOut() {
     <v-divider />
 
     <!-- Log list -->
-    <div v-if="store.filteredLogs.length === 0" class="text-center text-medium-emphasis py-8">
-      No logs to show yet…
-    </div>
-    <v-virtual-scroll v-else class="log-list" :items="store.filteredLogs" :item-height="32">
-      <template #default="{ item: e }">
-        <div
-          :key="e.sequence"
-          class="log-row"
-          :class="{ 'log-row--error': e.level === 'Error' || e.level === 'Critical' }"
-          @click="openDetail(e)"
-        >
-          <span class="log-cell log-time text-caption text-medium-emphasis">{{
-            formatTime(e.timestamp)
-          }}</span>
-          <span class="log-cell log-level">
-            <v-chip :color="levelColor(e.level)" size="x-small" label variant="flat">{{
-              e.level
-            }}</v-chip>
-          </span>
-          <span
-            class="log-cell log-source text-caption text-medium-emphasis text-truncate"
-            :title="e.category"
+    <div class="log-body" :class="{ 'log-body--stale': notLive }">
+      <div v-if="store.filteredLogs.length === 0" class="text-center text-medium-emphasis py-8">
+        No logs to show yet…
+      </div>
+      <v-virtual-scroll v-else class="log-list" :items="store.filteredLogs" :item-height="32">
+        <template #default="{ item: e }">
+          <div
+            :key="e.sequence"
+            class="log-row"
+            :class="{ 'log-row--error': e.level === 'Error' || e.level === 'Critical' }"
+            @click="openDetail(e)"
           >
-            {{ shortCategory(e.category) }}
-          </span>
-          <span class="log-cell log-message text-body-2 text-truncate" :title="e.message">
-            <v-icon v-if="e.exception" size="14" color="error" class="mr-1">mdi-alert-circle</v-icon
-            >{{ e.message }}
-          </span>
-        </div>
-      </template>
-    </v-virtual-scroll>
+            <span class="log-cell log-time text-caption text-medium-emphasis">{{
+              formatTime(e.timestamp)
+            }}</span>
+            <span class="log-cell log-level">
+              <v-chip :color="levelColor(e.level)" size="x-small" label variant="flat">{{
+                e.level
+              }}</v-chip>
+            </span>
+            <span
+              class="log-cell log-source text-caption text-medium-emphasis text-truncate"
+              :title="e.category"
+            >
+              {{ shortCategory(e.category) }}
+            </span>
+            <span class="log-cell log-message text-body-2 text-truncate" :title="e.message">
+              <v-icon v-if="e.exception" size="14" color="error" class="mr-1"
+                >mdi-alert-circle</v-icon
+              >{{ e.message }}
+            </span>
+          </div>
+        </template>
+      </v-virtual-scroll>
+    </div>
 
     <!-- Detail dialog -->
     <v-dialog
@@ -366,6 +381,7 @@ function openPopOut() {
 
 .log-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
@@ -374,21 +390,36 @@ function openPopOut() {
 }
 
 .log-filters {
-  flex: 1;
+  flex: 1 1 320px;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
 .log-filter-input {
-  flex: 1;
+  flex: 1 1 180px;
   min-width: 0;
 }
 
-.log-level-select {
-  width: 150px;
+.log-level-toggle {
+  max-width: 100%;
+  overflow-x: auto;
   flex-shrink: 0;
+}
+
+.log-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  transition: opacity 0.2s;
+}
+
+.log-body--stale {
+  opacity: 0.5;
+  filter: grayscale(1);
 }
 
 .log-header {

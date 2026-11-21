@@ -181,6 +181,9 @@ const virtualItems = computed<VirtualItem[]>(() => {
           icon="mdi-weather-partly-cloudy"
           size="small"
           :title="showWeatherOnly ? 'Showing weather stations only' : 'Show weather stations only'"
+          :aria-label="
+            showWeatherOnly ? 'Showing weather stations only' : 'Show weather stations only'
+          "
           @click="showWeatherOnly = !showWeatherOnly"
         />
       </div>

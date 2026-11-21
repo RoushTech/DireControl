@@ -66,7 +66,6 @@ public sealed class StatisticsAggregationService(
         var now = DateTime.UtcNow;
         var todayStart = DateTime.Now.Date.ToUniversalTime();
         var weekStart = todayStart.AddDays(-7);
-        var h24Start = now.AddHours(-24);
 
         var packetsToday = await db.Packets
             .CountAsync(p => p.ReceivedAt >= todayStart, ct);
@@ -85,19 +84,8 @@ public sealed class StatisticsAggregationService(
 
         var uniqueAllTime = await db.Stations.CountAsync(ct);
 
-        // Packets per hour — use a grouped count instead of loading all timestamps.
-        var hourBuckets = await db.Packets
-            .Where(p => p.ReceivedAt >= h24Start)
-            .GroupBy(p => (int)((now.Ticks - p.ReceivedAt.Ticks) / TimeSpan.TicksPerHour))
-            .Select(g => new { HoursAgo = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var packetsPerHour = new int[24];
-        foreach (var bucket in hourBuckets)
-        {
-            if (bucket.HoursAgo >= 0 && bucket.HoursAgo < 24)
-                packetsPerHour[23 - bucket.HoursAgo] = bucket.Count;
-        }
+        var (packetsPerHour, packetsPerHourRf, packetsPerHourIs) =
+            await ComputePacketsPerHourAsync(db, now, ct);
 
         // Busiest stations by beacon rate
         var topBeacon = await db.StationStatistics
@@ -150,12 +138,55 @@ public sealed class StatisticsAggregationService(
             UniqueStationsThisWeek = uniqueThisWeek,
             UniqueStationsAllTime = uniqueAllTime,
             PacketsPerHour = packetsPerHour,
+            PacketsPerHourRf = packetsPerHourRf,
+            PacketsPerHourIs = packetsPerHourIs,
             BusiestStations = topBeacon,
             RecentlyFirstHeard = recentlyFirstHeard,
             GridSquares = gridSquares,
         };
 
         statisticsService.SetSnapshot(dto);
+    }
+
+    /// <summary>
+    /// Packets per hour over the last 24 hours, oldest hour first (index 23 is the current hour).
+    /// Returns the all-sources total plus separate RF and APRS-IS series so the UI can stack them
+    /// and make an RF collapse visible. Own transmissions count towards the total only — they
+    /// are neither heard on RF nor received from APRS-IS.
+    /// </summary>
+    internal static async Task<(int[] All, int[] Rf, int[] Is)> ComputePacketsPerHourAsync(
+        DireControlContext db, DateTime now, CancellationToken ct)
+    {
+        var h24Start = now.AddHours(-24);
+
+        // Grouped count instead of loading all timestamps.
+        var buckets = await db.Packets
+            .Where(p => p.ReceivedAt >= h24Start)
+            .GroupBy(p => new
+            {
+                HoursAgo = (int)((now.Ticks - p.ReceivedAt.Ticks) / TimeSpan.TicksPerHour),
+                p.Source,
+            })
+            .Select(g => new { g.Key.HoursAgo, g.Key.Source, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var all = new int[24];
+        var rf = new int[24];
+        var aprsIs = new int[24];
+        foreach (var bucket in buckets)
+        {
+            if (bucket.HoursAgo < 0 || bucket.HoursAgo >= 24)
+                continue;
+
+            var index = 23 - bucket.HoursAgo;
+            all[index] += bucket.Count;
+            if (bucket.Source == PacketSource.Rf)
+                rf[index] += bucket.Count;
+            else if (bucket.Source == PacketSource.AprsIs)
+                aprsIs[index] += bucket.Count;
+        }
+
+        return (all, rf, aprsIs);
     }
 
     // -------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useUnits } from '@/composables/useUnits'
 import { ref, watch, computed } from 'vue'
+import { useTheme } from 'vuetify'
 import { Line, Bar } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -61,7 +62,16 @@ ChartJS.register(
   Legend,
 )
 
-const { formatAltitude } = useUnits()
+const {
+  formatAltitude,
+  formatSpeedKnots,
+  formatWindMph,
+  formatTempF,
+  tempUnit,
+  windUnit,
+  tempFromF,
+  windFromMph,
+} = useUnits()
 const props = defineProps<{
   callsign: string | null
   refreshKey: number
@@ -177,9 +187,6 @@ const totalPages = computed(() => Math.max(1, Math.ceil(packetTotal.value / pack
 const currentWeather = computed(() => weatherReadings.value[0] ?? null)
 
 const tempF = computed(() => currentWeather.value?.temperature ?? null)
-const tempC = computed(() =>
-  tempF.value != null ? Math.round((((tempF.value - 32) * 5) / 9) * 10) / 10 : null,
-)
 
 // ---- Combined weather chart ----
 
@@ -192,6 +199,22 @@ function formatBucketLabel(date: Date): string {
   }
   // 7d: show weekday name at midnight, blank otherwise
   return hourOf(date) === 0 ? formatDateLabel(date, { weekday: 'short' }) : ''
+}
+
+// Weather isn't packet-source data, so it uses the warning/info roles rather than rf/is.
+// Chart.js draws on a canvas, so read the colours from the theme instead of CSS variables.
+const theme = useTheme()
+const weatherTempColor = computed(() => String(theme.current.value.colors.warning))
+const weatherWindColor = computed(() => String(theme.current.value.colors.info))
+// Packet / signal charts: primary for counts and offsets, success for audio level.
+const chartPrimary = computed(() => String(theme.current.value.colors.primary))
+const chartSuccess = computed(() => String(theme.current.value.colors.success))
+/** '#rrggbb' + alpha → rgba() for Chart.js fills. */
+function alpha(hex: string, a: number): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex)
+  return m
+    ? `rgba(${parseInt(m[1]!, 16)}, ${parseInt(m[2]!, 16)}, ${parseInt(m[3]!, 16)}, ${a})`
+    : hex
 }
 
 const weatherChartData = computed(() => {
@@ -214,17 +237,17 @@ const weatherChartData = computed(() => {
     const d = new Date(fromMs + i * bMs)
     labels.push(formatBucketLabel(d))
     const r = readingMap.get(i)
-    tempData.push(r?.temperature ?? null)
-    windData.push(r?.windSpeed ?? null)
+    tempData.push(r?.temperature != null ? Math.round(tempFromF(r.temperature) * 10) / 10 : null)
+    windData.push(r?.windSpeed != null ? Math.round(windFromMph(r.windSpeed) * 10) / 10 : null)
   }
 
   return {
     labels,
     datasets: [
       {
-        label: 'Temp (°F)',
+        label: `Temp (${tempUnit.value})`,
         data: tempData,
-        borderColor: '#FF7043',
+        borderColor: weatherTempColor.value,
         backgroundColor: 'transparent',
         borderWidth: 2,
         tension: 0.2,
@@ -235,9 +258,9 @@ const weatherChartData = computed(() => {
         pointHoverRadius: 4,
       },
       {
-        label: 'Wind (mph)',
+        label: `Wind (${windUnit.value})`,
         data: windData,
-        borderColor: '#42A5F5',
+        borderColor: weatherWindColor.value,
         backgroundColor: 'transparent',
         borderWidth: 2,
         tension: 0.2,
@@ -286,7 +309,7 @@ const weatherChartOptions = computed(() => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           label(item: any) {
             if (item.raw == null) return ''
-            const unit = item.datasetIndex === 0 ? '°F' : ' mph'
+            const unit = item.datasetIndex === 0 ? ` ${tempUnit.value}` : ` ${windUnit.value}`
             return `${item.dataset.label}: ${(item.raw as number).toFixed(1)}${unit}`
           },
         },
@@ -317,7 +340,7 @@ const weatherChartOptions = computed(() => {
         position: 'left' as const,
         ticks: { font: { size: 9 } },
         grid: { display: true, color: 'rgba(128,128,128,0.15)' },
-        title: { display: true, text: '°F', font: { size: 9 } },
+        title: { display: true, text: tempUnit.value, font: { size: 9 } },
       },
       yWind: {
         display: true,
@@ -325,7 +348,7 @@ const weatherChartOptions = computed(() => {
         beginAtZero: true,
         ticks: { font: { size: 9 } },
         grid: { display: false },
-        title: { display: true, text: 'mph', font: { size: 9 } },
+        title: { display: true, text: windUnit.value, font: { size: 9 } },
       },
     },
   }
@@ -369,8 +392,8 @@ const hourBarData = computed(() => {
     datasets: [
       {
         data: counts,
-        backgroundColor: 'rgba(66, 165, 245, 0.55)',
-        borderColor: '#42A5F5',
+        backgroundColor: alpha(chartPrimary.value, 0.55),
+        borderColor: chartPrimary.value,
         borderWidth: 1,
       },
     ],
@@ -445,8 +468,8 @@ const audioChartData = computed(() => ({
     {
       label: 'Audio level',
       data: signalPoints.value.map((p) => p.audioLevel),
-      borderColor: '#66BB6A',
-      backgroundColor: 'rgba(102, 187, 106, 0.08)',
+      borderColor: chartSuccess.value,
+      backgroundColor: alpha(chartSuccess.value, 0.08),
       borderWidth: 2,
       tension: 0.2,
       fill: true,
@@ -484,7 +507,7 @@ const offsetChartData = computed(() => ({
     {
       label: 'Frequency offset (Hz)',
       data: signalPoints.value.map((p) => p.frequencyOffsetHz),
-      borderColor: '#42A5F5',
+      borderColor: chartPrimary.value,
       backgroundColor: 'transparent',
       borderWidth: 2,
       tension: 0.2,
@@ -525,8 +548,8 @@ const signalChartData = computed(() => ({
     {
       label: 'Decode Quality',
       data: signalPoints.value.map((p) => p.decodeQuality),
-      borderColor: '#66BB6A',
-      backgroundColor: 'rgba(102, 187, 106, 0.08)',
+      borderColor: chartSuccess.value,
+      backgroundColor: alpha(chartSuccess.value, 0.08),
       borderWidth: 2,
       tension: 0.2,
       fill: true,
@@ -951,7 +974,7 @@ watch(tab, (newTab) => {
 
             <template v-if="station.lastSpeed != null">
               <div class="info-label">Speed</div>
-              <div class="info-value">{{ station.lastSpeed.toFixed(1) }} kn</div>
+              <div class="info-value">{{ formatSpeedKnots(station.lastSpeed) }}</div>
             </template>
 
             <template v-if="station.lastHeading != null">
@@ -1293,10 +1316,7 @@ watch(tab, (newTab) => {
               <template v-if="tempF != null">
                 <div class="info-label">Temperature</div>
                 <div class="info-value">
-                  {{ tempF.toFixed(1) }}°F
-                  <span v-if="tempC != null" class="text-medium-emphasis ml-1"
-                    >({{ tempC }}°C)</span
-                  >
+                  {{ formatTempF(tempF) }}
                 </div>
               </template>
 
@@ -1323,14 +1343,14 @@ watch(tab, (newTab) => {
                     <span>{{ compassDir(currentWeather.windDirection) }}</span>
                   </template>
                   <span v-if="currentWeather.windSpeed != null">
-                    {{ currentWeather.windSpeed.toFixed(1) }} mph
+                    {{ formatWindMph(currentWeather.windSpeed) }}
                   </span>
                 </div>
               </template>
 
               <template v-if="currentWeather.windGust != null">
                 <div class="info-label">Gust</div>
-                <div class="info-value">{{ currentWeather.windGust.toFixed(1) }} mph</div>
+                <div class="info-value">{{ formatWindMph(currentWeather.windGust) }}</div>
               </template>
 
               <template v-if="currentWeather.pressure != null">

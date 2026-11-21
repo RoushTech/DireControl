@@ -1,3 +1,4 @@
+using DireControl.Enums;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Sockets;
@@ -184,7 +185,7 @@ public sealed class KissTcpServerService(
             if (command != KissCodec.DataFrameCommand || payload.Length == 0)
                 return;
 
-            if (transmitter.TrySend(payload, channel))
+            if (transmitter.Send(payload, channel, new TxFrameInfo(TxFrameKind.Kiss, "KISS client frame")) is not null)
                 logger.LogInformation("KISS client frame queued for TX ({Bytes} bytes).", payload.Length);
             else
                 logger.LogWarning("KISS client frame dropped: no RF transmit backend available.");

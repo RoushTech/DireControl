@@ -75,4 +75,41 @@ public class AprsIsStatusServiceTests
             Assert.That(svc.FirstDisconnectedAt, Is.Not.Null);
         });
     }
+    [Test]
+    public void IncrementPacketCount_StampsLastPacketAt_AndKeepsItAcrossDisconnects()
+    {
+        var svc = CreateService();
+        Assert.That(svc.LastPacketAt, Is.Null);
+
+        svc.IncrementPacketCount();
+        var stamp = svc.LastPacketAt;
+        svc.SetState(AprsIsConnectionState.Disconnected);
+        svc.ResetSessionCount();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamp, Is.Not.Null);
+            Assert.That(stamp!.Value.Kind, Is.EqualTo(DateTimeKind.Utc));
+            Assert.That(svc.LastPacketAt, Is.EqualTo(stamp), "IS freshness outlives the connection");
+        });
+    }
+
+    [TestCase(AprsIsConnectionState.Connected, true)]
+    [TestCase(AprsIsConnectionState.Connecting, false)]
+    [TestCase(AprsIsConnectionState.AuthFailed, false)]
+    [TestCase(AprsIsConnectionState.Disconnected, false)]
+    [TestCase(AprsIsConnectionState.Disabled, false)]
+    public void Verified_OnlyWhileConnected(AprsIsConnectionState state, bool verified)
+    {
+        var svc = CreateService();
+        svc.SetState(state);
+        Assert.That(svc.Verified, Is.EqualTo(verified));
+    }
+
+    [Test]
+    public void ConnectionState_HasUnknownZero()
+    {
+        Assert.That((int)AprsIsConnectionState.Unknown, Is.Zero);
+        Assert.That(default(AprsIsConnectionState), Is.EqualTo(AprsIsConnectionState.Unknown));
+    }
 }

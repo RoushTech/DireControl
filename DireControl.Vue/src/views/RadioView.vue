@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import {
   getModemStatus,
   restartModem,
+  forceUnkey,
   decodeSpectrumPayload,
   ModemStates,
   modemStateLabels,
@@ -23,9 +24,14 @@ import {
 import { usePacketHubStore } from '@/stores/packetHub'
 import { useRadiosStore, LEVEL_STALE_MS } from '@/stores/radiosStore'
 import { useToastStore } from '@/stores/toastStore'
-import { getStatus, type StatusDto } from '@/api/statusApi'
+import { getStatus, AprsIsStates, aprsIsStateLabels, type StatusDto } from '@/api/statusApi'
 import { getSettings, getPacketsSince } from '@/api/stationsApi'
-import { getRadios, beaconNow } from '@/api/radiosApi'
+import { getRadios } from '@/api/radiosApi'
+import { apiErrorDetail } from '@/api/axios'
+import { useTxStore } from '@/stores/tx'
+import { useHealthStore } from '@/stores/health'
+import { useUiStore } from '@/stores/uiStore'
+import TxLifecycle from '@/components/tx/TxLifecycle.vue'
 import type { RadioDto, LastBeaconDto } from '@/types/radio'
 import type { SettingsDto } from '@/types/station'
 import {
@@ -37,7 +43,6 @@ import {
 } from '@/types/packet'
 import WaterfallCanvas from '@/components/WaterfallCanvas.vue'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
-import CaptureDiagnostics from '@/components/CaptureDiagnostics.vue'
 import BeaconHistoryModal from '@/components/BeaconHistoryModal.vue'
 import { timeAgo, formatDateTime } from '@/utils/time'
 import { serverNow } from '@/utils/serverTime'
@@ -49,6 +54,9 @@ const { now } = useTick(5000)
 const hub = usePacketHubStore()
 const radiosStore = useRadiosStore()
 const toastStore = useToastStore()
+const txStore = useTxStore()
+const healthStore = useHealthStore()
+const ui = useUiStore()
 
 const status = ref<StatusDto | null>(null)
 const modemStatuses = ref<ModemStatusDto[]>([])
@@ -96,17 +104,38 @@ const beaconing = reactive<Record<string, boolean>>({})
 async function doBeaconNow(m: ModemStatusDto) {
   beaconing[m.radioId] = true
   try {
-    await beaconNow(m.radioId)
-    // Queued, not sent: the TX rows below show when it actually goes out.
-    toastStore.toast(`Beacon queued for ${m.fullCallsign}.`, 'info')
-    void radiosStore.fetchLastBeacon(m.radioId)
-  } catch {
-    toastStore.toast(
-      `Beacon failed for ${m.fullCallsign} — check that TX is enabled and home position is set.`,
-      'error',
-    )
+    // Queued, not sent: the transmit pipeline below shows when it goes out.
+    if (await txStore.beaconNow(m.radioId, m.fullCallsign))
+      void radiosStore.fetchLastBeacon(m.radioId)
   } finally {
     beaconing[m.radioId] = false
+  }
+}
+
+/** Why this radio cannot transmit right now (button stays visible with the reason). */
+function txBlockedFor(m: ModemStatusDto): string | null {
+  if (!m.txEnabled) return 'TX is not enabled for this radio.'
+  if (m.pttStuck) return 'PTT is stuck keyed. Force unkey first.'
+  if (m.state !== ModemStates.Running) return 'The modem is not running.'
+  return healthStore.health.txBlockedReason
+}
+
+/** This radio's recent frames, newest first, for the transmit pipeline card. */
+function framesFor(radioId: string) {
+  return txStore.list.filter((f) => f.radioId === radioId).slice(0, 6)
+}
+
+const forceUnkeying = reactive<Record<string, boolean>>({})
+async function doForceUnkey(m: ModemStatusDto) {
+  forceUnkeying[m.radioId] = true
+  try {
+    await forceUnkey(m.radioId)
+    toastStore.toast('PTT released', 'success')
+    await radiosStore.fetchModemStatus()
+  } catch (e) {
+    toastStore.toast(apiErrorDetail(e, 'Force unkey failed'), 'error', 10_000)
+  } finally {
+    forceUnkeying[m.radioId] = false
   }
 }
 
@@ -334,15 +363,17 @@ const rfStack = computed<RfStackEntry[]>(() => {
 
   entries.push({
     name: 'APRS-IS',
-    chip: (s?.aprsIsState ?? '…').toLowerCase(),
+    chip: s ? aprsIsStateLabels[s.aprsIsState].toLowerCase() : '…',
     color:
-      s?.aprsIsState === 'Connected'
+      s?.aprsIsState === AprsIsStates.Connected
         ? 'success'
-        : s?.aprsIsState === 'Disabled'
+        : s?.aprsIsState === AprsIsStates.Disabled
           ? 'grey'
-          : 'warning',
+          : s?.aprsIsState === AprsIsStates.AuthFailed
+            ? 'error'
+            : 'warning',
     note: s?.aprsIsServerName ?? 'not connected',
-    to: s?.aprsIsState === 'Connected' ? undefined : '/settings?tab=aprsis',
+    to: s?.aprsIsState === AprsIsStates.Connected ? undefined : '/settings/aprsis',
   })
 
   entries.push({
@@ -641,15 +672,21 @@ onUnmounted(() => {
                 color="primary"
                 prepend-icon="mdi-access-point"
                 :loading="beaconing[m.radioId]"
-                :disabled="!m.txEnabled"
-                :title="
-                  m.txEnabled
-                    ? 'Transmit a position beacon now'
-                    : 'TX is not enabled for this radio'
-                "
+                :disabled="!!txBlockedFor(m)"
                 @click="doBeaconNow(m)"
               >
                 Beacon now
+              </v-btn>
+              <v-btn
+                v-if="m.pttStuck"
+                size="small"
+                variant="flat"
+                color="error"
+                prepend-icon="mdi-radio-off"
+                :loading="forceUnkeying[m.radioId]"
+                @click="doForceUnkey(m)"
+              >
+                Force unkey
               </v-btn>
               <v-btn
                 size="small"
@@ -670,6 +707,31 @@ onUnmounted(() => {
                 History
               </v-btn>
             </div>
+            <div v-if="txBlockedFor(m)" class="text-caption text-warning mt-1">
+              {{ txBlockedFor(m) }}
+            </div>
+
+            <!-- Transmit pipeline: this radio's recent frames, queued → on air → sent -->
+            <div v-if="m.txEnabled" class="tx-pipeline mt-3">
+              <div class="d-flex align-center mb-1">
+                <span class="text-caption font-weight-medium">Transmit pipeline</span>
+                <v-spacer />
+                <v-btn size="x-small" variant="text" @click="ui.txSheetOpen = true">
+                  TX queue
+                </v-btn>
+              </div>
+              <div
+                v-if="framesFor(m.radioId).length === 0"
+                class="text-caption text-medium-emphasis"
+              >
+                Nothing sent this session.
+              </div>
+              <div v-for="f in framesFor(m.radioId)" :key="f.id" class="tx-pipe-row">
+                <span class="tx-pipe-title">{{ f.title }}</span>
+                <TxLifecycle :item="f" compact />
+                <div v-if="f.reason" class="text-caption text-error">{{ f.reason }}</div>
+              </div>
+            </div>
           </div>
         </v-card>
 
@@ -683,7 +745,7 @@ onUnmounted(() => {
           </template>
           <div v-else class="text-caption text-medium-emphasis">
             No radios have a modem audio feed configured.
-            <v-btn variant="text" size="small" to="/settings?tab=radios">Set up a radio</v-btn>
+            <v-btn variant="text" size="small" to="/settings/radios">Set up a radio</v-btn>
           </div>
         </v-card>
 
@@ -799,19 +861,12 @@ onUnmounted(() => {
       </v-card>
     </div>
 
-    <!-- Capture, auto-capture and the log pack: the tools for working out why
-         something heard did not decode. -->
-    <v-expansion-panels class="mt-4">
-      <v-expansion-panel>
-        <v-expansion-panel-title>
-          <v-icon start size="18">mdi-stethoscope</v-icon>
-          Diagnostics — audio capture &amp; log pack
-        </v-expansion-panel-title>
-        <v-expansion-panel-text>
-          <CaptureDiagnostics />
-        </v-expansion-panel-text>
-      </v-expansion-panel>
-    </v-expansion-panels>
+    <!-- Capture, auto-capture, the log pack and the RF internals moved to Diagnostics. -->
+    <div class="mt-4">
+      <v-btn variant="tonal" prepend-icon="mdi-stethoscope" to="/radio/diagnostics">
+        Diagnostics — carrier, TX lanes, PTT, capture &amp; log pack
+      </v-btn>
+    </div>
 
     <PacketInspectionDialog
       :packet-id="inspectedPacketId"
@@ -829,6 +884,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.tx-pipe-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+.tx-pipe-title {
+  font-size: 0.8125rem;
+  min-width: 140px;
+}
+
 .radio-view {
   height: 100%;
   overflow-y: auto;

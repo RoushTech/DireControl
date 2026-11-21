@@ -25,6 +25,12 @@ public class UserSetting : IEntityTypeConfiguration<UserSetting>
     /// <summary>Home longitude override. Null = use configuration.</summary>
     public double? HomeLon { get; set; }
 
+    /// <summary>Outbound message retry attempts override (1–10). Null = use configuration.</summary>
+    public int? MaxRetryAttempts { get; set; }
+
+    /// <summary>First retry delay override in seconds (10–600; doubles each attempt). Null = use configuration.</summary>
+    public int? InitialRetryDelaySeconds { get; set; }
+
     // ─── APRS-IS settings ────────────────────────────────────────────────────
 
     /// <summary>Whether the DireControl APRS-IS client is enabled.</summary>

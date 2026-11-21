@@ -204,13 +204,6 @@ function volumeIcon() {
           <v-icon size="14" class="mr-1">mdi-wifi-alert</v-icon>
           Audio is breaking up — the connection can't keep up.
         </div>
-
-        <v-divider class="my-2" />
-
-        <!-- Recording, auto-capture and the log pack live on the Radio page. -->
-        <v-btn variant="text" size="small" block to="/radio" prepend-icon="mdi-stethoscope">
-          Capture &amp; diagnostics
-        </v-btn>
       </v-card-text>
     </v-card>
   </v-menu>

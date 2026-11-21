@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-/** An optional button on a toast that navigates somewhere relevant. */
+/** An optional button on a toast: navigates (`to`) or runs a callback (`run`). */
 export interface ToastAction {
   label: string
-  to: string
+  to?: string
+  run?: () => void
 }
 
 export interface Toast {

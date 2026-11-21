@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRadiosStore } from '@/stores/radiosStore'
+import { useToastStore } from '@/stores/toastStore'
+import { apiErrorDetail } from '@/api/axios'
 import {
   listPresets,
+  updatePreset,
   type OpenTerminalSessionRequest,
   type TerminalPresetDto,
 } from '@/api/terminalApi'
@@ -84,6 +87,7 @@ const canConnect = computed(
 )
 
 // ── Presets ──────────────────────────────────────────────────────────────────
+const toast = useToastStore()
 const presets = ref<TerminalPresetDto[]>([])
 const selectedPresetId = ref<number | null>(null)
 
@@ -103,6 +107,39 @@ function presetSubtitle(id: unknown): string {
   const preset = presets.value.find((p) => p.id === id)
   if (!preset) return ''
   return `${preset.remoteCallsign} · ch ${preset.channel}${preset.digiPath ? ` via ${preset.digiPath}` : ''}`
+}
+
+const pinning = ref<number | null>(null)
+
+function isPinned(id: unknown): boolean {
+  return presets.value.find((p) => p.id === id)?.isPinned ?? false
+}
+
+/** Pin or unpin a preset in place (pruning keeps pinned presets). */
+async function togglePin(id: unknown) {
+  const p = presets.value.find((x) => x.id === id)
+  if (!p) return
+  pinning.value = p.id
+  try {
+    const updated = await updatePreset(p.id, {
+      name: p.name ?? undefined,
+      remoteCallsign: p.remoteCallsign,
+      channel: p.channel,
+      digiPath: p.digiPath ?? undefined,
+      localCallsign: p.localCallsign ?? undefined,
+      isPinned: !p.isPinned,
+      mod128: p.mod128 ?? undefined,
+      pacLen: p.pacLen ?? undefined,
+      windowSize: p.windowSize ?? undefined,
+      maxRetries: p.maxRetries ?? undefined,
+      t1Seconds: p.t1Seconds ?? undefined,
+    })
+    presets.value = presets.value.map((x) => (x.id === updated.id ? updated : x))
+  } catch (e) {
+    toast.toast(apiErrorDetail(e, 'Could not update the preset'), 'error')
+  } finally {
+    pinning.value = null
+  }
 }
 
 function applyPreset(id: number | null) {
@@ -195,7 +232,21 @@ onMounted(async () => {
         @update:model-value="applyPreset"
       >
         <template #item="{ item, props: itemProps }">
-          <v-list-item v-bind="itemProps" :subtitle="presetSubtitle(item.value)" />
+          <v-list-item v-bind="itemProps" :subtitle="presetSubtitle(item.value)">
+            <template #append>
+              <!-- Pinned presets sort first and are never pruned. -->
+              <v-btn
+                :icon="isPinned(item.value) ? 'mdi-pin' : 'mdi-pin-outline'"
+                :color="isPinned(item.value) ? 'primary' : undefined"
+                :aria-label="isPinned(item.value) ? 'Unpin preset' : 'Pin preset'"
+                :aria-pressed="isPinned(item.value)"
+                :loading="pinning === item.value"
+                variant="text"
+                size="small"
+                @click.stop="togglePin(item.value)"
+              />
+            </template>
+          </v-list-item>
         </template>
       </v-select>
 
@@ -210,7 +261,7 @@ onMounted(async () => {
         class="mb-3"
       >
         <template #no-data>
-          <v-list-item to="/settings?tab=radios" title="No active radios — add one" />
+          <v-list-item to="/settings/radios" title="No active radios — add one" />
         </template>
       </v-select>
 
@@ -253,7 +304,7 @@ onMounted(async () => {
             />
             <div class="text-caption text-medium-emphasis mb-2">
               Blank fields use the
-              <v-btn variant="text" size="x-small" density="compact" to="/settings?tab=packet">
+              <v-btn variant="text" size="x-small" density="compact" to="/settings/packet">
                 packet defaults
               </v-btn>
               .

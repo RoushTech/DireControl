@@ -1,4 +1,5 @@
 import http from './axios'
+import type { PttState, TxQueuedResponse } from './txApi'
 
 export const ModemStates = {
   Unknown: 0,
@@ -35,11 +36,19 @@ export interface ModemStatusDto {
   errorMessage: string | null
   audioLevel: number
   carrierDetected: boolean
+  /** Start of the current carrier-detect burst; null while the channel is clear. */
+  carrierSince: string | null
+  /** Preambles seen since carrierSince; 0 with a long carrier means noise. */
+  preamblesSinceCarrier: number
+  /** When the capture thread last delivered audio (the level's timestamp). */
+  levelUpdatedAt: string | null
   carrierStuck: boolean
   csmaTimeouts: number
   ingestDropped: number
   txError: string | null
   pttStuck: boolean
+  /** Live PTT line: Released / Keyed / Stuck. */
+  pttState: PttState
   pttWatchdogTrips: number
   txDropped: number
   txQueueDepth: number
@@ -134,6 +143,54 @@ export async function getModemDevices(): Promise<ModemDevicesDto> {
   return data
 }
 
+/** Releases a PTT that would not unkey, after its modem session faulted. */
+export async function forceUnkey(radioId: string): Promise<void> {
+  await http.post(`/api/v0/modem/${encodeURIComponent(radioId)}/force-unkey`)
+}
+
+/** GET api/v0/modem/diagnostics — receive/transmit internals per radio. */
+export interface ModemDiagnosticsDto {
+  radioId: string
+  radioName: string
+  state: ModemState
+  carrierDutyLastMinute: number | null
+  carrierDetected: boolean
+  carrierSince: string | null
+  preamblesSinceCarrier: number
+  carrierStuck: boolean
+  carrierStuckSeconds: number
+  decodedFrames: number
+  invalidFrames: number
+  decodedByProfile: Record<string, number> | null
+  ingestDropped: number
+  captureDevice: string | null
+  capturePeriodMs: number
+  captureExplicitPeriod: boolean
+  captureOverruns: number
+  levelUpdatedAt: string | null
+  txEnabled: boolean
+  normalLaneDepth: number
+  digipeatLaneDepth: number
+  sessionLaneDepth: number
+  txDropped: number
+  csmaWaitingSince: string | null
+  csmaTimeouts: number
+  csmaMaxWaitSeconds: number
+  /** 1 = Discard, 2 = TransmitAnyway */
+  csmaTimeoutAction: number
+  pttMethod: PttMethod
+  pttState: PttState
+  pttWatchdogTrips: number
+  txError: string | null
+  transmittedFrames: number
+  lastTxAt: string | null
+}
+
+export async function getModemDiagnostics(): Promise<ModemDiagnosticsDto[]> {
+  const { data } = await http.get<ModemDiagnosticsDto[]>('/api/v0/modem/diagnostics')
+  return data
+}
+
 export async function restartModem(): Promise<void> {
   await http.post('/api/v0/modem/restart')
 }
@@ -157,8 +214,12 @@ export async function sendTestTone(
   radioId: string,
   kind: TestToneKind,
   durationMs = 2000,
-): Promise<void> {
-  await http.post(`/api/v0/modem/${radioId}/test-tone`, { kind, durationMs })
+): Promise<TxQueuedResponse> {
+  const { data } = await http.post<TxQueuedResponse>(`/api/v0/modem/${radioId}/test-tone`, {
+    kind,
+    durationMs,
+  })
+  return data
 }
 
 /** One captured off-air recording available for offline replay. */

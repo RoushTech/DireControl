@@ -2,7 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch } from 'vue'
 import { getRadios, getLastBeacon } from '@/api/radiosApi'
 import { usePacketHubStore } from '@/stores/packetHub'
-import { ModemStates, type ModemLevelDto, type ModemStatusDto } from '@/api/modemApi'
+import {
+  ModemStates,
+  getModemStatus,
+  type ModemLevelDto,
+  type ModemStatusDto,
+} from '@/api/modemApi'
 import type {
   RadioDto,
   LastBeaconDto,
@@ -41,9 +46,12 @@ export const useRadiosStore = defineStore('radios', () => {
   const activity = reactive<Record<string, RadioActivity | undefined>>({})
   // Latest full modem status per radio (pushed ~1 Hz while any modem runs).
   const modemStatus = reactive<Record<string, ModemStatusDto | undefined>>({})
+  // The same, but kept through a hub drop so "as of the drop" views can show it.
+  const lastKnownModemStatus = reactive<Record<string, ModemStatusDto | undefined>>({})
   // When carrier was first seen in the current run, and the decode count then.
   const carrierRuns = reactive<Record<string, { since: number; decoded: number } | undefined>>({})
   const loading = ref(false)
+  const modemStatusLoaded = ref(false)
   /** True once radios have been fetched at least once (distinguishes "none" from "not yet"). */
   const loaded = ref(false)
   // Ticks so staleness re-evaluates even when no new frames arrive.
@@ -166,16 +174,33 @@ export const useRadiosStore = defineStore('radios', () => {
   })
   hub.onReconnected(async () => {
     await fetchRadios()
-    await fetchAllLastBeacons()
-  })
-  hub.on('modemStatusChanged', (statuses: ModemStatusDto[]) => {
+    await Promise.all([fetchModemStatus(), fetchAllLastBeacons()])
+  }, 'radios')
+
+  function applyModemStatuses(statuses: ModemStatusDto[]) {
     const seen = new Set<string>()
     for (const s of statuses) {
       modemStatus[s.radioId] = s
+      lastKnownModemStatus[s.radioId] = s
       seen.add(s.radioId)
     }
     for (const id of Object.keys(modemStatus)) if (!seen.has(id)) delete modemStatus[id]
-  })
+    modemStatusLoaded.value = true
+  }
+
+  /**
+   * The hub only pushes modem status every second while a modem runs, and
+   * otherwise only on change — a page opened while the modem sits in Error
+   * would never hear about it. Fetch once on start and after reconnects.
+   */
+  async function fetchModemStatus() {
+    try {
+      applyModemStatuses(await getModemStatus())
+    } catch {
+      /* the offline banner covers an unreachable API */
+    }
+  }
+  hub.on('modemStatusChanged', (statuses: ModemStatusDto[]) => applyModemStatuses(statuses))
   // A dropped hub means nothing shown is live any more — never leave an RX/TX
   // chip lit from before the disconnect.
   watch(
@@ -185,6 +210,7 @@ export const useRadiosStore = defineStore('radios', () => {
         for (const id of Object.keys(activity)) delete activity[id]
         for (const id of Object.keys(modemStatus)) delete modemStatus[id]
         for (const id of Object.keys(carrierRuns)) delete carrierRuns[id]
+        modemStatusLoaded.value = false
       }
     },
   )
@@ -210,10 +236,10 @@ export const useRadiosStore = defineStore('radios', () => {
     return modemStatus[radioId]
   }
 
-  /** True only while the radio's modem is actually Running with TX enabled. */
+  /** True only while the radio's modem is actually Running with TX enabled and PTT not stuck. */
   function isTxLive(radioId: string): boolean {
     const s = modemStatus[radioId]
-    return s?.state === ModemStates.Running && s.txEnabled
+    return s?.state === ModemStates.Running && s.txEnabled && !s.pttStuck
   }
 
   function isActivityStale(radioId: string): boolean {
@@ -246,6 +272,9 @@ export const useRadiosStore = defineStore('radios', () => {
     getActivityForRadio,
     isActivityStale,
     modemStatus,
+    modemStatusLoaded,
+    lastKnownModemStatus,
+    fetchModemStatus,
     getModemStatusForRadio,
     isTxLive,
     carrierHeldSeconds,

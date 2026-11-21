@@ -10,6 +10,7 @@ import {
   type ResolvedPathEntry,
 } from '@/types/packet'
 import { compassDir16 } from '@/utils/time'
+import { useUnits } from '@/composables/useUnits'
 
 const { mobile } = useDisplay()
 
@@ -90,13 +91,7 @@ function toDMS(deg: number, posDir: string, negDir: string): string {
   return `${d}° ${m}′ ${s}″ ${dir}`
 }
 
-function fToC(f: number): number {
-  return Math.round((f - 32) * (5 / 9) * 10) / 10
-}
-
-function mphToKmh(mph: number): number {
-  return Math.round(mph * 1.60934 * 10) / 10
-}
+const { formatTempF, formatWindMph } = useUnits()
 
 const typeLabel = computed(() =>
   packet.value ? (PACKET_TYPE_LABELS[packet.value.parsedType as PacketType] ?? 'Unknown') : '',
@@ -271,10 +266,7 @@ function heardViaLabel(p: PacketDto): string {
               <template v-if="packet.weatherData.temperatureF != null">
                 <div class="field-key">Temperature</div>
                 <div class="field-val">
-                  {{ packet.weatherData.temperatureF.toFixed(1) }}°F
-                  <span class="text-medium-emphasis"
-                    >({{ fToC(packet.weatherData.temperatureF) }}°C)</span
-                  >
+                  {{ formatTempF(packet.weatherData.temperatureF) }}
                 </div>
               </template>
               <template v-if="packet.weatherData.humidityPercent != null">
@@ -290,10 +282,7 @@ function heardViaLabel(p: PacketDto): string {
                 <div class="field-key">Wind</div>
                 <div class="field-val">
                   <template v-if="packet.weatherData.windSpeedMph != null">
-                    {{ packet.weatherData.windSpeedMph.toFixed(1) }} mph
-                    <span class="text-medium-emphasis"
-                      >({{ mphToKmh(packet.weatherData.windSpeedMph) }} km/h)</span
-                    >
+                    {{ formatWindMph(packet.weatherData.windSpeedMph) }}
                   </template>
                   <template v-if="packet.weatherData.windDirectionDeg != null">
                     <span class="ml-1"
@@ -306,7 +295,7 @@ function heardViaLabel(p: PacketDto): string {
               </template>
               <template v-if="packet.weatherData.windGustMph != null">
                 <div class="field-key">Wind Gust</div>
-                <div class="field-val">{{ packet.weatherData.windGustMph.toFixed(1) }} mph</div>
+                <div class="field-val">{{ formatWindMph(packet.weatherData.windGustMph) }}</div>
               </template>
               <template v-if="packet.weatherData.pressureMbar != null">
                 <div class="field-key">Pressure</div>

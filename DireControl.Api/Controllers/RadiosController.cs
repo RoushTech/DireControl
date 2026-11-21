@@ -16,6 +16,9 @@ namespace DireControl.Api.Controllers;
 public class RadiosController(
     DireControlContext db,
     BeaconService beaconService,
+    SoundModemService modemService,
+    TxFrameRegistry txFrames,
+    Microsoft.Extensions.Options.IOptions<DireControlOptions> options,
     [FromKeyedServices(RestartSignals.Modem)] RestartSignal modemRestartTrigger) : ControllerBase
 {
     // ─── List ──────────────────────────────────────────────────────────────────
@@ -248,13 +251,46 @@ public class RadiosController(
         var radio = await db.Radios.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
         if (radio is null) return NotFound();
 
-        var beacon = await beaconService.BeaconNowAsync(radio, ct);
+        if (StationIdentityLogic.TransmitBlockedReason(options.Value.OurCallsign) is { } blocked)
+            return Problem(statusCode: StatusCodes.Status409Conflict, detail: blocked);
 
-        return beacon is null
+        var sent = await beaconService.BeaconNowAsync(radio, ct);
+
+        // 202: queued, not sent — the frame's lifecycle follows on txFrameStateChanged.
+        return sent is null
             ? Problem(
                 statusCode: StatusCodes.Status503ServiceUnavailable,
-                detail: "Beacon could not be sent. Check that Direwolf is connected and home position is configured.")
-            : NoContent();
+                detail: "Beacon could not be queued: no transmitter is available (modem TX off or external TNC down), or the home position is not set.")
+            : Accepted(new TxQueuedResponse { TxFrameIds = [sent.FrameId] });
+    }
+
+    // ─── PTT test ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Keys the radio's saved PTT for 1 s over silence (no RF ID, no data) and
+    /// reports whether the keyup actually completed. Uses the saved PTT config
+    /// — the editor asks for a save first. Blocked while the callsign is N0CALL.
+    /// </summary>
+    [HttpPost("{id}/ptt-test")]
+    public async Task<ActionResult<PttTestResultDto>> PttTest(string id, CancellationToken ct)
+    {
+        if (!await db.Radios.AnyAsync(r => r.Id == id, ct))
+            return NotFound();
+        if (StationIdentityLogic.TransmitBlockedReason(options.Value.OurCallsign) is { } blocked)
+            return Problem(statusCode: StatusCodes.Status409Conflict, detail: blocked);
+
+        if (modemService.TryEnqueueTestTone(id, TestToneKind.PttOnly, 1000) is not { } frameId)
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                detail: "No running TX-capable modem for this radio. Enable the modem and TX, and save first.");
+
+        var final = await txFrames.WaitForFinalAsync(frameId, TimeSpan.FromSeconds(15), ct);
+        return Ok(new PttTestResultDto
+        {
+            TxFrameId = frameId,
+            Keyed = final?.State == TxFrameState.Sent,
+            Reason = final is null ? "No result within 15 s (the channel may be busy)." : final.Reason,
+        });
     }
 
     // ─── Last beacon ───────────────────────────────────────────────────────────

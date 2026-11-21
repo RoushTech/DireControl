@@ -77,7 +77,8 @@ public sealed class MessageSendingService(
         var info = BuildMessageInfo(toCallsign, body, messageId);
         var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, path);
 
-        if (!transmitter.TrySend(frame))
+        if (transmitter.Send(frame, 0, new TxFrameInfo(
+                TxFrameKind.Message, $"Message to {toCallsign.Trim().ToUpperInvariant()}", messageId)) is null)
         {
             logger.LogWarning(
                 "Cannot send message to {ToCallsign}: no RF transmit backend available.",
@@ -199,7 +200,8 @@ public sealed class MessageSendingService(
             return;
 
         var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, settings.OutboundPath ?? string.Empty);
-        if (!transmitter.TrySend(frame))
+        if (transmitter.Send(frame, 0, new TxFrameInfo(
+                TxFrameKind.Ack, $"ACK to {toCallsign.Trim().ToUpperInvariant()}", originalMessageId)) is null)
         {
             logger.LogWarning(
                 "Cannot send RF ACK to {ToCallsign}: no RF transmit backend available.",
@@ -224,7 +226,8 @@ public sealed class MessageSendingService(
         var info = BuildMessageInfo(message.ToCallsign, message.Body, message.MessageId);
         var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, message.PathUsed ?? string.Empty);
 
-        var sent = transmitter.TrySend(frame);
+        var sent = transmitter.Send(frame, 0, new TxFrameInfo(
+            TxFrameKind.Message, $"Message to {message.ToCallsign} (retry)", message.MessageId)) is not null;
         if (!sent)
             logger.LogWarning(
                 "Cannot retransmit message {Id} to {ToCallsign}: no RF transmit backend available.",

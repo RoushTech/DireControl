@@ -77,7 +77,7 @@ async function loadInfoData() {
   }
 }
 
-const { formatDistance, formatAltitude } = useUnits()
+const { formatDistance, formatAltitude, formatSpeedKnots } = useUnits()
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const rad = Math.PI / 180
@@ -176,7 +176,7 @@ const courseLabel = computed(() => {
   const s = station.value
   if (!s || s.lastHeading == null) return null
   const heading = `${Math.round(s.lastHeading)}°`
-  return s.lastSpeed != null ? `${heading} @ ${Math.round(s.lastSpeed)} mph` : heading
+  return s.lastSpeed != null ? `${heading} @ ${formatSpeedKnots(s.lastSpeed)}` : heading
 })
 
 /** QRZ link uses the base callsign — QRZ has no SSID pages. */
@@ -218,15 +218,34 @@ const pathHops = computed<ResolvedPathEntry[]>(() => {
   return path
 })
 
+function isLastHop(index: number): boolean {
+  return index === pathHops.value.length - 1
+}
+
+/** How the final hop (this station) got the packet: over the internet, direct, or via digis. */
+const ourHopRole = computed(() => {
+  const p = latestPacket.value
+  if (p?.source === PacketSource.AprsIs) return 'You · APRS-IS'
+  if (p && p.hopCount === 0) return 'You · RF direct'
+  return 'You · RF'
+})
+
 function hopRole(hop: ResolvedPathEntry, index: number): string {
   if (index === 0) return 'Origin'
-  if (index === pathHops.value.length - 1) return 'Heard by'
+  if (isLastHop(index)) return ourHopRole.value
   return hop.aliasUsed ? `Digipeater · ${hop.aliasUsed}` : 'Digipeater'
+}
+
+/** The last hop is always our own station; name it as such rather than as a bare callsign. */
+function hopLabel(hop: ResolvedPathEntry, index: number): string {
+  if (!isLastHop(index)) return hop.callsign
+  const ours = ownCallsign.value || hop.callsign
+  return ours ? `You (${ours})` : 'You'
 }
 
 function hopClass(hop: ResolvedPathEntry, index: number): string {
   if (index === 0) return ''
-  if (index === pathHops.value.length - 1) return 'hop--us'
+  if (isLastHop(index)) return 'hop--us'
   return 'hop--digi'
 }
 
@@ -356,6 +375,7 @@ onUnmounted(() => {
             :loading="watchLoading"
             :disabled="!station"
             title="Toggle watch list"
+            aria-label="Toggle watch list"
             @click="toggleWatchStatus"
           />
           <v-chip
@@ -442,7 +462,7 @@ onUnmounted(() => {
                   <v-icon v-if="i > 0" size="16" class="path-arrow">mdi-arrow-right</v-icon>
                   <div class="hop" :class="hopClass(hop, i)">
                     <div class="hop-role">{{ hopRole(hop, i) }}</div>
-                    <div class="hop-callsign">{{ hop.callsign }}</div>
+                    <div class="hop-callsign">{{ hopLabel(hop, i) }}</div>
                     <div v-if="hop.latitude != null && hop.longitude != null" class="hop-coord">
                       {{ hop.latitude.toFixed(4) }}, {{ hop.longitude.toFixed(4) }}
                     </div>
@@ -779,7 +799,8 @@ onUnmounted(() => {
 }
 
 .hop--us {
-  border-color: rgba(var(--v-theme-success), 0.6);
+  border-color: rgba(var(--v-theme-own), 0.7);
+  outline: 1px solid rgba(var(--v-theme-own), 0.5);
 }
 
 .hop-role {

@@ -27,9 +27,20 @@ import { useUiStore } from '@/stores/uiStore'
 import { useStationSelectionStore } from '@/stores/stationSelection'
 import { useRouter } from 'vue-router'
 import { useTick } from '@/composables/useTick'
+import { useTxStore } from '@/stores/tx'
+import { TxFrameKinds } from '@/api/txApi'
+import TxLifecycle from '@/components/tx/TxLifecycle.vue'
+import MultipartBubble from '@/components/messages/MultipartBubble.vue'
+import MessagePartState from '@/components/messages/MessagePartState.vue'
+import { groupThread, parsePart, retryBadge } from '@/components/messages/messageParts'
+import { useHealthStore } from '@/stores/health'
+import { useToastStore } from '@/stores/toastStore'
 
 const store = useMessagesStore()
+const txStore = useTxStore()
 const uiStore = useUiStore()
+const healthStore = useHealthStore()
+const toasts = useToastStore()
 const stationSelection = useStationSelectionStore()
 const router = useRouter()
 const { now } = useTick(1000)
@@ -283,6 +294,7 @@ function selectConversation(peer: string) {
   selectedPeer.value = peer
   replyBody.value = ''
   replyError.value = ''
+  replyErrorFix.value = null
 }
 
 // Opening a thread (or a new message landing in the open one) marks it read.
@@ -303,6 +315,11 @@ watch(
     await nextTick()
     if (threadEl.value) threadEl.value.scrollTop = threadEl.value.scrollHeight
   },
+)
+
+// Consecutive outbound "(n/m)" parts of one compose render as one bubble.
+const threadItems = computed(() =>
+  selectedConversation.value ? groupThread(selectedConversation.value.messages, isOutbound) : [],
 )
 
 function receiveCountTitle(m: InboxMessageDto): string {
@@ -359,10 +376,32 @@ async function toggleCopies(msg: InboxMessageDto) {
   }
 }
 
+// ─── Why sending is blocked ──────────────────────────────────────────────────
+// The composer says why transmit is impossible and links to the fix, rather
+// than letting the operator type into a dead end. Drafting stays enabled.
+interface FixLink {
+  to: string
+  label: string
+}
+
+// The health model says why TX is blocked and which page fixes it.
+const txBlocked = computed<{ reason: string; fix: FixLink } | null>(
+  () => healthStore.health.txBlocked,
+)
+
+/** Send was refused: 409 = callsign not set (N0CALL), 503 = no transmitter. */
+function sendRefusalFix(e: unknown): FixLink | null {
+  const status = (e as { response?: { status?: number } } | null)?.response?.status
+  if (status === 409) return { to: '/settings/station', label: 'Set callsign' }
+  if (status === 503) return { to: '/settings/radios', label: 'Radio settings' }
+  return null
+}
+
 // Inline reply at the bottom of the thread.
 const replyBody = ref('')
 const replySending = ref(false)
 const replyError = ref('')
+const replyErrorFix = ref<FixLink | null>(null)
 // Set when the server queued fewer parts than a multi-part message needed —
 // the transmitter dropped out mid-send, so the peer has an incomplete message.
 const partialSendWarning = ref('')
@@ -378,8 +417,10 @@ async function sendReply() {
   const peer = selectedPeer.value
   const body = replyBody.value.trim()
   if (!peer || !body || replySending.value || replyParts.value > APRS_MAX_PARTS) return
+  if (txBlocked.value) return
   replySending.value = true
   replyError.value = ''
+  replyErrorFix.value = null
   const expectedParts = replyParts.value
   try {
     const sent = await store.send({
@@ -391,14 +432,18 @@ async function sendReply() {
     replyBody.value = ''
   } catch (e) {
     replyError.value = apiErrorDetail(e)
+    replyErrorFix.value = sendRefusalFix(e)
   } finally {
     replySending.value = false
   }
 }
 
+// Everything we sent that hasn't been acknowledged yet.
 const outboxMessages = computed(() =>
   store.inboxMessages.filter(
-    (m) => m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase(),
+    (m) =>
+      m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase() &&
+      m.retryState !== RetryState.Acknowledged,
   ),
 )
 
@@ -409,30 +454,17 @@ function secondsUntilRetry(msg: InboxMessageDto): number {
   return Math.max(0, Math.round((new Date(msg.nextRetryAt).getTime() - now.value) / 1000))
 }
 
-function retryBadge(msg: InboxMessageDto): { color: string; text: string } {
-  switch (msg.retryState) {
-    case RetryState.Retrying:
-      return { color: 'warning', text: `Attempt ${msg.retryCount + 1}/${msg.maxRetries}` }
-    case RetryState.Acknowledged:
-      return { color: 'success', text: 'Acknowledged' }
-    case RetryState.Failed:
-      return { color: 'error', text: `Failed after ${msg.retryCount} attempts` }
-    case RetryState.Cancelled:
-      return { color: 'default', text: 'Cancelled' }
-    default:
-      // A later part of a multi-part message waits for the previous part's ACK.
-      return msg.lastSentAt === null
-        ? { color: 'info', text: 'Queued — waits for previous part' }
-        : { color: 'info', text: 'Pending' }
-  }
+/** The latest TX frame for an outbound part (frames carry the APRS message number). */
+function partFrame(msg: InboxMessageDto) {
+  return msg.messageId ? txStore.latestForRef(TxFrameKinds.Message, msg.messageId) : undefined
 }
 
 async function doRetryNow(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'retry'
   try {
     await store.retryNow(msg.id)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    toasts.toast(apiErrorDetail(e, "Couldn't retry the message"), 'error')
   } finally {
     delete actionLoading.value[msg.id]
   }
@@ -455,8 +487,8 @@ async function confirmReset() {
   actionLoading.value[msg.id] = 'reset'
   try {
     await store.resetRetry(msg.id)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    toasts.toast(apiErrorDetail(e, "Couldn't reset retries"), 'error')
   } finally {
     delete actionLoading.value[msg.id]
   }
@@ -466,8 +498,8 @@ async function doCancel(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'cancel'
   try {
     await store.cancelRetry(msg.id)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    toasts.toast(apiErrorDetail(e, "Couldn't cancel the message"), 'error')
   } finally {
     delete actionLoading.value[msg.id]
   }
@@ -482,6 +514,7 @@ const composeAdvancedOpen = ref(false)
 const defaultOutboundPath = ref('')
 const sending = ref(false)
 const sendError = ref('')
+const sendErrorFix = ref<FixLink | null>(null)
 // Long text is split server-side into numbered 67-char APRS messages.
 const replyParts = computed(() => aprsPartCount(replyBody.value))
 const composeParts = computed(() => aprsPartCount(composeBody.value))
@@ -511,6 +544,7 @@ function openCompose(prefillTo = '') {
   composePath.value = defaultOutboundPath.value
   composeAdvancedOpen.value = false
   sendError.value = ''
+  sendErrorFix.value = null
   composeOpen.value = true
 }
 
@@ -520,8 +554,10 @@ async function doSend() {
   if (to.length > 9 || !/^[A-Z0-9-]+$/.test(to)) return
   if (composePathError.value) return
   if (composeParts.value > APRS_MAX_PARTS) return
+  if (txBlocked.value) return
   sending.value = true
   sendError.value = ''
+  sendErrorFix.value = null
   const expectedParts = composeParts.value
   try {
     const sent = await store.send({
@@ -535,6 +571,7 @@ async function doSend() {
     selectedPeer.value = to
   } catch (e) {
     sendError.value = apiErrorDetail(e)
+    sendErrorFix.value = sendRefusalFix(e)
   } finally {
     sending.value = false
   }
@@ -806,135 +843,178 @@ onUnmounted(() => {
                 </div>
 
                 <div ref="threadEl" class="conv-messages">
-                  <div
-                    v-for="msg in selectedConversation.messages"
-                    :key="msg.id"
-                    class="bubble-row"
-                    :class="isOutbound(msg) ? 'bubble-row--out' : 'bubble-row--in'"
-                  >
-                    <div class="bubble" :class="isOutbound(msg) ? 'bubble--out' : 'bubble--in'">
-                      <div class="bubble-body">{{ msg.body }}</div>
-                      <div class="bubble-meta">
-                        <span class="mono-time" :title="formatDateTime(msg.receivedAt)">
-                          {{ timeAgo(msg.receivedAt, now) }}
-                        </span>
-
-                        <!-- Inbound: how many copies we heard; click for each copy's route -->
-                        <v-chip
-                          v-if="!isOutbound(msg) && msg.receiveCount > 1"
-                          size="x-small"
-                          variant="tonal"
-                          color="warning"
-                          prepend-icon="mdi-repeat"
-                          :append-icon="
-                            copiesOpen.has(msg.id) ? 'mdi-chevron-up' : 'mdi-chevron-down'
-                          "
-                          :title="receiveCountTitle(msg)"
-                          @click="toggleCopies(msg)"
-                        >
-                          ×{{ msg.receiveCount }}
-                        </v-chip>
-
-                        <!-- Outbound: delivery state -->
-                        <template v-if="isOutbound(msg)">
-                          <v-chip :color="retryBadge(msg).color" size="x-small" variant="tonal">
-                            {{ retryBadge(msg).text }}
-                          </v-chip>
-                          <span
-                            v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
-                            class="text-caption text-medium-emphasis"
-                          >
-                            next in {{ secondsUntilRetry(msg) }}s
-                          </span>
-                        </template>
-                      </div>
-                      <!-- Route: how it reached us, or how we sent it -->
-                      <div v-if="!isOutbound(msg) && msg.source !== null" class="bubble-route">
-                        <v-chip
-                          :color="routeSource(msg.source)!.color"
-                          size="x-small"
-                          variant="flat"
-                          label
-                          >{{ routeSource(msg.source)!.label }}</v-chip
-                        >
-                        <span v-if="heardViaText(msg.heardVia)">{{
-                          heardViaText(msg.heardVia)
-                        }}</span>
-                        <span class="route-path" :title="msg.path ?? ''">{{
-                          formatPath(msg.path)
-                        }}</span>
-                      </div>
-                      <div v-else-if="isOutbound(msg)" class="bubble-route">
-                        <span>sent via</span>
-                        <span class="route-path">{{ formatPath(msg.pathUsed) }}</span>
-                      </div>
-
-                      <div v-if="copiesOpen.has(msg.id)" class="bubble-copies">
-                        <div v-if="copiesLoading[msg.id]" class="text-caption">Loading…</div>
-                        <div
-                          v-else-if="(copiesById[msg.id] ?? []).length === 0"
-                          class="text-caption text-medium-emphasis"
-                        >
-                          The packets for these copies are no longer in the log.
-                        </div>
-                        <template v-else>
-                          <div
-                            v-for="copy in copiesById[msg.id] ?? []"
-                            :key="copy.packetId"
-                            class="bubble-route"
-                          >
-                            <span class="mono-time" :title="formatDateTime(copy.receivedAt)">{{
-                              timeAgo(copy.receivedAt, now)
-                            }}</span>
-                            <v-chip
-                              :color="routeSource(copy.source)!.color"
-                              size="x-small"
-                              variant="flat"
-                              label
-                              >{{ routeSource(copy.source)!.label }}</v-chip
-                            >
-                            <span v-if="heardViaText(copy.heardVia)">{{
-                              heardViaText(copy.heardVia)
-                            }}</span>
-                            <span class="route-path" :title="copy.path">{{
-                              formatPath(copy.path)
-                            }}</span>
-                          </div>
-                        </template>
-                      </div>
-
-                      <div
-                        v-if="
-                          isOutbound(msg) &&
-                          (msg.retryState === RetryState.Failed ||
-                            msg.retryState === RetryState.Retrying)
-                        "
-                        class="d-flex ga-1 mt-1 justify-end"
-                      >
-                        <v-btn
-                          size="x-small"
-                          variant="text"
-                          color="primary"
-                          :loading="actionLoading[msg.id] === 'retry'"
-                          :disabled="!!actionLoading[msg.id]"
-                          @click="doRetryNow(msg)"
-                        >
-                          Retry now
-                        </v-btn>
-                        <v-btn
-                          v-if="msg.retryState === RetryState.Retrying"
-                          size="x-small"
-                          variant="text"
-                          color="error"
-                          :loading="actionLoading[msg.id] === 'cancel'"
-                          :disabled="!!actionLoading[msg.id]"
-                          @click="doCancel(msg)"
-                        >
-                          Cancel
-                        </v-btn>
+                  <template v-for="item in threadItems" :key="item.key">
+                    <div v-if="item.kind === 'multi'" class="bubble-row bubble-row--out">
+                      <div class="bubble bubble--out bubble--multi">
+                        <MultipartBubble
+                          :parts="item.parts"
+                          :total="item.total"
+                          :now="now"
+                          :action-loading="actionLoading"
+                          @retry="doRetryNow"
+                          @cancel="doCancel"
+                        />
                       </div>
                     </div>
-                  </div>
+                    <div
+                      v-else
+                      class="bubble-row"
+                      :class="isOutbound(item.msg) ? 'bubble-row--out' : 'bubble-row--in'"
+                    >
+                      <div
+                        class="bubble"
+                        :class="isOutbound(item.msg) ? 'bubble--out' : 'bubble--in'"
+                      >
+                        <div class="bubble-body">{{ item.msg.body }}</div>
+                        <div class="bubble-meta">
+                          <span class="mono-time" :title="formatDateTime(item.msg.receivedAt)">
+                            {{ timeAgo(item.msg.receivedAt, now) }}
+                          </span>
+
+                          <!-- Inbound: how many copies we heard; click for each copy's route -->
+                          <v-chip
+                            v-if="!isOutbound(item.msg) && item.msg.receiveCount > 1"
+                            size="x-small"
+                            variant="tonal"
+                            color="warning"
+                            prepend-icon="mdi-repeat"
+                            :append-icon="
+                              copiesOpen.has(item.msg.id) ? 'mdi-chevron-up' : 'mdi-chevron-down'
+                            "
+                            :title="receiveCountTitle(item.msg)"
+                            @click="toggleCopies(item.msg)"
+                          >
+                            ×{{ item.msg.receiveCount }}
+                          </v-chip>
+
+                          <!-- Outbound: delivery state -->
+                          <template v-if="isOutbound(item.msg)">
+                            <v-chip
+                              :color="retryBadge(item.msg).color"
+                              size="x-small"
+                              variant="tonal"
+                            >
+                              {{ retryBadge(item.msg).text }}
+                            </v-chip>
+                            <span
+                              v-if="
+                                item.msg.retryState === RetryState.Retrying && item.msg.nextRetryAt
+                              "
+                              class="text-caption text-medium-emphasis"
+                            >
+                              next in {{ secondsUntilRetry(item.msg) }}s
+                            </span>
+                          </template>
+                        </div>
+                        <!-- Route: how it reached us, or how we sent it -->
+                        <div
+                          v-if="!isOutbound(item.msg) && item.msg.source !== null"
+                          class="bubble-route"
+                        >
+                          <v-chip
+                            :color="routeSource(item.msg.source)!.color"
+                            size="x-small"
+                            variant="flat"
+                            label
+                            >{{ routeSource(item.msg.source)!.label }}</v-chip
+                          >
+                          <span v-if="heardViaText(item.msg.heardVia)">{{
+                            heardViaText(item.msg.heardVia)
+                          }}</span>
+                          <span class="route-path" :title="item.msg.path ?? ''">{{
+                            formatPath(item.msg.path)
+                          }}</span>
+                        </div>
+                        <div v-else-if="isOutbound(item.msg)" class="bubble-route">
+                          <span>sent via</span>
+                          <span class="route-path">{{ formatPath(item.msg.pathUsed) }}</span>
+                        </div>
+                        <!-- This part's latest transmission: queued → clear channel → on air → acked -->
+                        <div v-if="isOutbound(item.msg) && partFrame(item.msg)" class="bubble-tx">
+                          <TxLifecycle
+                            :item="partFrame(item.msg)!"
+                            compact
+                            :acked="item.msg.retryState === RetryState.Acknowledged"
+                            :gave-up="item.msg.retryState === RetryState.Failed"
+                          />
+                          <div
+                            v-if="
+                              partFrame(item.msg)!.reason &&
+                              item.msg.retryState !== RetryState.Acknowledged
+                            "
+                            class="text-caption text-error"
+                          >
+                            {{ partFrame(item.msg)!.reason }}
+                          </div>
+                        </div>
+
+                        <div v-if="copiesOpen.has(item.msg.id)" class="bubble-copies">
+                          <div v-if="copiesLoading[item.msg.id]" class="text-caption">Loading…</div>
+                          <div
+                            v-else-if="(copiesById[item.msg.id] ?? []).length === 0"
+                            class="text-caption text-medium-emphasis"
+                          >
+                            The packets for these copies are no longer in the log.
+                          </div>
+                          <template v-else>
+                            <div
+                              v-for="copy in copiesById[item.msg.id] ?? []"
+                              :key="copy.packetId"
+                              class="bubble-route"
+                            >
+                              <span class="mono-time" :title="formatDateTime(copy.receivedAt)">{{
+                                timeAgo(copy.receivedAt, now)
+                              }}</span>
+                              <v-chip
+                                :color="routeSource(copy.source)!.color"
+                                size="x-small"
+                                variant="flat"
+                                label
+                                >{{ routeSource(copy.source)!.label }}</v-chip
+                              >
+                              <span v-if="heardViaText(copy.heardVia)">{{
+                                heardViaText(copy.heardVia)
+                              }}</span>
+                              <span class="route-path" :title="copy.path">{{
+                                formatPath(copy.path)
+                              }}</span>
+                            </div>
+                          </template>
+                        </div>
+
+                        <div
+                          v-if="
+                            isOutbound(item.msg) &&
+                            (item.msg.retryState === RetryState.Failed ||
+                              item.msg.retryState === RetryState.Retrying)
+                          "
+                          class="d-flex ga-1 mt-1 justify-end"
+                        >
+                          <v-btn
+                            size="small"
+                            variant="text"
+                            color="primary"
+                            :loading="actionLoading[item.msg.id] === 'retry'"
+                            :disabled="!!actionLoading[item.msg.id]"
+                            @click="doRetryNow(item.msg)"
+                          >
+                            Retry now
+                          </v-btn>
+                          <v-btn
+                            v-if="item.msg.retryState === RetryState.Retrying"
+                            size="small"
+                            variant="text"
+                            color="error"
+                            :loading="actionLoading[item.msg.id] === 'cancel'"
+                            :disabled="!!actionLoading[item.msg.id]"
+                            @click="doCancel(item.msg)"
+                          >
+                            Cancel
+                          </v-btn>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                 </div>
 
                 <div class="conv-reply">
@@ -949,14 +1029,49 @@ onUnmounted(() => {
                   >
                     {{ partialSendWarning }}
                   </v-alert>
+                  <!-- Why Send is disabled, with the fix one tap away (no hover tooltip) -->
+                  <v-alert
+                    v-if="txBlocked"
+                    type="warning"
+                    density="compact"
+                    variant="tonal"
+                    class="mb-2"
+                    role="status"
+                  >
+                    <div class="composer-block">
+                      <span>Can't send: {{ txBlocked.reason }}</span>
+                      <v-btn size="small" variant="tonal" :to="txBlocked.fix.to">
+                        {{ txBlocked.fix.label }}
+                      </v-btn>
+                    </div>
+                  </v-alert>
+                  <v-alert
+                    v-else-if="replyError"
+                    type="error"
+                    density="compact"
+                    variant="tonal"
+                    closable
+                    class="mb-2"
+                    @click:close="replyError = ''"
+                  >
+                    <div class="composer-block">
+                      <span>{{ replyError }}</span>
+                      <v-btn
+                        v-if="replyErrorFix"
+                        size="small"
+                        variant="tonal"
+                        :to="replyErrorFix.to"
+                      >
+                        {{ replyErrorFix.label }}
+                      </v-btn>
+                    </div>
+                  </v-alert>
                   <v-text-field
                     v-model="replyBody"
                     :placeholder="`Message ${selectedConversation.peer}`"
                     density="compact"
                     variant="outlined"
-                    :error-messages="
-                      replyError || (replyParts > APRS_MAX_PARTS ? partsHint(replyParts) : '')
-                    "
+                    :error-messages="replyParts > APRS_MAX_PARTS ? partsHint(replyParts) : ''"
                     :hint="partsHint(replyParts)"
                     persistent-hint
                     hide-details="auto"
@@ -970,7 +1085,7 @@ onUnmounted(() => {
                         color="primary"
                         aria-label="Send"
                         :loading="replySending"
-                        :disabled="!replyBody.trim() || replyParts > APRS_MAX_PARTS"
+                        :disabled="!replyBody.trim() || replyParts > APRS_MAX_PARTS || !!txBlocked"
                         @click="sendReply"
                       />
                     </template>
@@ -986,7 +1101,8 @@ onUnmounted(() => {
 
         <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
         <v-window-item value="outbox">
-          <v-table density="compact">
+          <!-- v-table scrolls horizontally inside the card on narrow screens -->
+          <v-table density="compact" class="outbox-table">
             <thead>
               <tr>
                 <th>To</th>
@@ -1015,17 +1131,12 @@ onUnmounted(() => {
                   {{ msg.body }}
                 </td>
                 <td>
-                  <!-- Stacked: chip on top, detail lines under it — no more one-line cram -->
+                  <!-- Stacked: TX state on top (held / lifecycle / outcome), detail under it -->
                   <div class="d-flex flex-column align-start ga-1 py-1">
-                    <v-chip :color="retryBadge(msg).color" size="x-small">
-                      {{ retryBadge(msg).text }}
-                    </v-chip>
-                    <span
-                      v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
-                      class="text-caption text-medium-emphasis"
-                    >
-                      next retry in {{ secondsUntilRetry(msg) }}s
+                    <span v-if="parsePart(msg.body)" class="text-caption text-medium-emphasis">
+                      Part {{ parsePart(msg.body)!.n }} of {{ parsePart(msg.body)!.m }}
                     </span>
+                    <MessagePartState :msg="msg" :part-no="parsePart(msg.body)?.n" :now="now" />
                     <span
                       v-if="msg.lastSentAt"
                       class="text-caption text-medium-emphasis"
@@ -1038,7 +1149,7 @@ onUnmounted(() => {
                 <td class="text-no-wrap">
                   <v-btn
                     v-if="msg.retryState !== RetryState.Acknowledged"
-                    size="x-small"
+                    size="small"
                     variant="tonal"
                     color="primary"
                     class="mr-1"
@@ -1046,11 +1157,11 @@ onUnmounted(() => {
                     :disabled="!!actionLoading[msg.id]"
                     @click="doRetryNow(msg)"
                   >
-                    {{ actionLoading[msg.id] === 'retry' ? 'Sending…' : 'Retry Now' }}
+                    Retry now
                   </v-btn>
                   <v-btn
                     v-if="msg.retryState !== RetryState.Acknowledged"
-                    size="x-small"
+                    size="small"
                     variant="tonal"
                     class="mr-1"
                     :loading="actionLoading[msg.id] === 'reset'"
@@ -1061,7 +1172,7 @@ onUnmounted(() => {
                   </v-btn>
                   <v-btn
                     v-if="msg.retryState === RetryState.Retrying"
-                    size="x-small"
+                    size="small"
                     variant="tonal"
                     color="error"
                     :loading="actionLoading[msg.id] === 'cancel'"
@@ -1074,7 +1185,7 @@ onUnmounted(() => {
               </tr>
               <tr v-if="outboxMessages.length === 0">
                 <td colspan="4" class="text-center text-medium-emphasis py-6">
-                  No outbound messages.
+                  Outbox is empty. Every message has been acknowledged.
                 </td>
               </tr>
             </tbody>
@@ -1280,7 +1391,7 @@ onUnmounted(() => {
                   <td class="text-no-wrap text-right">
                     <v-btn
                       v-if="!msg.isKilled"
-                      size="x-small"
+                      size="small"
                       variant="tonal"
                       color="warning"
                       class="mr-1"
@@ -1455,7 +1566,7 @@ onUnmounted(() => {
             <v-btn
               v-for="gw in COMMON_GATEWAYS"
               :key="gw"
-              size="x-small"
+              size="small"
               variant="tonal"
               @click="composeTo = gw"
             >
@@ -1504,24 +1615,40 @@ onUnmounted(() => {
               />
               <div class="d-flex align-center flex-wrap gap-1 mb-1">
                 <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'"
+                <v-btn size="small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'"
                   >WIDE1-1,WIDE2-1</v-btn
                 >
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE2-1'"
-                  >WIDE2-1</v-btn
-                >
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1'"
-                  >WIDE1-1</v-btn
-                >
-                <v-btn size="x-small" variant="tonal" @click="composePath = ''"
+                <v-btn size="small" variant="tonal" @click="composePath = 'WIDE2-1'">WIDE2-1</v-btn>
+                <v-btn size="small" variant="tonal" @click="composePath = 'WIDE1-1'">WIDE1-1</v-btn>
+                <v-btn size="small" variant="tonal" @click="composePath = ''"
                   >Direct (no path)</v-btn
                 >
               </div>
             </div>
           </div>
 
-          <v-alert v-if="sendError" type="error" density="compact" class="mt-3">
-            {{ sendError }}
+          <v-alert
+            v-if="txBlocked"
+            type="warning"
+            density="compact"
+            variant="tonal"
+            class="mt-3"
+            role="status"
+          >
+            <div class="composer-block">
+              <span>Can't send: {{ txBlocked.reason }}</span>
+              <v-btn size="small" variant="tonal" :to="txBlocked.fix.to">
+                {{ txBlocked.fix.label }}
+              </v-btn>
+            </div>
+          </v-alert>
+          <v-alert v-else-if="sendError" type="error" density="compact" class="mt-3">
+            <div class="composer-block">
+              <span>{{ sendError }}</span>
+              <v-btn v-if="sendErrorFix" size="small" variant="tonal" :to="sendErrorFix.to">
+                {{ sendErrorFix.label }}
+              </v-btn>
+            </div>
           </v-alert>
         </v-card-text>
 
@@ -1531,7 +1658,12 @@ onUnmounted(() => {
           <v-btn
             color="primary"
             :loading="sending"
-            :disabled="!composeTo?.trim() || !composeBody.trim() || composeParts > APRS_MAX_PARTS"
+            :disabled="
+              !composeTo?.trim() ||
+              !composeBody.trim() ||
+              composeParts > APRS_MAX_PARTS ||
+              !!txBlocked
+            "
             @click="doSend"
           >
             Send
@@ -1744,6 +1876,12 @@ onUnmounted(() => {
   border-bottom-right-radius: 4px;
 }
 
+/* Multi-part: per-part state rows need more width than a chat line. */
+.bubble--multi {
+  width: min(560px, 92%);
+  max-width: none;
+}
+
 .bubble-body {
   white-space: pre-wrap;
   word-break: break-word;
@@ -1774,6 +1912,10 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
+.bubble-tx {
+  margin-top: 4px;
+}
+
 .bubble-copies {
   margin-top: 6px;
   padding-top: 4px;
@@ -1786,6 +1928,28 @@ onUnmounted(() => {
 
 .bubble-row--out .bubble-meta {
   justify-content: flex-end;
+}
+
+/* Blocked-send / refused-send reason with its fix button; wraps on phones. */
+.composer-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-block > span {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* Outbox: the table scrolls inside the card, never the page. */
+.outbox-table {
+  max-width: 100%;
+}
+
+.outbox-table td:nth-child(3) {
+  min-width: 220px;
 }
 
 .conv-reply {

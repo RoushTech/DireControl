@@ -32,5 +32,33 @@ public static partial class StationIdentityLogic
             options.HomeLat = setting.HomeLat;
             options.HomeLon = setting.HomeLon;
         }
+
+        if (setting.MaxRetryAttempts is { } attempts)
+            options.MaxRetryAttempts = Math.Clamp(attempts, MinRetryAttempts, MaxRetryAttemptsLimit);
+        if (setting.InitialRetryDelaySeconds is { } delay)
+            options.InitialRetryDelaySeconds = Math.Clamp(delay, MinRetryDelaySeconds, MaxRetryDelaySeconds);
     }
+
+    /// <summary>
+    /// Why nothing may be transmitted under <paramref name="callsign"/>, or null.
+    /// N0CALL is a placeholder: keying a transmitter without a licensed
+    /// callsign is never allowed, PTT tests and calibration tones included.
+    /// </summary>
+    public static string? TransmitBlockedReason(string? callsign) =>
+        string.IsNullOrWhiteSpace(callsign) || callsign.Trim().StartsWith("N0CALL", StringComparison.OrdinalIgnoreCase)
+            ? "Transmit is blocked until the station callsign is set (it is still N0CALL)."
+            : null;
+
+    public const int MinRetryAttempts = 1;
+    public const int MaxRetryAttemptsLimit = 10;
+    public const int MinRetryDelaySeconds = 10;
+    public const int MaxRetryDelaySeconds = 600;
+
+    /// <summary>Validation message for a retry-settings update, or null when valid.</summary>
+    public static string? ValidateRetry(int maxRetryAttempts, int initialRetryDelaySeconds) =>
+        maxRetryAttempts is < MinRetryAttempts or > MaxRetryAttemptsLimit
+            ? $"Retry attempts must be between {MinRetryAttempts} and {MaxRetryAttemptsLimit}."
+            : initialRetryDelaySeconds is < MinRetryDelaySeconds or > MaxRetryDelaySeconds
+                ? $"Initial retry delay must be between {MinRetryDelaySeconds} and {MaxRetryDelaySeconds} seconds."
+                : null;
 }

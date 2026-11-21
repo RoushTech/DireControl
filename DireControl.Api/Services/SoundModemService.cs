@@ -1,3 +1,4 @@
+using DireControl.Api.Controllers.Models;
 using Microsoft.Extensions.DependencyInjection;
 using System.Threading.Channels;
 using DireControl.Api.Logging;
@@ -16,6 +17,17 @@ namespace DireControl.Api.Services;
 /// Point-in-time snapshot of one radio's modem instance for the status API
 /// and SignalR.
 /// </summary>
+/// <summary>Outcome of <see cref="SoundModemService.ForceUnkey"/>.</summary>
+public enum ForceUnkeyResult
+{
+    Unknown = 0,
+    Released,
+    NotFound,
+    SessionRunning,
+    NoPtt,
+    Failed,
+}
+
 public sealed record ModemStatusSnapshot
 {
     public required string RadioId { get; init; }
@@ -27,6 +39,15 @@ public sealed record ModemStatusSnapshot
     public string? ErrorMessage { get; init; }
     public float AudioLevel { get; init; }
     public bool CarrierDetected { get; init; }
+
+    /// <summary>UTC start of the current carrier-detect burst; null while the channel is clear.</summary>
+    public DateTime? CarrierSince { get; init; }
+
+    /// <summary>Preambles seen since <see cref="CarrierSince"/>.</summary>
+    public long PreamblesSinceCarrier { get; init; }
+
+    /// <summary>UTC time the capture thread last delivered audio (when <see cref="AudioLevel"/> was measured).</summary>
+    public DateTime? LevelUpdatedAt { get; init; }
 
     /// <summary>
     /// Carrier detect has been held for <see cref="ModemOptions.CarrierStuckSeconds"/>
@@ -46,6 +67,9 @@ public sealed record ModemStatusSnapshot
 
     /// <summary>PTT could not be released after retries — the radio may be stuck transmitting.</summary>
     public bool PttStuck { get; init; }
+
+    /// <summary>Live PTT line: Released / Keyed / Stuck (Unknown without a TX path).</summary>
+    public PttState PttState => PttStuck ? PttState.Stuck : Transmitting ? PttState.Keyed : TxEnabled ? PttState.Released : PttState.Unknown;
 
     /// <summary>Keyups the PTT watchdog had to cut short.</summary>
     public long PttWatchdogTrips { get; init; }
@@ -84,7 +108,7 @@ public sealed record ModemStatusSnapshot
 /// An outbound frame plus its optional airtime completion — completed after
 /// the keyup that carried it, cancelled if the modem tears down first.
 /// </summary>
-public readonly record struct TxItem(byte[] Frame, TaskCompletionSource<bool>? Completion);
+public readonly record struct TxItem(byte[] Frame, TaskCompletionSource<bool>? Completion, long FrameId = 0);
 
 /// <summary>
 /// The native soundcard modem backend, one instance per active radio with
@@ -102,6 +126,7 @@ public sealed class SoundModemService(
     [FromKeyedServices(RestartSignals.Modem)] RestartSignal restartTrigger,
     RadioAudioBroker audioBroker,
     ModemAudioCaptureService captureService,
+    TxFrameRegistry txFrames,
     Microsoft.Extensions.Options.IOptions<ModemOptions> modemOptions,
     ILoggerFactory loggerFactory,
     ILogger<SoundModemService> logger) : BackgroundService
@@ -148,7 +173,7 @@ public sealed class SoundModemService(
     private const int MaxNormalFramesPerKeyup = 5;
 
     /// <summary>A queued TX calibration test tone.</summary>
-    private sealed record ToneRequest(TestToneKind Kind, int DurationMs);
+    private sealed record ToneRequest(TestToneKind Kind, int DurationMs, long FrameId = 0);
 
     /// <summary>Per-radio runtime state.</summary>
     private sealed class ModemInstance(Radio radio)
@@ -179,6 +204,7 @@ public sealed class SoundModemService(
         public long LastTxAtTicks;
         public long CsmaWaitingSinceTicks;
         public long CsmaTimeouts;
+        public readonly CarrierBurstTracker Burst = new();
         public long RigFrequencyHz = -1;
 
         // TX audio level (gain), adjustable live from the UI without a modem
@@ -202,6 +228,10 @@ public sealed class SoundModemService(
             {
                 AudioLevel = receiver.PeakAudioLevel,
                 CarrierDetected = receiver.CarrierDetected,
+                CarrierSince = Burst.CarrierSince,
+                PreamblesSinceCarrier = Burst.PreamblesSinceCarrier(
+                    receiver.Demodulators.Sum(d => d.PreambleCount)),
+                LevelUpdatedAt = Burst.LevelUpdatedAt,
                 CarrierStuck = CarrierStuck,
                 CsmaTimeouts = Interlocked.Read(ref CsmaTimeouts),
                 IngestDropped = Ingest?.Dropped ?? 0,
@@ -231,6 +261,56 @@ public sealed class SoundModemService(
     }
 
     private volatile List<ModemInstance> _instances = [];
+
+    /// <summary>Receive/transmit internals of every modem instance, for the Diagnostics page.</summary>
+    public IReadOnlyList<ModemDiagnosticsDto> GetDiagnostics()
+    {
+        var opts = modemOptions.Value;
+        var now = DateTime.UtcNow;
+        return _instances
+            .OrderBy(i => i.Radio.ChannelNumber)
+            .Select(i =>
+            {
+                var s = i.LiveStatus();
+                return new ModemDiagnosticsDto
+                {
+                    RadioId = s.RadioId,
+                    RadioName = s.RadioName,
+                    State = s.State,
+                    CarrierDutyLastMinute = s.State == ModemState.Running ? i.Burst.CarrierDutyLastMinute(now) : null,
+                    CarrierDetected = s.CarrierDetected,
+                    CarrierSince = s.CarrierSince,
+                    PreamblesSinceCarrier = s.PreamblesSinceCarrier,
+                    CarrierStuck = s.CarrierStuck,
+                    CarrierStuckSeconds = Math.Max(1, opts.CarrierStuckSeconds),
+                    DecodedFrames = s.DecodedFrames,
+                    InvalidFrames = s.InvalidFrames,
+                    DecodedByProfile = s.DecodedByProfile,
+                    IngestDropped = s.IngestDropped,
+                    CaptureDevice = s.CaptureDevice,
+                    CapturePeriodMs = opts.CapturePeriodMs,
+                    CaptureExplicitPeriod = i.CaptureDevice?.ExplicitPeriod ?? false,
+                    CaptureOverruns = s.CaptureOverruns,
+                    LevelUpdatedAt = s.LevelUpdatedAt,
+                    TxEnabled = s.TxEnabled,
+                    NormalLaneDepth = i.TxChannel?.Reader.Count ?? 0,
+                    DigipeatLaneDepth = i.DigipeatTxChannel?.Reader.Count ?? 0,
+                    SessionLaneDepth = i.PriorityTxChannel?.Reader.Count ?? 0,
+                    TxDropped = s.TxDropped,
+                    CsmaWaitingSince = s.CsmaWaitingSince,
+                    CsmaTimeouts = s.CsmaTimeouts,
+                    CsmaMaxWaitSeconds = Math.Max(1, opts.CsmaMaxWaitSeconds),
+                    CsmaTimeoutAction = opts.CsmaTimeoutAction,
+                    PttMethod = i.Radio.PttMethod,
+                    PttState = s.PttState,
+                    PttWatchdogTrips = s.PttWatchdogTrips,
+                    TxError = s.TxError,
+                    TransmittedFrames = s.TransmittedFrames,
+                    LastTxAt = s.LastTxAt,
+                };
+            })
+            .ToList();
+    }
 
     /// <summary>Current status of every modem instance, ordered by channel.</summary>
     public IReadOnlyList<ModemStatusSnapshot> Statuses =>
@@ -280,15 +360,77 @@ public sealed class SoundModemService(
     }
 
     /// <summary>
+    /// Last-resort release of a PTT that would not unkey: once the session has
+    /// faulted (its own controller disposed), open a fresh controller for the
+    /// radio's PTT config, release PTT and dispose it.  Refused while a session
+    /// is running — that session owns the PTT device.
+    /// </summary>
+    public ForceUnkeyResult ForceUnkey(string radioId)
+    {
+        var instance = _instances.FirstOrDefault(i => i.Radio.Id == radioId);
+        if (instance is null)
+            return ForceUnkeyResult.NotFound;
+        var result = TryForceUnkey(instance.Status.State, () => PttControllerFactory(instance.Radio), out var error);
+        switch (result)
+        {
+            case ForceUnkeyResult.Released:
+                logger.LogWarning("PTT for {Radio} force-released by the operator.", instance.Radio.FullCallsign);
+                instance.PttStuck = false;
+                instance.Status = instance.Status with { PttStuck = false };
+                break;
+            case ForceUnkeyResult.Failed:
+                logger.LogError(error, "Force unkey for {Radio} failed.", instance.Radio.FullCallsign);
+                instance.TxError = $"force unkey failed: {error?.Message}";
+                instance.Status = instance.Status with { TxError = instance.TxError };
+                break;
+        }
+        return result;
+    }
+
+    /// <summary>The decision and I/O behind <see cref="ForceUnkey"/>, without the instance bookkeeping.</summary>
+    internal static ForceUnkeyResult TryForceUnkey(
+        ModemState sessionState, Func<IPttController?> createPtt, out Exception? error)
+    {
+        error = null;
+        if (sessionState == ModemState.Running)
+            return ForceUnkeyResult.SessionRunning;
+        try
+        {
+            using var ptt = createPtt();
+            if (ptt is null)
+                return ForceUnkeyResult.NoPtt;
+            ptt.SetPtt(false);
+            return ForceUnkeyResult.Released;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            return ForceUnkeyResult.Failed;
+        }
+    }
+
+    /// <summary>Builds a radio's PTT controller; replaceable for tests.</summary>
+    internal Func<Radio, IPttController?> PttControllerFactory { get; set; } = CreatePttController;
+
+    /// <summary>
     /// Queues a TX calibration test tone for <paramref name="radioId"/>.  Returns
     /// <see langword="false"/> when the radio has no running TX-capable modem.
     /// The duration is clamped to a safe range so PTT is never held indefinitely.
     /// </summary>
-    public bool TryEnqueueTestTone(string radioId, TestToneKind kind, int durationMs)
+    public long? TryEnqueueTestTone(string radioId, TestToneKind kind, int durationMs)
     {
-        var tone = _instances.FirstOrDefault(i => i.Radio.Id == radioId)?.ToneChannel;
-        return tone is not null
-            && tone.Writer.TryWrite(new ToneRequest(kind, Math.Clamp(durationMs, 200, 10_000)));
+        var instance = _instances.FirstOrDefault(i => i.Radio.Id == radioId);
+        if (instance?.ToneChannel is not { } tone)
+            return null;
+        var title = kind == TestToneKind.PttOnly ? "PTT test" : $"{kind} test tone";
+        var id = txFrames.Begin(new TxFrameInfo(TxFrameKind.TestTone, title));
+        if (!tone.Writer.TryWrite(new ToneRequest(kind, Math.Clamp(durationMs, 200, 10_000), id)))
+        {
+            txFrames.Abandon(id);
+            return null;
+        }
+        txFrames.Queued(id, instance.Radio.Id, instance.Radio.Name);
+        return id;
     }
 
     /// <summary>
@@ -313,10 +455,11 @@ public sealed class SoundModemService(
         int channel,
         TxPriority priority,
         TaskCompletionSource<bool>? txCompletion,
-        bool exactChannelOnly = false)
+        bool exactChannelOnly = false,
+        long frameId = 0)
     {
         var instances = _instances;
-        var item = new TxItem(ax25Frame, txCompletion);
+        var item = new TxItem(ax25Frame, txCompletion, frameId);
 
         var exact = instances.FirstOrDefault(i => i.Radio.ChannelNumber == channel);
         if (exact is not null && TryWrite(exact, item, priority))
@@ -333,7 +476,7 @@ public sealed class SoundModemService(
 
         return false;
 
-        static bool TryWrite(ModemInstance instance, TxItem item, TxPriority priority)
+        bool TryWrite(ModemInstance instance, TxItem item, TxPriority priority)
         {
             var channel = priority switch
             {
@@ -341,7 +484,10 @@ public sealed class SoundModemService(
                 TxPriority.Digipeat => instance.DigipeatTxChannel,
                 _ => instance.TxChannel,
             };
-            return channel is not null && channel.Writer.TryWrite(item);
+            if (channel is null || !channel.Writer.TryWrite(item))
+                return false;
+            txFrames.Queued(item.FrameId, instance.Radio.Id, instance.Radio.Name);
+            return true;
         }
     }
 
@@ -411,14 +557,20 @@ public sealed class SoundModemService(
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                txFrames.FailPending(instance.Radio.Id, "The modem restarted before this frame went to air.");
                 return;
             }
             catch (Exception ex)
             {
+                txFrames.FailPending(instance.Radio.Id, $"The modem stopped before this frame went to air: {ex.Message}");
                 instance.Status = instance.Status with
                 {
                     State = ModemState.Error,
                     ErrorMessage = ex.Message,
+                    // A session torn down by a failed unkey must keep saying so —
+                    // the radio may still be transmitting.
+                    PttStuck = instance.PttStuck,
+                    TxError = instance.TxError,
                 };
                 logger.LogError(
                     ex, "Modem for {Radio} failed; retrying in {Delay}s.",
@@ -462,7 +614,7 @@ public sealed class SoundModemService(
         Channel<ToneRequest>? toneChannel = null;
         if (radio.TxEnabled)
         {
-            ptt = CreatePttController(radio);
+            ptt = PttControllerFactory(radio);
             txChannel = CreateDroppingLane(TxQueueCapacity, instance, "normal");
             digipeatTxChannel = CreateDroppingLane(DigipeatTxQueueCapacity, instance, "digipeat");
             // Session frames must never be silently dropped (their completions
@@ -571,12 +723,23 @@ public sealed class SoundModemService(
     /// frame was sent when it was silently discarded.
     /// </summary>
     private Channel<TxItem> CreateDroppingLane(int capacity, ModemInstance instance, string lane) =>
-        CreateDroppingLane(capacity, dropped =>
+        CreateDroppingLane(capacity, txFrames, lane, dropped =>
         {
             Interlocked.Increment(ref instance.TxDropped);
             logger.LogWarning(
                 "{Radio} {Lane} TX queue full; dropped the oldest frame ({Bytes} bytes).",
                 instance.Radio.FullCallsign, lane, dropped.Frame.Length);
+        });
+
+    /// <summary>A dropping lane whose overflow is reported as a Dropped frame.</summary>
+    internal static Channel<TxItem> CreateDroppingLane(
+        int capacity, TxFrameRegistry registry, string lane, Action<TxItem> onDropped) =>
+        CreateDroppingLane(capacity, dropped =>
+        {
+            registry.Report(
+                dropped.FrameId, TxFrameState.Dropped,
+                $"The {lane} TX queue was full, so the oldest frame was dropped.");
+            onDropped(dropped);
         });
 
     internal static Channel<TxItem> CreateDroppingLane(int capacity, Action<TxItem> onDropped) =>
@@ -618,6 +781,7 @@ public sealed class SoundModemService(
         var radioId = instance.Radio.Id;
         var wasPublishing = false;
         var wasCarrier = false;
+        instance.Burst.Reset();
         var validAtCarrierStart = 0L;
         var invalidAtCarrierStart = 0L;
         var preamblesAtCarrierStart = 0L;
@@ -643,6 +807,11 @@ public sealed class SoundModemService(
             // transmission arrived and we failed to decode it", which look
             // identical from the packet log alone.
             var carrierNow = receiver.CarrierDetected;
+            instance.Burst.OnBlock(
+                carrierNow,
+                carrierNow ? receiver.Demodulators.Sum(d => d.PreambleCount) : 0,
+                DateTime.UtcNow,
+                read);
             if (carrierNow)
             {
                 if (!wasCarrier)
@@ -898,7 +1067,10 @@ public sealed class SoundModemService(
 
             Func<bool> busy = () => receiver.CarrierDetected && !instance.CarrierStuck;
             if (busy())
+            {
                 Interlocked.Exchange(ref instance.CsmaWaitingSinceTicks, DateTime.UtcNow.Ticks);
+                txFrames.WaitingForChannel(radio.Id);
+            }
             CsmaResult csma;
             try
             {
@@ -928,8 +1100,12 @@ public sealed class SoundModemService(
                     logger.LogWarning(
                         "{Radio} waited {Seconds} s for a clear channel; discarding {Count} frame(s).",
                         radio.FullCallsign, csmaMaxWait.TotalSeconds, items.Count);
+                    var why = CsmaDiscardReason(csmaMaxWait);
                     foreach (var item in items)
+                    {
                         item.Completion?.TrySetCanceled();
+                        txFrames.Report(item.FrameId, TxFrameState.Failed, why);
+                    }
                     continue;
                 }
 
@@ -942,8 +1118,13 @@ public sealed class SoundModemService(
             var amplitude = instance.TxAudioLevelPct / 100f;
             var audio = modulator.GenerateTransmission(frames, leadFlags, tailFlags, amplitude);
 
-            var result = RunKeyup(instance, ptt, playbackDevice, audio);
+            var result = RunKeyup(instance, ptt, playbackDevice, audio, onKeyed: () =>
+            {
+                foreach (var item in items)
+                    txFrames.Report(item.FrameId, TxFrameState.OnAir);
+            });
             var transmitted = result.Outcome == KeyupOutcome.Transmitted;
+            var failure = transmitted ? null : KeyupFailureReason(result);
 
             // Airtime completions fire only after the audio fully drained and
             // PTT dropped — this is where LAPB starts T1. A failed keyup cancels
@@ -954,6 +1135,8 @@ public sealed class SoundModemService(
                     item.Completion?.TrySetResult(true);
                 else
                     item.Completion?.TrySetCanceled();
+                txFrames.Report(
+                    item.FrameId, transmitted ? TxFrameState.Sent : TxFrameState.Failed, failure);
             }
 
             if (!transmitted)
@@ -986,7 +1169,8 @@ public sealed class SoundModemService(
     /// Opens the playback device, then keys, plays and unkeys under the PTT
     /// watchdog — see <see cref="KeyupRunner"/>.
     /// </summary>
-    private KeyupResult RunKeyup(ModemInstance instance, IPttController? ptt, string playbackDevice, float[] audio)
+    private KeyupResult RunKeyup(
+        ModemInstance instance, IPttController? ptt, string playbackDevice, float[] audio, Action? onKeyed = null)
     {
         var radio = instance.Radio;
         var limit = KeyupRunner.WatchdogLimit(TimeSpan.FromSeconds(audio.Length / (double)SampleRate));
@@ -1002,6 +1186,7 @@ public sealed class SoundModemService(
                 onKeyed: () =>
                 {
                     instance.Transmitting = true;
+                    onKeyed?.Invoke();
                     PublishTransmitAudio(radio.Id, audio);
                 });
             if (result.WatchdogTripped)
@@ -1028,14 +1213,7 @@ public sealed class SoundModemService(
     private async Task HandleFailedKeyupAsync(ModemInstance instance, KeyupResult result, int frameCount, CancellationToken ct)
     {
         var radio = instance.Radio;
-        var reason = result.Outcome switch
-        {
-            KeyupOutcome.OpenFailed => "playback device could not be opened",
-            KeyupOutcome.KeyFailed => "PTT could not be keyed",
-            KeyupOutcome.PlaybackFailed => "playback failed",
-            KeyupOutcome.UnkeyFailed => "PTT could not be released",
-            _ => "keyup failed",
-        };
+        var reason = KeyupOutcomeText(result.Outcome);
         instance.TxError = $"{reason}: {result.Error?.Message}";
 
         if (result.Outcome == KeyupOutcome.UnkeyFailed)
@@ -1052,6 +1230,31 @@ public sealed class SoundModemService(
             radio.FullCallsign, reason, frameCount, TxFaultBackoff.TotalSeconds);
         await Task.Delay(TxFaultBackoff, ct);
     }
+
+    internal static string KeyupOutcomeText(KeyupOutcome outcome) => outcome switch
+    {
+        KeyupOutcome.OpenFailed => "playback device could not be opened",
+        KeyupOutcome.KeyFailed => "PTT could not be keyed",
+        KeyupOutcome.PlaybackFailed => "playback failed",
+        KeyupOutcome.UnkeyFailed => "PTT could not be released",
+        _ => "keyup failed",
+    };
+
+    /// <summary>Operator-facing reason a keyup's frames never made it to air.</summary>
+    internal static string KeyupFailureReason(KeyupResult result)
+    {
+        var text = KeyupOutcomeText(result.Outcome);
+        var why = char.ToUpperInvariant(text[0]) + text[1..];
+        if (result.Error?.Message is { Length: > 0 } msg)
+            why += $" ({msg})";
+        return result.Outcome == KeyupOutcome.UnkeyFailed
+            ? why + ". The radio may still be transmitting."
+            : why + ". Frame not sent.";
+    }
+
+    /// <summary>Reason shown for frames discarded by the CSMA cap.</summary>
+    internal static string CsmaDiscardReason(TimeSpan maxWait) =>
+        $"Waited {maxWait.TotalSeconds:0} s for a clear channel; carrier detect never released. Frame discarded.";
 
     /// <summary>Creates the playback sink for a keyup; replaceable for tests.</summary>
     internal Func<string, int, IPlaybackSink> PlaybackSinkFactory { get; set; } =
@@ -1130,9 +1333,17 @@ public sealed class SoundModemService(
             ? new float[SampleRate * tone.DurationMs / 1000]
             : modulator.GenerateTestTone(frequencies, tone.DurationMs, segmentMs, amplitude);
         if (audio.Length == 0)
+        {
+            txFrames.Report(tone.FrameId, TxFrameState.Failed, "Empty tone.");
             return;
+        }
 
-        var result = RunKeyup(instance, ptt, playbackDevice, audio);
+        var result = RunKeyup(instance, ptt, playbackDevice, audio,
+            onKeyed: () => txFrames.Report(tone.FrameId, TxFrameState.OnAir));
+        txFrames.Report(
+            tone.FrameId,
+            result.Outcome == KeyupOutcome.Transmitted ? TxFrameState.Sent : TxFrameState.Failed,
+            result.Outcome == KeyupOutcome.Transmitted ? null : KeyupFailureReason(result));
 
         // Cancellation requested mid-tone should still surface to the loop.
         ct.ThrowIfCancellationRequested();

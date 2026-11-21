@@ -370,7 +370,7 @@ public sealed class AprsIsService(
         }
 
         var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, thirdPartyInfo, settings.IsToRfPath);
-        if (transmitter.TrySend(frame))
+        if (transmitter.Send(frame, 0, new TxFrameInfo(TxFrameKind.IsToRf, $"IS→RF for {addressee}")) is not null)
             logger.LogInformation("Gated IS→RF for {Addressee}: {Info}", addressee, thirdPartyInfo);
         else
             logger.LogWarning("Cannot gate IS→RF for {Addressee}: no RF transmit backend available.", addressee);

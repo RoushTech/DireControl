@@ -1,10 +1,34 @@
 import http from './axios'
 import type { ModemState } from './modemApi'
 
+/** Mirrors DireControl.Enums.AprsIsConnectionState (numeric JSON). */
+export const AprsIsStates = {
+  Unknown: 0,
+  Disabled: 1,
+  Connecting: 2,
+  Connected: 3,
+  AuthFailed: 4,
+  Disconnected: 5,
+} as const
+export type AprsIsState = (typeof AprsIsStates)[keyof typeof AprsIsStates]
+
+export const aprsIsStateLabels: Record<AprsIsState, string> = {
+  [AprsIsStates.Unknown]: 'Unknown',
+  [AprsIsStates.Disabled]: 'Disabled',
+  [AprsIsStates.Connecting]: 'Connecting…',
+  [AprsIsStates.Connected]: 'Connected',
+  [AprsIsStates.AuthFailed]: 'Auth failed',
+  [AprsIsStates.Disconnected]: 'Disconnected',
+}
+
 export interface StatusDto {
   /** The external KISS TCP TNC client (Direwolf etc.) is connected. */
   externalTncConnected: boolean
-  aprsIsState: string
+  aprsIsState: AprsIsState
+  /** The server verified our login on the current connection. */
+  aprsIsVerified: boolean
+  /** Last line received from APRS-IS — IS freshness, never RF health. */
+  lastIsPacketAt: string | null
   aprsIsServerName: string | null
   aprsIsFilter: string
   aprsIsSessionPacketCount: number

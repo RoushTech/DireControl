@@ -1,21 +1,22 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useTheme } from 'vuetify'
+import { useDisplay, useTheme } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
 import { useAlertsStore } from '@/stores/alertsStore'
 import { useLightningAlertsStore } from '@/stores/lightningAlertsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { usePacketHubStore } from '@/stores/packetHub'
 import { useUiStore } from '@/stores/uiStore'
-import { getStatus, reconnectAprsIs } from '@/api/statusApi'
-import { ModemStates, modemStateLabels, type ModemState } from '@/api/modemApi'
+import { useHealthStore } from '@/stores/health'
 import { getAbout } from '@/api/aboutApi'
 import { recordServerSync } from '@/utils/serverTime'
-import { timeAgo, formatDateTime } from '@/utils/time'
-import { useTick } from '@/composables/useTick'
 import AudioMonitorButton from '@/components/AudioMonitorButton.vue'
-import SetupChecklist from '@/components/SetupChecklist.vue'
+import StatusStrip from '@/components/health/StatusStrip.vue'
+import HealthBanners from '@/components/health/HealthBanners.vue'
+import TxChip from '@/components/tx/TxChip.vue'
+import TxQueueSheet from '@/components/tx/TxQueueSheet.vue'
+import { useTxStore } from '@/stores/tx'
 
 const THEME_STORAGE_KEY = 'direcontrol-theme'
 const CLOCK_SYNC_INTERVAL_MS = 5 * 60 * 1000
@@ -32,184 +33,134 @@ useLightningAlertsStore()
 const toastStore = useToastStore()
 const packetHub = usePacketHubStore()
 const uiStore = useUiStore()
-const { now } = useTick(5000)
+const healthStore = useHealthStore()
+// Status poll, settings lookup and clock for the shared health model.
+healthStore.start()
+// Frame lifecycle (txFrameStateChanged) from app start, so every page and the
+// TX chip see the same queue.
+useTxStore()
 
-const isDark = ref(theme.global.current.value.dark)
-const apiOffline = ref(false)
-const direwolfDisconnected = ref(false)
-const modemState = ref<ModemState>(ModemStates.Disabled)
-const modemLastDecodedAt = ref<string | null>(null)
-const modemRunningSince = ref<string | null>(null)
-const aprsIsState = ref('Disabled')
-const aprsIsServerName = ref<string | null>(null)
-const aprsIsFilter = ref('')
-const aprsIsSessionPacketCount = ref(0)
-const aprsIsFirstDisconnectedAt = ref<string | null>(null)
-const aprsIsLastConnectAttemptAt = ref<string | null>(null)
-const aprsIsFailedAttempts = ref(0)
-const aprsIsLastError = ref<string | null>(null)
-const aprsIsReconnecting = ref(false)
+// Derived from the live theme so Settings › Display changes show here too.
+const isDark = computed(() => theme.global.current.value.dark)
 const showShortcutsDialog = ref(false)
 const version = ref<string | null>(null)
 const commit = ref<string | null>(null)
-const mobileDrawerOpen = ref(false)
 
 const shortcuts = [
   { key: 'M', description: 'Open compose message' },
   { key: 'F', description: 'Focus station search' },
-  { key: 'B', description: 'Go to Beacon Stream' },
+  { key: 'B', description: 'Go to Stream' },
   { key: 'Esc', description: 'Close panel / deselect station' },
   { key: '?', description: 'Show this shortcuts overlay' },
 ]
 
-// ─── Nav groups ──────────────────────────────────────────────────────────────
-const activityRoutes = ['/beacons', '/logs']
-const commsRoutes = ['/messages', '/terminal', '/alerts']
-const insightsRoutes = ['/statistics', '/network', '/rf-heard']
+// ─── Navigation ──────────────────────────────────────────────────────────────
+// One flat set of destinations in three groups; no hover menus anywhere
+// (review 1.20). Desktop: labelled rail. Tablet: icon rail with labels under
+// the icons. Phone: bottom nav with the four most-used pages plus More.
+interface NavItem {
+  to: string
+  title: string
+  icon: string
+  /** Extra path prefixes that highlight this item (Station → Map, Setup → Settings). */
+  also?: string[]
+}
+const NAV: Array<{ group: string; items: NavItem[] }> = [
+  {
+    group: 'Operate',
+    items: [
+      { to: '/', title: 'Map', icon: 'mdi-map', also: ['/stations/'] },
+      { to: '/stream', title: 'Stream', icon: 'mdi-format-list-text' },
+      { to: '/radio', title: 'Radio', icon: 'mdi-radio-handheld' },
+      { to: '/messages', title: 'Messages', icon: 'mdi-message-text' },
+      { to: '/terminal', title: 'Terminal', icon: 'mdi-console-network' },
+    ],
+  },
+  {
+    group: 'Monitor',
+    items: [
+      { to: '/alerts', title: 'Alerts', icon: 'mdi-bell' },
+      { to: '/network', title: 'Network', icon: 'mdi-access-point-network' },
+      { to: '/rf-heard', title: 'RF Heard', icon: 'mdi-antenna' },
+    ],
+  },
+  {
+    group: 'System',
+    items: [
+      { to: '/logs', title: 'Logs', icon: 'mdi-text-box-outline' },
+      { to: '/radio/diagnostics', title: 'Diagnostics', icon: 'mdi-stethoscope' },
+      { to: '/settings', title: 'Settings', icon: 'mdi-cog', also: ['/settings/', '/setup'] },
+    ],
+  },
+]
+const PHONE_NAV = ['/', '/stream', '/radio', '/messages']
+const allNav = NAV.flatMap((g) => g.items)
+const phoneNav = allNav.filter((i) => PHONE_NAV.includes(i.to))
+const moreNav = allNav.filter((i) => !PHONE_NAV.includes(i.to))
 
-const activityActive = computed(() => activityRoutes.includes(route.path))
-// A station page is part of the map/station browsing flow, not Comms.
-const commsActive = computed(() => commsRoutes.includes(route.path))
-const insightsActive = computed(() => insightsRoutes.includes(route.path))
+function isActive(item: NavItem): boolean {
+  if (route.path === item.to) return true
+  return (item.also ?? []).some((p) => route.path.startsWith(p))
+}
+const moreActive = computed(() => moreNav.some(isActive) || route.path === '/setup')
 
-const commsBadgeCount = computed(
-  () => messagesStore.unreadCount + messagesStore.failedCount + alertsStore.unacknowledgedCount,
+const { width } = useDisplay()
+/** Container widths from the mock: bottom nav below 700 px, icon rail below 1200 px. */
+const navMode = computed<'rail' | 'icons' | 'bottom'>(() =>
+  width.value < 700 ? 'bottom' : width.value < 1200 ? 'icons' : 'rail',
+)
+const moreOpen = ref(false)
+
+const PAGE_TITLES: Record<string, string> = {
+  '/setup': 'Setup checklist',
+}
+const pageTitle = computed(() => {
+  if (route.path.startsWith('/stations/')) return 'Station'
+  return PAGE_TITLES[route.path] ?? [...allNav].reverse().find(isActive)?.title ?? ''
+})
+
+/** Badge text per destination: failed messages win ("2!"), then unread; unacknowledged alerts. */
+function badgeFor(item: NavItem): { content: string; color: string } | null {
+  if (item.to === '/messages') {
+    if (messagesStore.failedCount > 0)
+      return { content: `${messagesStore.failedCount}!`, color: 'error' }
+    if (messagesStore.unreadCount > 0)
+      return { content: String(messagesStore.unreadCount), color: 'primary' }
+  }
+  if (item.to === '/alerts' && alertsStore.unacknowledgedCount > 0)
+    return { content: String(alertsStore.unacknowledgedCount), color: 'warning' }
+  return null
+}
+const moreBadge = computed(() => moreNav.map(badgeFor).find((b) => b) ?? null)
+
+const showSetupChip = computed(
+  () => healthStore.settingsLoaded && !healthStore.setupComplete && !uiStore.setupDismissed,
+)
+
+// Tell the operator what a reconnect refetched (review 1.7).
+watch(
+  () => packetHub.lastResync,
+  (r) => {
+    if (!r) return
+    if (r.failed.length)
+      toastStore.toast(
+        `Reconnected — could not resync ${r.failed.join(', ')}; showing what was last loaded`,
+        'warning',
+        10_000,
+      )
+    else if (r.ok.length) toastStore.toast(`Reconnected — resynced ${r.ok.join(', ')}`, 'success')
+  },
 )
 
 // Persist theme changes
-watch(isDark, (dark) => {
-  theme.global.name.value = dark ? 'dark' : 'light'
-  localStorage.setItem(THEME_STORAGE_KEY, dark ? 'dark' : 'light')
-})
 
 function toggleTheme() {
-  isDark.value = !isDark.value
-}
-
-// ─── Status polling + live pill ──────────────────────────────────────────────
-let statusInterval: ReturnType<typeof setInterval> | null = null
-
-const aprsIsStateColor = computed(() => {
-  switch (aprsIsState.value) {
-    case 'Connected':
-      return 'success'
-    case 'Connecting':
-      return 'warning'
-    case 'AuthFailed':
-      return 'error'
-    case 'Disconnected':
-      return 'warning'
-    default:
-      return 'grey'
-  }
-})
-
-const aprsIsStateLabel = computed(() => {
-  switch (aprsIsState.value) {
-    case 'Connected':
-      return 'Connected'
-    case 'Connecting':
-      return 'Connecting…'
-    case 'AuthFailed':
-      return 'Auth Failed'
-    case 'Disconnected':
-      return 'Disconnected'
-    default:
-      return 'Disabled'
-  }
-})
-
-/**
- * One pill for "is this dashboard live" — collapses the API, the realtime hub,
- * and the RF backend into a single glanceable state with detail in the popover.
- */
-const livePill = computed<{ label: string; color: string; icon: string }>(() => {
-  // Worst-of: the pill names the most serious failure rather than going green
-  // while the hover card is the only place a broken modem or login shows.
-  if (apiOffline.value) return { label: 'Offline', color: 'error', icon: 'mdi-wifi-off' }
-  if (packetHub.state === 'disconnected')
-    return { label: 'No live feed', color: 'error', icon: 'mdi-lan-disconnect' }
-  if (modemState.value === ModemStates.Error)
-    return { label: 'Modem error', color: 'error', icon: 'mdi-radio-off' }
-  if (aprsIsState.value === 'AuthFailed')
-    return { label: 'APRS-IS auth failed', color: 'error', icon: 'mdi-key-alert' }
-  if (packetHub.state === 'connecting')
-    return { label: 'Connecting', color: 'warning', icon: 'mdi-lan-pending' }
-  if (packetHub.state === 'resyncing')
-    return { label: 'Resyncing…', color: 'info', icon: 'mdi-sync' }
-  if (rfSilent.value) return { label: 'RF silent', color: 'warning', icon: 'mdi-radio-tower' }
-  return { label: 'Live', color: 'success', icon: 'mdi-access-point' }
-})
-
-/** The modem is running but has decoded nothing for this long. */
-const RF_SILENT_WARN_MS = 30 * 60 * 1000
-
-const rfSilent = computed(() => {
-  if (modemState.value !== ModemStates.Running) return false
-  const last = modemLastDecodedAt.value ?? modemRunningSince.value
-  if (!last) return false
-  return now.value - new Date(last).getTime() > RF_SILENT_WARN_MS
-})
-
-const modemStateColor = computed(() => {
-  switch (modemState.value) {
-    case ModemStates.Running:
-      return 'success'
-    case ModemStates.Error:
-      return 'error'
-    default:
-      return 'grey'
-  }
-})
-
-const lastRfDecodeLabel = computed(() => {
-  if (modemState.value !== ModemStates.Running) return 'modem not running'
-  if (!modemLastDecodedAt.value) return 'none since modem start'
-  return timeAgo(modemLastDecodedAt.value, now.value)
-})
-
-const lastAprsIsPacketLabel = computed(() => {
-  if (packetHub.lastAprsIsPacketAt === null) return 'none this session'
-  return timeAgo(new Date(packetHub.lastAprsIsPacketAt).toISOString(), now.value)
-})
-
-async function pollStatus() {
+  const next = isDark.value ? 'light' : 'dark'
+  theme.global.name.value = next
   try {
-    const status = await getStatus()
-    apiOffline.value = false
-    direwolfDisconnected.value = !status.externalTncConnected
-    modemState.value = status.modemState
-    modemLastDecodedAt.value = status.modemLastDecodedAt
-    modemRunningSince.value = status.modemRunningSince
-    aprsIsState.value = status.aprsIsState
-    aprsIsServerName.value = status.aprsIsServerName
-    aprsIsFilter.value = status.aprsIsFilter
-    aprsIsSessionPacketCount.value = status.aprsIsSessionPacketCount
-    aprsIsFirstDisconnectedAt.value = status.aprsIsFirstDisconnectedAt
-    aprsIsLastConnectAttemptAt.value = status.aprsIsLastConnectAttemptAt
-    aprsIsFailedAttempts.value = status.aprsIsFailedAttempts
-    aprsIsLastError.value = status.aprsIsLastError
+    localStorage.setItem(THEME_STORAGE_KEY, next)
   } catch {
-    apiOffline.value = true
-    direwolfDisconnected.value = false
-  }
-}
-
-function formatTimestamp(iso: string | null): string {
-  if (!iso) return '—'
-  return formatDateTime(iso)
-}
-
-async function reconnectAprsIsNow() {
-  aprsIsReconnecting.value = true
-  try {
-    await reconnectAprsIs()
-    // Re-poll shortly after so the UI reflects the new attempt.
-    setTimeout(pollStatus, 1000)
-  } catch {
-    // ignore — next poll will reflect the real state
-  } finally {
-    aprsIsReconnecting.value = false
+    /* private window: lasts for this page load */
   }
 }
 
@@ -243,7 +194,7 @@ function onKeydown(e: KeyboardEvent) {
     case 'b':
     case 'B':
       e.preventDefault()
-      router.push('/beacons')
+      router.push('/stream')
       break
   }
 }
@@ -269,14 +220,10 @@ onMounted(async () => {
   // client and server clocks drift apart.
   clockSyncTimer = setInterval(syncServerClock, CLOCK_SYNC_INTERVAL_MS)
 
-  await pollStatus()
-  statusInterval = setInterval(pollStatus, 10_000)
-
   window.addEventListener('keydown', onKeydown)
 })
 
 onUnmounted(() => {
-  if (statusInterval !== null) clearInterval(statusInterval)
   if (clockSyncTimer !== null) clearInterval(clockSyncTimer)
   window.removeEventListener('keydown', onKeydown)
 })
@@ -296,338 +243,112 @@ async function syncServerClock() {
 
 <template>
   <v-app>
-    <!-- Mobile navigation drawer -->
+    <!-- Desktop / tablet rail -->
     <v-navigation-drawer
-      v-if="!route.meta.isPopOut"
-      v-model="mobileDrawerOpen"
-      temporary
-      location="left"
+      v-if="!route.meta.isPopOut && navMode !== 'bottom'"
+      permanent
+      :width="navMode === 'rail' ? 208 : 84"
+      class="app-rail"
+      :class="`app-rail--${navMode}`"
+      aria-label="Main"
     >
-      <v-list density="compact" nav>
-        <v-list-item to="/" prepend-icon="mdi-map" title="Map" @click="mobileDrawerOpen = false" />
-        <v-list-item
-          to="/radio"
-          prepend-icon="mdi-radio-handheld"
-          title="Radio"
-          @click="mobileDrawerOpen = false"
-        />
-
-        <v-list-subheader>Activity</v-list-subheader>
-        <v-list-item
-          to="/beacons"
-          prepend-icon="mdi-radio-tower"
-          title="Beacon Stream"
-          @click="mobileDrawerOpen = false"
-        />
-        <v-list-item
-          to="/logs"
-          prepend-icon="mdi-text-box-outline"
-          title="Logs"
-          @click="mobileDrawerOpen = false"
-        />
-
-        <v-list-subheader>Comms</v-list-subheader>
-        <v-list-item
-          to="/messages"
-          prepend-icon="mdi-message-text"
-          title="Messages"
-          @click="mobileDrawerOpen = false"
-        >
-          <template #append>
-            <v-badge
-              v-if="messagesStore.unreadCount > 0"
-              :content="messagesStore.unreadCount"
-              color="error"
-              inline
-            />
-            <v-badge
-              v-if="messagesStore.failedCount > 0"
-              :content="`${messagesStore.failedCount} failed`"
-              color="error"
-              inline
-            />
-          </template>
-        </v-list-item>
-        <v-list-item
-          to="/terminal"
-          prepend-icon="mdi-console-network"
-          title="Terminal"
-          @click="mobileDrawerOpen = false"
-        />
-        <v-list-item
-          to="/alerts"
-          prepend-icon="mdi-bell"
-          title="Alerts"
-          @click="mobileDrawerOpen = false"
-        >
-          <template #append>
-            <v-badge
-              v-if="alertsStore.unacknowledgedCount > 0"
-              :content="alertsStore.unacknowledgedCount"
-              color="warning"
-              inline
-            />
-          </template>
-        </v-list-item>
-
-        <v-list-subheader>Insights</v-list-subheader>
-        <v-list-item
-          to="/statistics"
-          prepend-icon="mdi-chart-bar"
-          title="Statistics"
-          @click="mobileDrawerOpen = false"
-        />
-        <v-list-item
-          to="/network"
-          prepend-icon="mdi-access-point-network"
-          title="Network"
-          @click="mobileDrawerOpen = false"
-        />
-        <v-list-item
-          to="/rf-heard"
-          prepend-icon="mdi-antenna"
-          title="RF Heard"
-          @click="mobileDrawerOpen = false"
-        />
-
-        <v-divider class="my-1" />
-        <v-list-item
-          to="/settings"
-          prepend-icon="mdi-cog"
-          title="Settings"
-          @click="mobileDrawerOpen = false"
-        />
-      </v-list>
+      <div class="rail-brand">
+        <span class="text-primary">▲</span>
+        <template v-if="navMode === 'rail'">
+          <span class="font-weight-bold">DireControl</span>
+          <span
+            v-if="version"
+            class="text-caption text-medium-emphasis"
+            :title="commit ? `commit ${commit}` : undefined"
+            >{{ version }}</span
+          >
+        </template>
+      </div>
+      <nav>
+        <template v-for="g in NAV" :key="g.group">
+          <div v-if="navMode === 'rail'" class="rail-group">{{ g.group }}</div>
+          <v-divider v-else class="my-1" />
+          <router-link
+            v-for="item in g.items"
+            :key="item.to"
+            :to="item.to"
+            class="rail-item"
+            :class="{ 'rail-item--active': isActive(item) }"
+            :aria-current="isActive(item) ? 'page' : undefined"
+            :aria-label="navMode === 'icons' ? item.title : undefined"
+          >
+            <span class="rail-icon">
+              <v-icon :icon="item.icon" size="22" />
+              <v-badge
+                v-if="badgeFor(item)"
+                :content="badgeFor(item)!.content"
+                :color="badgeFor(item)!.color"
+                floating
+                class="rail-badge"
+              />
+            </span>
+            <span class="rail-label">{{ item.title }}</span>
+          </router-link>
+        </template>
+      </nav>
+      <template v-if="navMode === 'rail'" #append>
+        <div class="rail-foot text-caption text-medium-emphasis">
+          Kiosk:
+          <a href="/map-only" target="_blank" rel="noopener">map</a> ·
+          <a href="/stream-only" target="_blank" rel="noopener">stream</a> ·
+          <a href="/logs-only" target="_blank" rel="noopener">logs</a>
+        </div>
+      </template>
     </v-navigation-drawer>
 
     <!-- App bar — hidden in pop-out windows -->
     <v-app-bar v-if="!route.meta.isPopOut" density="compact" color="surface" flat border="b">
-      <!-- Hamburger button — mobile only -->
-      <v-app-bar-nav-icon
-        class="d-flex d-mobile-nav-hide"
-        size="small"
-        @click="mobileDrawerOpen = !mobileDrawerOpen"
-      />
-
-      <!-- Brand sits left with the nav beside it — not a growing title -->
-      <div class="app-brand font-weight-bold ml-2 flex-shrink-0">
-        <span class="text-primary mr-1">▲</span>DireControl
-        <span
-          v-if="version"
-          class="text-caption text-medium-emphasis ml-1"
-          :title="commit ? `commit ${commit}` : undefined"
-          >{{ version }}</span
-        >
-      </div>
-
-      <!-- Desktop nav — Map · Radio · Activity · Comms · Insights · Settings.
-           Radio is the station's health page, so it sits at the top level. -->
-      <div class="desktop-nav ml-4">
-        <v-btn to="/" variant="text" size="small">Map</v-btn>
-        <v-btn to="/radio" variant="text" size="small">Radio</v-btn>
-
-        <v-menu open-on-hover open-on-click :close-delay="100">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              variant="text"
-              size="small"
-              :color="activityActive ? 'primary' : undefined"
-              append-icon="mdi-chevron-down"
-            >
-              Activity
-            </v-btn>
-          </template>
-          <v-list density="compact" nav>
-            <v-list-item to="/beacons" prepend-icon="mdi-radio-tower" title="Beacon Stream" />
-            <v-list-item to="/logs" prepend-icon="mdi-text-box-outline" title="Logs" />
-          </v-list>
-        </v-menu>
-
-        <v-menu open-on-hover open-on-click :close-delay="100">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              variant="text"
-              size="small"
-              :color="commsActive ? 'primary' : undefined"
-              append-icon="mdi-chevron-down"
-              class="position-relative"
-            >
-              Comms
-              <v-badge
-                v-if="commsBadgeCount > 0"
-                :content="commsBadgeCount"
-                color="error"
-                floating
-              />
-            </v-btn>
-          </template>
-          <v-list density="compact" nav>
-            <v-list-item to="/messages" prepend-icon="mdi-message-text" title="Messages">
-              <template #append>
-                <v-badge
-                  v-if="messagesStore.unreadCount > 0"
-                  :content="messagesStore.unreadCount"
-                  color="error"
-                  inline
-                />
-                <v-badge
-                  v-if="messagesStore.failedCount > 0"
-                  :content="`${messagesStore.failedCount} failed`"
-                  color="error"
-                  inline
-                />
-              </template>
-            </v-list-item>
-            <v-list-item to="/terminal" prepend-icon="mdi-console-network" title="Terminal" />
-            <v-list-item to="/alerts" prepend-icon="mdi-bell" title="Alerts">
-              <template #append>
-                <v-badge
-                  v-if="alertsStore.unacknowledgedCount > 0"
-                  :content="alertsStore.unacknowledgedCount"
-                  color="warning"
-                  inline
-                />
-              </template>
-            </v-list-item>
-          </v-list>
-        </v-menu>
-
-        <v-menu open-on-hover open-on-click :close-delay="100">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              variant="text"
-              size="small"
-              :color="insightsActive ? 'primary' : undefined"
-              append-icon="mdi-chevron-down"
-            >
-              Insights
-            </v-btn>
-          </template>
-          <v-list density="compact" nav>
-            <v-list-item to="/statistics" prepend-icon="mdi-chart-bar" title="Statistics" />
-            <v-list-item to="/network" prepend-icon="mdi-access-point-network" title="Network" />
-            <v-list-item to="/rf-heard" prepend-icon="mdi-antenna" title="RF Heard" />
-          </v-list>
-        </v-menu>
-
-        <v-btn to="/settings" variant="text" size="small">Settings</v-btn>
+      <div class="app-title ml-3">
+        <span v-if="navMode === 'bottom'" class="text-primary mr-1">▲</span>
+        <v-btn
+          v-if="route.path.startsWith('/stations/')"
+          icon="mdi-arrow-left"
+          size="small"
+          variant="text"
+          aria-label="Back to the map"
+          to="/"
+        />
+        <span class="font-weight-bold">{{ pageTitle }}</span>
       </div>
 
       <v-spacer />
 
       <template #append>
+        <v-btn
+          v-if="showSetupChip"
+          to="/setup"
+          size="small"
+          variant="tonal"
+          color="info"
+          prepend-icon="mdi-clipboard-check-outline"
+          class="mr-1 setup-chip"
+          :aria-label="`Setup checklist, ${healthStore.setupDone} of ${healthStore.setupRequired.length} done`"
+        >
+          Setup {{ healthStore.setupDone }}/{{ healthStore.setupRequired.length }}
+        </v-btn>
+
         <AudioMonitorButton />
 
         <v-btn
+          v-if="navMode === 'rail'"
           icon="mdi-keyboard-outline"
           variant="text"
           size="small"
           aria-label="Keyboard shortcuts"
-          class="desktop-nav"
           @click="showShortcutsDialog = true"
         />
 
-        <!-- Global live-status pill: hub + APRS-IS + modem in one place -->
-        <v-menu open-on-hover open-on-click :close-delay="100">
-          <template #activator="{ props }">
-            <v-chip
-              v-bind="props"
-              :color="livePill.color"
-              size="small"
-              variant="tonal"
-              class="ml-1 mr-2"
-              aria-label="Connection status"
-            >
-              <v-icon start size="14">{{ livePill.icon }}</v-icon>
-              {{ livePill.label }}
-            </v-chip>
-          </template>
-          <v-card min-width="300" density="compact">
-            <v-card-title class="text-subtitle-2 pb-1">Realtime status</v-card-title>
-            <v-card-text class="pt-0">
-              <div class="d-flex align-center justify-space-between mb-1">
-                <span class="text-body-2">Packet feed</span>
-                <span class="text-caption" :class="`text-${livePill.color}`">
-                  {{ packetHub.state }}
-                </span>
-              </div>
-              <div class="d-flex align-center justify-space-between mb-1">
-                <span class="text-body-2">Last RF decode</span>
-                <span
-                  class="text-caption"
-                  :class="rfSilent ? 'text-warning' : 'text-medium-emphasis'"
-                >
-                  {{ lastRfDecodeLabel }}
-                </span>
-              </div>
-              <div
-                v-if="aprsIsState !== 'Disabled'"
-                class="d-flex align-center justify-space-between mb-1"
-              >
-                <span class="text-body-2">Last APRS-IS packet</span>
-                <span class="text-caption text-medium-emphasis">{{ lastAprsIsPacketLabel }}</span>
-              </div>
-              <div class="d-flex align-center justify-space-between">
-                <span class="text-body-2">Sound modem</span>
-                <span class="text-caption" :class="`text-${modemStateColor}`">
-                  {{ modemStateLabels[modemState] ?? 'Unknown' }}
-                </span>
-              </div>
-
-              <template v-if="aprsIsState !== 'Disabled'">
-                <v-divider class="my-2" />
-                <div class="d-flex align-center mb-1">
-                  <v-icon :color="aprsIsStateColor" size="12" class="mr-2">mdi-circle</v-icon>
-                  <span class="text-body-2">APRS-IS · {{ aprsIsStateLabel }}</span>
-                </div>
-                <div v-if="aprsIsServerName" class="text-caption text-medium-emphasis">
-                  Server: {{ aprsIsServerName }}
-                </div>
-                <div v-if="aprsIsFilter" class="text-caption text-medium-emphasis mt-1">
-                  Filter: {{ aprsIsFilter }}
-                </div>
-                <div class="text-caption text-medium-emphasis mt-1">
-                  Session packets: {{ aprsIsSessionPacketCount.toLocaleString() }}
-                </div>
-
-                <!-- Disconnection diagnostics -->
-                <template v-if="aprsIsState !== 'Connected'">
-                  <v-divider class="my-2" />
-                  <div class="text-caption text-medium-emphasis">
-                    First disconnected: {{ formatTimestamp(aprsIsFirstDisconnectedAt) }}
-                  </div>
-                  <div class="text-caption text-medium-emphasis mt-1">
-                    Last attempt: {{ formatTimestamp(aprsIsLastConnectAttemptAt) }}
-                  </div>
-                  <div class="text-caption text-medium-emphasis mt-1">
-                    Failed attempts: {{ aprsIsFailedAttempts.toLocaleString() }}
-                  </div>
-                  <div v-if="aprsIsLastError" class="text-caption text-error mt-1">
-                    Error: {{ aprsIsLastError }}
-                  </div>
-                </template>
-              </template>
-            </v-card-text>
-            <v-card-actions v-if="aprsIsState !== 'Disabled'" class="pt-0">
-              <v-spacer />
-              <v-btn
-                size="small"
-                variant="tonal"
-                color="primary"
-                prepend-icon="mdi-refresh"
-                :loading="aprsIsReconnecting"
-                @click="reconnectAprsIsNow"
-              >
-                Reconnect APRS-IS
-              </v-btn>
-            </v-card-actions>
-          </v-card>
-        </v-menu>
+        <TxChip class="ml-1" />
+        <!-- Worst-of status strip: LIVE / RF / IS / TX lanes, tap for detail -->
+        <StatusStrip class="ml-2 mr-2" />
 
         <v-btn
+          v-if="navMode !== 'bottom'"
           :icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
           variant="text"
           size="small"
@@ -637,61 +358,94 @@ async function syncServerClock() {
       </template>
     </v-app-bar>
 
-    <!-- Status banners -->
-    <v-banner
-      v-if="apiOffline"
-      color="error"
-      density="compact"
-      icon="mdi-wifi-off"
-      lines="one"
-      :sticky="true"
+    <!-- Phone: bottom nav + More sheet -->
+    <v-bottom-navigation
+      v-if="!route.meta.isPopOut && navMode === 'bottom'"
+      grow
+      density="comfortable"
+      aria-label="Main"
     >
-      <v-banner-text>Backend API is unreachable — retrying…</v-banner-text>
-    </v-banner>
+      <v-btn
+        v-for="item in phoneNav"
+        :key="item.to"
+        :to="item.to"
+        :active="isActive(item)"
+        :aria-current="isActive(item) ? 'page' : undefined"
+      >
+        <v-badge
+          v-if="badgeFor(item)"
+          :content="badgeFor(item)!.content"
+          :color="badgeFor(item)!.color"
+        >
+          <v-icon :icon="item.icon" />
+        </v-badge>
+        <v-icon v-else :icon="item.icon" />
+        <span>{{ item.title }}</span>
+      </v-btn>
+      <v-btn :active="moreActive" aria-label="More pages" @click="moreOpen = true">
+        <v-badge v-if="moreBadge" :content="moreBadge.content" :color="moreBadge.color">
+          <v-icon icon="mdi-dots-horizontal" />
+        </v-badge>
+        <v-icon v-else icon="mdi-dots-horizontal" />
+        <span>More</span>
+      </v-btn>
+    </v-bottom-navigation>
 
-    <!-- Only warn about the missing TNC when the native sound modem is not
-         carrying RF either — with the modem running, RF still flows. -->
-    <v-banner
-      v-else-if="direwolfDisconnected && modemState !== ModemStates.Running"
-      color="warning"
-      density="compact"
-      icon="mdi-radio-tower"
-      lines="one"
-      :sticky="true"
-    >
-      <v-banner-text>No RF backend is connected — no new packets will be received</v-banner-text>
-      <template #actions>
-        <v-btn variant="text" to="/settings?tab=radios">Set up a radio</v-btn>
-        <v-btn variant="text" to="/settings?tab=rf">External TNC</v-btn>
-      </template>
-    </v-banner>
-
-    <!-- A running modem that hears nothing is the failure APRS-IS traffic hides. -->
-    <v-banner
-      v-else-if="rfSilent"
-      color="warning"
-      density="compact"
-      icon="mdi-radio-tower"
-      lines="one"
-      :sticky="true"
-    >
-      <v-banner-text>
-        The sound modem is running but has decoded nothing on RF for over 30 minutes — check audio
-        level, squelch and the capture device.
-      </v-banner-text>
-      <template #actions>
-        <v-btn variant="text" to="/radio">Open Radio</v-btn>
-      </template>
-    </v-banner>
-
-    <SetupChecklist v-if="!apiOffline" :aprs-is-state="aprsIsState" />
+    <v-bottom-sheet v-model="moreOpen">
+      <v-card>
+        <v-card-item>
+          <v-card-title class="text-subtitle-1">More</v-card-title>
+          <template #append>
+            <v-btn
+              icon="mdi-close"
+              variant="text"
+              size="small"
+              aria-label="Close"
+              @click="moreOpen = false"
+            />
+          </template>
+        </v-card-item>
+        <v-list nav density="comfortable">
+          <v-list-item
+            v-for="item in moreNav"
+            :key="item.to"
+            :to="item.to"
+            :prepend-icon="item.icon"
+            :title="item.title"
+            :active="isActive(item)"
+            @click="moreOpen = false"
+          >
+            <template v-if="badgeFor(item)" #append>
+              <v-badge :content="badgeFor(item)!.content" :color="badgeFor(item)!.color" inline />
+            </template>
+          </v-list-item>
+          <v-list-item
+            to="/setup"
+            prepend-icon="mdi-clipboard-check-outline"
+            title="Setup checklist"
+            @click="moreOpen = false"
+          />
+          <v-list-item
+            :prepend-icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
+            :title="isDark ? 'Light theme' : 'Dark theme'"
+            @click="toggleTheme"
+          />
+        </v-list>
+      </v-card>
+    </v-bottom-sheet>
 
     <v-main class="fill-height">
-      <router-view v-slot="{ Component }">
-        <keep-alive include="RadioView">
-          <component :is="Component" />
-        </keep-alive>
-      </router-view>
+      <div class="main-col">
+        <!-- One banner per failure, with the action that fixes it -->
+        <HealthBanners v-if="!route.meta.isPopOut" />
+        <div class="main-view">
+          <router-view v-slot="{ Component }">
+            <keep-alive include="RadioView">
+              <component :is="Component" />
+            </keep-alive>
+          </router-view>
+        </div>
+      </div>
     </v-main>
 
     <!-- Single app-wide toast stack -->
@@ -714,7 +468,7 @@ async function syncServerClock() {
               size="small"
               variant="text"
               :to="toast.action.to"
-              @click="toastStore.dismiss(toast.id)"
+              @click="(toast.action.run?.(), toastStore.dismiss(toast.id))"
             >
               {{ toast.action.label }}
             </v-btn>
@@ -722,6 +476,11 @@ async function syncServerClock() {
         </v-alert>
       </v-slide-y-reverse-transition>
     </div>
+
+    <TxQueueSheet v-if="!route.meta.isPopOut" />
+
+    <!-- Kiosk views stay chrome-less except one worst-of status chip. -->
+    <StatusStrip v-if="route.meta.isPopOut" compact class="kiosk-status" />
 
     <!-- Keyboard shortcuts overlay -->
     <v-dialog v-model="showShortcutsDialog" max-width="420">
@@ -758,6 +517,18 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+}
+
+/* Banners sit above the routed view, which keeps the rest of the height. */
+.main-col {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.main-view {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
 }
 
 /* Convention: callsigns render in mono, app-wide. */
@@ -799,32 +570,100 @@ body,
   min-width: 0;
 }
 
-/* Desktop nav: shown on wide screens, hidden on mobile */
-.desktop-nav {
+/* Kiosk: the only chrome is a small status chip. Bottom-right, because every
+   kiosk view keeps its own toolbar along the top (above the map attribution). */
+.kiosk-status {
+  position: fixed;
+  bottom: 28px;
+  right: 10px;
+  z-index: 1100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* ── Rail ── */
+.app-rail .v-navigation-drawer__content {
+  display: flex;
+  flex-direction: column;
+}
+.rail-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 14px 16px 8px;
+}
+.app-rail--icons .rail-brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+.rail-group {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  padding: 12px 16px 4px;
+}
+.rail-item {
   display: flex;
   align-items: center;
+  gap: 12px;
+  margin: 1px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: rgba(var(--v-theme-on-surface), var(--v-high-emphasis-opacity));
+  text-decoration: none;
+  font-size: 0.875rem;
+  min-height: 40px;
 }
-
-/* Every top-level nav item renders identically — the toolbar otherwise sizes
-   plain route buttons and menu activators differently. */
-.desktop-nav .v-btn {
-  font-size: 0.8125rem;
-  height: 32px;
-  letter-spacing: normal;
+.rail-item:hover,
+.rail-item:focus-visible {
+  background: rgba(var(--v-theme-on-surface), 0.06);
 }
-
-/* Hamburger: hidden on desktop, shown on mobile */
-.d-mobile-nav-hide {
-  display: none !important;
+.rail-item:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -2px;
 }
-
-@media (max-width: 768px) {
-  .desktop-nav {
-    display: none !important;
-  }
-
-  .d-mobile-nav-hide {
-    display: inline-flex !important;
+.rail-item--active {
+  background: rgba(var(--v-theme-primary), 0.14);
+  color: rgb(var(--v-theme-primary));
+  font-weight: 600;
+}
+.rail-icon {
+  position: relative;
+  display: inline-flex;
+}
+.rail-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+/* Tablet: icon over a small label, centred. */
+.app-rail--icons .rail-item {
+  flex-direction: column;
+  gap: 2px;
+  margin: 1px 6px;
+  padding: 6px 2px;
+  text-align: center;
+}
+.app-rail--icons .rail-label {
+  font-size: 0.6875rem;
+  line-height: 1.1;
+}
+.rail-foot {
+  padding: 12px 16px;
+}
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 480px) {
+  .setup-chip {
+    display: none;
   }
 }
 </style>

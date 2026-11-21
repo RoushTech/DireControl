@@ -16,6 +16,8 @@ public sealed class FrameTransmitServiceTests
 {
     private static FrameTransmitService Create() =>
         new(new ServiceCollection().BuildServiceProvider(), new KissConnectionHolder(),
+            new TxFrameRegistry(TimeProvider.System),
+            Microsoft.Extensions.Options.Options.Create(new DireControlOptions { OurCallsign = "N7DCX-10" }),
             NullLogger<FrameTransmitService>.Instance);
 
     [Test]

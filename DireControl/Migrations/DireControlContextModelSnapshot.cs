@@ -1024,6 +1024,9 @@ namespace DireControl.Migrations
                     b.Property<double?>("HomeLon")
                         .HasColumnType("REAL");
 
+                    b.Property<int?>("InitialRetryDelaySeconds")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("IsToRfGatingEnabled")
                         .HasColumnType("INTEGER");
 
@@ -1055,6 +1058,9 @@ namespace DireControl.Migrations
 
                     b.Property<double>("LightningAlertRadiusKm")
                         .HasColumnType("REAL");
+
+                    b.Property<int?>("MaxRetryAttempts")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("OpenWeatherMapApiKey")
                         .HasColumnType("TEXT");

@@ -9,16 +9,23 @@ const http = axios.create({
  * Like apiErrorMessage, but prefers the server-provided detail text (plain
  * string body or `{ message }` object) when the API explains the failure.
  */
-export function apiErrorDetail(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const data: unknown = err.response?.data
-    if (typeof data === 'string' && data.trim()) return data
-    if (data && typeof data === 'object') {
-      const message = (data as { message?: unknown }).message
-      if (typeof message === 'string' && message.trim()) return message
+export function apiErrorDetail(err: unknown, prefix?: string): string {
+  const detail = serverDetail(err) ?? apiErrorMessage(err)
+  return prefix ? `${prefix}: ${detail}` : detail
+}
+
+/** Plain string body, `{ message }`, or ProblemDetails `{ detail }`. */
+function serverDetail(err: unknown): string | null {
+  if (!axios.isAxiosError(err)) return null
+  const data: unknown = err.response?.data
+  if (typeof data === 'string' && data.trim()) return data
+  if (data && typeof data === 'object') {
+    for (const key of ['message', 'detail'] as const) {
+      const v = (data as Record<string, unknown>)[key]
+      if (typeof v === 'string' && v.trim()) return v
     }
   }
-  return apiErrorMessage(err)
+  return null
 }
 
 /** Human-readable message for a failed API call, for error banners and toasts. */
