@@ -37,6 +37,9 @@ const packetTypeOptions = [
   { label: 'Message', value: `${PacketType.Message}` },
   { label: 'Weather', value: `${PacketType.Weather}` },
   { label: 'Telemetry', value: `${PacketType.Telemetry}` },
+  { label: 'Third-party', value: `${PacketType.ThirdParty}` },
+  { label: 'Capabilities', value: `${PacketType.StationCapabilities}` },
+  { label: 'Beacon', value: `${PacketType.Beacon}` },
   { label: 'Unknown', value: `${PacketType.Unknown}` },
   { label: 'Unparseable', value: `${PacketType.Unparseable}` },
 ]

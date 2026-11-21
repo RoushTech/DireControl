@@ -8,6 +8,9 @@ export enum PacketType {
   Status = 6,
   Unknown = 7,
   Unparseable = 8,
+  ThirdParty = 9,
+  StationCapabilities = 10,
+  Beacon = 11,
 }
 
 export enum PacketSource {
@@ -26,6 +29,9 @@ export const PACKET_TYPE_LABELS: Record<PacketType, string> = {
   [PacketType.Status]: 'Status',
   [PacketType.Unknown]: 'Unknown',
   [PacketType.Unparseable]: 'Unparseable',
+  [PacketType.ThirdParty]: 'Third-party',
+  [PacketType.StationCapabilities]: 'Capabilities',
+  [PacketType.Beacon]: 'Beacon',
 }
 
 export const PACKET_TYPE_COLORS: Record<PacketType, string> = {
@@ -38,6 +44,9 @@ export const PACKET_TYPE_COLORS: Record<PacketType, string> = {
   [PacketType.Status]: 'blue-grey',
   [PacketType.Unknown]: 'grey',
   [PacketType.Unparseable]: 'grey',
+  [PacketType.ThirdParty]: 'indigo',
+  [PacketType.StationCapabilities]: 'cyan',
+  [PacketType.Beacon]: 'brown',
 }
 
 /** Maps the string name from PacketBroadcastDto to the enum value. */
@@ -52,6 +61,9 @@ export function parsedTypeFromString(s: string): PacketType {
     Status: PacketType.Status,
     Unknown: PacketType.Unknown,
     Unparseable: PacketType.Unparseable,
+    ThirdParty: PacketType.ThirdParty,
+    StationCapabilities: PacketType.StationCapabilities,
+    Beacon: PacketType.Beacon,
   }
   return map[s] ?? PacketType.Unknown
 }

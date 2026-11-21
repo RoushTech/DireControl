@@ -256,6 +256,14 @@ public sealed class AprsPacketParsingService(
 
         packet.ParsedType = MapPacketType(aprs.InfoField);
 
+        // Plain-text beacons (ID packets, free-text descriptions) carry no data type
+        // identifier, so AprsSharp leaves them unsupported; they aren't parse failures.
+        if (aprs.InfoField is UnsupportedInfo && PacketInfoLogic.TryGetPlainTextBeacon(packet.RawPacket, out var beaconText))
+        {
+            packet.ParsedType = OurPacketType.Beacon;
+            packet.Comment = beaconText;
+        }
+
         // Extract path from the raw TNC2 string.  ParseTnc2Header reads directly
         // from RawPacket so asterisk markers from the AX.25 H-bit are preserved;
         // the returned RawPath already excludes the TOCALL.
@@ -339,6 +347,10 @@ public sealed class AprsPacketParsingService(
 
             case ThirdPartyTrafficInfo thirdParty:
                 await HandleThirdPartyAsync(packet, thirdParty, db, ourCallsign, effects, ct, reprocess);
+                break;
+
+            case StationCapabilitiesInfo capabilities:
+                HandleStationCapabilities(packet, capabilities, db, reprocess);
                 break;
         }
 
@@ -717,6 +729,26 @@ public sealed class AprsPacketParsingService(
         }
     }
 
+    private static void HandleStationCapabilities(
+        DbPacket packet,
+        StationCapabilitiesInfo info,
+        DireControlContext db,
+        bool reprocess)
+    {
+        packet.Comment = PacketInfoLogic.FormatStationCapabilities(info.Capabilities);
+
+        // An active igate announcing itself is a gateway. Live only: reprocessing must not
+        // mutate Station state.
+        if (!reprocess && PacketInfoLogic.IsActiveIgateCapabilities(info.Capabilities))
+        {
+            UpdateStation(db, packet.StationCallsign, s =>
+            {
+                if (s.StationType is StationType.Unknown or StationType.Fixed)
+                    s.StationType = StationType.Gateway;
+            });
+        }
+    }
+
     private async Task HandleMessageAsync(
         DbPacket packet,
         MessageInfo info,
@@ -955,7 +987,8 @@ public sealed class AprsPacketParsingService(
         MessageInfo => OurPacketType.Message,
         StatusInfo => OurPacketType.Status,
         TelemetryInfo => OurPacketType.Telemetry,
-        ThirdPartyTrafficInfo => OurPacketType.Unparseable, // overridden if inner packet is a message
+        ThirdPartyTrafficInfo => OurPacketType.ThirdParty, // overridden if inner packet is a message
+        StationCapabilitiesInfo => OurPacketType.StationCapabilities,
         _ => OurPacketType.Unparseable,
     };
 
@@ -978,6 +1011,16 @@ public sealed class AprsPacketParsingService(
             OurPacketType.Telemetry => "Telemetry packet",
             OurPacketType.Object => "Object packet",
             OurPacketType.Item => "Item packet",
+
+            OurPacketType.ThirdParty => MessageHandlingLogic.TryExtractThirdPartyInner(packet.RawPacket, out _, out var innerSender)
+                ? $"Third-party traffic from {innerSender}"
+                : "Third-party traffic",
+
+            OurPacketType.StationCapabilities => string.IsNullOrWhiteSpace(packet.Comment)
+                ? "Station capabilities"
+                : $"Capabilities: {packet.Comment}",
+
+            OurPacketType.Beacon => $"Beacon: {packet.Comment}",
 
             OurPacketType.Status => string.IsNullOrWhiteSpace(packet.Comment)
                 ? "Status packet"
