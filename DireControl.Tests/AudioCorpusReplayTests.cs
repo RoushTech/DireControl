@@ -106,7 +106,7 @@ public sealed class AudioCorpusReplayTests
             }
             catch (Exception ex)
             {
-                TestContext.Out.WriteLine($"{Path.GetFileName(file)}: could not replay — {ex.Message}");
+                TestContext.Out.WriteLine($"{Path.GetFileName(file)}: could not replay: {ex.Message}");
             }
         }
 

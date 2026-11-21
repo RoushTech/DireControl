@@ -124,7 +124,7 @@ public sealed class LapbRecoveryAndBusyTests
         h.ClearRecordings();
         h.Receive(Ax25FrameType.I, ns: 0, nr: 0, command: true, info: [1]);
         Assert.That(h.Delivered, Is.Empty, "busy: data not delivered");
-        Assert.That(h.Machine.Vr, Is.Zero, "not acknowledged either — peer must resend");
+        Assert.That(h.Machine.Vr, Is.Zero, "not acknowledged either, so the peer must resend");
         Assert.That(h.TimerStarts.Any(t => t.Timer == LapbTimer.T2), Is.False);
 
         // Poll while busy is answered RNR F=1.

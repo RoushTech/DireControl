@@ -62,7 +62,7 @@ function input(o: Partial<HealthInput> = {}, m: Partial<ModemHealthInput> = {}):
 
 const bannerOpts = { csmaMaxSeconds: 20, setupDone: 4, setupTotal: 4, setupDismissed: false }
 
-describe('deriveHealth — mock states', () => {
+describe('deriveHealth: mock states', () => {
   it('healthy: all normal, lanes ok, RF shows time since last decode', () => {
     const h = deriveHealth(input())
     expect(h.worst).toBe('ok')
@@ -237,7 +237,7 @@ describe('deriveHealth — mock states', () => {
   })
 })
 
-describe('deriveHealth — multi-radio and lane order', () => {
+describe('deriveHealth: multi-radio and lane order', () => {
   it('the strip shows the worst radio; per-radio lanes are kept', () => {
     const x = input()
     x.radios.push({

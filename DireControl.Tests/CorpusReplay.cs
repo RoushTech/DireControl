@@ -175,19 +175,19 @@ public static class CorpusReplay
     public static string Diagnose(ReplayResult result)
     {
         if (result.ClippedPercent > 1.0)
-            return $"CLIPPING: {result.ClippedPercent:F1}% of samples at full scale — "
-                + "input level is too high, reduce the radio's audio output or the capture gain.";
+            return $"CLIPPING: {result.ClippedPercent:F1}% of samples at full scale. "
+                + "Input level is too high: reduce the radio's audio output or the capture gain.";
         if (result.Peak < 0.05f)
-            return $"VERY LOW LEVEL: peak {result.Peak:F3} — "
-                + "the demodulator has almost nothing to work with, raise the capture gain.";
+            return $"VERY LOW LEVEL: peak {result.Peak:F3}. "
+                + "The demodulator has almost nothing to work with: raise the capture gain.";
         if (MathF.Abs(result.DcOffset) > 0.02f)
-            return $"DC OFFSET {result.DcOffset:+0.000;-0.000} — a biased input can skew the comparator.";
+            return $"DC OFFSET {result.DcOffset:+0.000;-0.000}. A biased input can skew the comparator.";
         if (result.Preambles == 0)
-            return "NO PREAMBLE: carrier armed but no run of opening flags — either nothing was "
+            return "NO PREAMBLE: carrier armed but no run of opening flags. Either nothing was "
                 + "transmitted, or the preamble was lost before the demodulator could see it.";
         if (result.ValidFrames == 0)
             return $"HEARD BUT NOT DECODED: {result.CarrierBursts} burst(s), "
-                + $"{result.InvalidFrames} CRC failure(s), 0 valid frames — this is the case worth tuning.";
+                + $"{result.InvalidFrames} CRC failure(s), 0 valid frames. This is the case worth tuning.";
         if (result.InvalidFrames > 0)
             return $"partial: {result.ValidFrames} decoded, {result.InvalidFrames} failed.";
         return $"clean: {result.ValidFrames} frame(s) decoded, no failures.";

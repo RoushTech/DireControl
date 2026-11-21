@@ -89,8 +89,8 @@ public sealed class AfskRoundTripTests
         Assert.That(decoded, Has.Count.EqualTo(1));
     }
 
-    [TestCase(0.05f, 20, Description = "Light noise — all frames must decode")]
-    [TestCase(0.15f, 18, Description = "Moderate noise — at least 90%")]
+    [TestCase(0.05f, 20, Description = "Light noise: all frames must decode")]
+    [TestCase(0.15f, 18, Description = "Moderate noise: at least 90%")]
     public void WhiteNoise_DecodeRateFloor(float noiseAmplitude, int minDecoded)
     {
         var modulator = new AfskModulator(SampleRate);

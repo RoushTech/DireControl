@@ -305,7 +305,7 @@ public sealed class PmsCommandProcessorTests
         Assert.That(transcript, Does.StartWith("[DireControl-1.0-PMS$]\r"));
         Assert.That(transcript, Does.Contain("DireControl-1.0-PMS\r"), "V response");
         Assert.That(transcript, Does.Contain("B)ye"), "H response");
-        Assert.That(transcript, Does.Contain("No messages."), "L response — exactly once proves CRLF is one line");
+        Assert.That(transcript, Does.Contain("No messages."), "L response: exactly once proves CRLF is one line");
         Assert.That(transcript.Split("No messages.").Length - 1, Is.EqualTo(1),
             "CRLF handled as a single line ending");
         Assert.That(transcript, Does.Contain("73 de W3UWU PMS"));
