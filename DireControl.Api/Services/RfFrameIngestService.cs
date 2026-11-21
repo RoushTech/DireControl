@@ -153,11 +153,7 @@ public sealed class RfFrameIngestService(
             // Classify from the frame we actually heard, not from the stored APRS-IS raw
             // text — that copy's path carries qAR/TCPIP and would report our own direct
             // reception as igated, hiding it from the direct-RF statistics.
-            var (_, _, rfPath) = AprsPathParser.ParseTnc2Header(rawPacket);
-            existingAprsIs.HeardVia = AprsPathParser.ClassifyHeardVia(
-                string.IsNullOrEmpty(rfPath)
-                    ? []
-                    : rfPath.Split(',', StringSplitOptions.RemoveEmptyEntries));
+            existingAprsIs.HeardVia = AprsPathParser.ClassifyHeardViaFromTnc2(rawPacket);
             var rfStation = await db.Stations.FindAsync([callsign], ct);
             if (rfStation is not null)
             {
@@ -207,6 +203,7 @@ public sealed class RfFrameIngestService(
             InfoField = infoField,
             KissChannel = kissChannel,
             SignalData = signalData,
+            HeardVia = AprsPathParser.ClassifyHeardViaFromTnc2(rawPacket),
         };
         db.Packets.Add(packet);
 

@@ -39,6 +39,20 @@ public sealed class RfIngestGatingTests
     }
 
     [Test]
+    public async Task StoredRfPacket_IsClassifiedAtInsert_NotLeftUnknown()
+    {
+        // Rows left Unknown until the parser reached them kept the RF Heard
+        // "classifying stored packets — N to go" banner up forever under live traffic.
+        using var harness = new IngestHarness();
+
+        var id = await harness.Ingest.IngestAsync(Frame(0x03, 0xF0, "!3518.00N/08508.00W-hello"), 0, null, default);
+
+        await using var db = harness.CreateDb();
+        var packet = await db.Packets.SingleAsync(p => p.Id == id);
+        Assert.That(packet.HeardVia, Is.EqualTo(DireControl.Enums.HeardVia.Direct));
+    }
+
+    [Test]
     public async Task IFrame_IsNeitherGatedNorStored()
     {
         using var harness = new IngestHarness();

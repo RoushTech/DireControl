@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 
 const RF_SILENT_KEY = 'direcontrol.rfSilentMinutes'
 const SETUP_DISMISSED_KEY = 'direcontrol.setupChecklistDismissed'
+const NAV_COLLAPSED_KEY = 'direcontrol.navCollapsed'
 
 /** Default "RF silent" threshold (open question default: 15 min, configurable). */
 export const DEFAULT_RF_SILENT_MINUTES = 15
@@ -53,6 +54,10 @@ export const useUiStore = defineStore('ui', () => {
   const setupDismissed = ref(readFlag(SETUP_DISMISSED_KEY))
   watch(setupDismissed, (v) => write(SETUP_DISMISSED_KEY, v ? '1' : null))
 
+  /** Desktop rail collapsed to icons only. */
+  const navCollapsed = ref(readFlag(NAV_COLLAPSED_KEY))
+  watch(navCollapsed, (v) => write(NAV_COLLAPSED_KEY, v ? '1' : null))
+
   /** The transmit queue sheet (opened from the TX chip and toasts). */
   const txSheetOpen = ref(false)
 
@@ -63,5 +68,6 @@ export const useUiStore = defineStore('ui', () => {
     consumeCompose,
     rfSilentMinutes,
     setupDismissed,
+    navCollapsed,
   }
 })

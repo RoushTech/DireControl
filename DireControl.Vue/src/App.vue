@@ -106,8 +106,10 @@ const moreActive = computed(() => moreNav.some(isActive) || route.path === '/set
 
 const { width } = useDisplay()
 /** Container widths from the mock: bottom nav below 700 px, icon rail below 1200 px. */
+const wide = computed(() => width.value >= 1200)
+/** Desktop can collapse the labelled rail to the icon rail (remembered per browser). */
 const navMode = computed<'rail' | 'icons' | 'bottom'>(() =>
-  width.value < 700 ? 'bottom' : width.value < 1200 ? 'icons' : 'rail',
+  width.value < 700 ? 'bottom' : !wide.value || uiStore.navCollapsed ? 'icons' : 'rail',
 )
 const moreOpen = ref(false)
 
@@ -278,25 +280,44 @@ async function syncServerClock() {
             :aria-label="navMode === 'icons' ? item.title : undefined"
           >
             <span class="rail-icon">
-              <v-icon :icon="item.icon" size="22" />
+              <!-- Icon rail: badge on the icon. Labelled rail: badge at the row's end. -->
               <v-badge
-                v-if="badgeFor(item)"
+                v-if="badgeFor(item) && navMode === 'icons'"
                 :content="badgeFor(item)!.content"
                 :color="badgeFor(item)!.color"
-                floating
-                class="rail-badge"
-              />
+              >
+                <v-icon :icon="item.icon" size="22" />
+              </v-badge>
+              <v-icon v-else :icon="item.icon" size="22" />
             </span>
             <span class="rail-label">{{ item.title }}</span>
+            <v-badge
+              v-if="badgeFor(item) && navMode === 'rail'"
+              :content="badgeFor(item)!.content"
+              :color="badgeFor(item)!.color"
+              inline
+              class="ml-auto"
+            />
           </router-link>
         </template>
       </nav>
-      <template v-if="navMode === 'rail'" #append>
-        <div class="rail-foot text-caption text-medium-emphasis">
+      <template v-if="wide" #append>
+        <div v-if="navMode === 'rail'" class="rail-foot text-caption text-medium-emphasis">
           Kiosk:
           <a href="/map-only" target="_blank" rel="noopener">map</a> ·
           <a href="/stream-only" target="_blank" rel="noopener">stream</a> ·
           <a href="/logs-only" target="_blank" rel="noopener">logs</a>
+        </div>
+        <div class="rail-collapse" :class="{ 'rail-collapse--icons': navMode === 'icons' }">
+          <v-btn
+            :icon="uiStore.navCollapsed ? 'mdi-chevron-double-right' : 'mdi-chevron-double-left'"
+            variant="text"
+            size="small"
+            :aria-label="uiStore.navCollapsed ? 'Expand menu' : 'Collapse menu'"
+            :aria-expanded="!uiStore.navCollapsed"
+            :title="uiStore.navCollapsed ? 'Expand menu' : 'Collapse menu'"
+            @click="uiStore.navCollapsed = !uiStore.navCollapsed"
+          />
         </div>
       </template>
     </v-navigation-drawer>
@@ -335,7 +356,7 @@ async function syncServerClock() {
         <AudioMonitorButton />
 
         <v-btn
-          v-if="navMode === 'rail'"
+          v-if="wide"
           icon="mdi-keyboard-outline"
           variant="text"
           size="small"
@@ -632,10 +653,56 @@ body,
   position: relative;
   display: inline-flex;
 }
-.rail-badge {
-  position: absolute;
-  top: 0;
-  right: 0;
+.rail-foot a,
+.rail-foot a:visited {
+  color: rgb(var(--v-theme-primary));
+  text-decoration: none;
+}
+.rail-foot a:hover,
+.rail-foot a:focus-visible {
+  text-decoration: underline;
+}
+
+/* Filled coloured buttons/chips: Vuetify's variant rule (on-surface text) wins over
+   .bg-<color> here, giving light text on the light dark-theme fills (Compose,
+   Connect, Save...). Re-assert the theme's on-<color>. Unlayered, so it wins. */
+.v-btn.bg-primary,
+.v-chip.bg-primary {
+  color: rgb(var(--v-theme-on-primary));
+}
+.v-btn.bg-secondary,
+.v-chip.bg-secondary {
+  color: rgb(var(--v-theme-on-secondary));
+}
+.v-btn.bg-success,
+.v-chip.bg-success {
+  color: rgb(var(--v-theme-on-success));
+}
+.v-btn.bg-error,
+.v-chip.bg-error {
+  color: rgb(var(--v-theme-on-error));
+}
+.v-btn.bg-warning,
+.v-chip.bg-warning {
+  color: rgb(var(--v-theme-on-warning));
+}
+.v-btn.bg-info,
+.v-chip.bg-info {
+  color: rgb(var(--v-theme-on-info));
+}
+
+/* Disabled filled buttons: Vuetify keeps the brand fill and fades only the
+   label, which reads as an enabled button with broken text (worst on the
+   light-teal dark-theme primary). Use the neutral disabled look instead. */
+.v-btn--disabled.v-btn--variant-elevated,
+.v-btn--disabled.v-btn--variant-flat {
+  background: rgba(var(--v-theme-on-surface), 0.12) !important;
+  color: rgba(var(--v-theme-on-surface), 0.5) !important;
+  box-shadow: none !important;
+}
+.v-btn--disabled.v-btn--variant-elevated .v-btn__overlay,
+.v-btn--disabled.v-btn--variant-flat .v-btn__overlay {
+  opacity: 0 !important;
 }
 /* Tablet: icon over a small label, centred. */
 .app-rail--icons .rail-item {
@@ -650,7 +717,15 @@ body,
   line-height: 1.1;
 }
 .rail-foot {
-  padding: 12px 16px;
+  padding: 12px 16px 0;
+}
+.rail-collapse {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px 8px;
+}
+.rail-collapse--icons {
+  justify-content: center;
 }
 .app-title {
   display: flex;

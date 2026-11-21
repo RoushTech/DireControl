@@ -75,14 +75,29 @@ public class MessagesController(
             .AsNoTracking()
             .Where(p => p.ParsedType == PacketType.Message);
 
+        // Filters run in SQL against plain columns. MessageData is a JSON-converted column
+        // EF cannot see into, so the addressee and text come from the APRS message info
+        // field ":ADDRESSEE:text" (addressee padded to 9 characters). Callsigns are stored
+        // upper-case, so the input is normalised; free text uses LIKE, which SQLite matches
+        // case-insensitively for ASCII.
         if (!string.IsNullOrWhiteSpace(sender))
-            query = query.Where(p => p.StationCallsign.Contains(sender));
+        {
+            var s = sender.Trim().ToUpperInvariant();
+            query = query.Where(p => p.StationCallsign.Contains(s));
+        }
 
         if (!string.IsNullOrWhiteSpace(addressee))
-            query = query.Where(p => p.MessageData != null && p.MessageData.Addressee.Contains(addressee));
+        {
+            var a = addressee.Trim().ToUpperInvariant();
+            query = query.Where(p => p.InfoField != null && p.InfoField.Substring(1, 9).Contains(a));
+        }
 
         if (!string.IsNullOrWhiteSpace(text))
-            query = query.Where(p => p.MessageData != null && p.MessageData.Text.Contains(text));
+        {
+            var pattern = "%" + EscapeLike(text.Trim()) + "%";
+            query = query.Where(p => p.InfoField != null
+                && EF.Functions.Like(p.InfoField.Substring(11), pattern, "\\"));
+        }
 
         var totalCount = await query.CountAsync(ct);
 
@@ -301,6 +316,9 @@ public class MessagesController(
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    internal static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
     private static InboxMessageDto ToInboxDto(Message m) => new()
     {

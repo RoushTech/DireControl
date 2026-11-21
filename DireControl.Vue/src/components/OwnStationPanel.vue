@@ -13,7 +13,9 @@ import type { RadioDto, DigiConfirmationDto } from '@/types/radio'
 const radiosStore = useRadiosStore()
 
 // On a phone the full cards would cover the map; they collapse to one chip.
-const { smAndDown } = useDisplay()
+// `mobile` matches MapView's: below it the map shows a centred Stations button at the
+// bottom, so the panel sits above that button instead of under it.
+const { smAndDown, mobile } = useDisplay()
 const expanded = ref(false)
 const txStore = useTxStore()
 const healthStore = useHealthStore()
@@ -150,6 +152,7 @@ function txChip(radio: RadioDto): { label: string; color: string } {
   <div
     v-if="radiosStore.activeRadios.length > 0 && smAndDown && !expanded"
     class="own-station-panel own-station-panel--compact"
+    :class="{ 'own-station-panel--raised': mobile }"
   >
     <v-chip
       v-for="radio in radiosStore.activeRadios"
@@ -164,7 +167,11 @@ function txChip(radio: RadioDto): { label: string; color: string } {
       {{ radio.fullCallsign }} · {{ txChip(radio).label }}
     </v-chip>
   </div>
-  <div v-else-if="radiosStore.activeRadios.length > 0" class="own-station-panel">
+  <div
+    v-else-if="radiosStore.activeRadios.length > 0"
+    class="own-station-panel"
+    :class="{ 'own-station-panel--raised': mobile }"
+  >
     <v-btn
       v-if="smAndDown"
       size="x-small"
@@ -295,6 +302,10 @@ function txChip(radio: RadioDto): { label: string; color: string } {
   width: 248px;
   max-width: calc(100vw - 20px);
   pointer-events: auto;
+}
+
+.own-station-panel--raised {
+  bottom: 64px;
 }
 
 .own-station-panel--compact {

@@ -237,7 +237,7 @@ function openPopOut() {
 
     <!-- Header row -->
     <div class="log-header">
-      <span style="width: 96px" class="text-caption font-weight-medium text-medium-emphasis"
+      <span style="width: 128px" class="text-caption font-weight-medium text-medium-emphasis"
         >Time</span
       >
       <span style="width: 80px" class="text-caption font-weight-medium text-medium-emphasis"
@@ -460,7 +460,10 @@ function openPopOut() {
 }
 
 .log-time {
-  width: 96px;
+  /* Fits hh:mm:ss.mmm plus AM/PM in the monospace caption without clipping. */
+  width: 128px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .log-level {

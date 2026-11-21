@@ -632,4 +632,11 @@ public class LivePathResolutionTests
             h.Callsign.Equals("TCPIP", System.StringComparison.OrdinalIgnoreCase) ||
             h.Callsign.Equals("TCPXX", System.StringComparison.OrdinalIgnoreCase)));
     }
+
+    [TestCase("K1ABC>APRS,WIDE1-1,WIDE2-1:!test", HeardVia.Direct)]
+    [TestCase("K1ABC>APRS,WE4MB-3*,WIDE2-1:!test", HeardVia.Digi)]
+    [TestCase("K1ABC>APRS,TCPIP*,qAC,T2TEST:!test", HeardVia.Internet)]
+    [TestCase("K1ABC>APRS:!test", HeardVia.Direct)]
+    public void ClassifyHeardViaFromTnc2_UsesTheHeaderPath(string raw, HeardVia expected) =>
+        Assert.That(AprsPathParser.ClassifyHeardViaFromTnc2(raw), Is.EqualTo(expected));
 }

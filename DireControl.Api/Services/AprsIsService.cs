@@ -4,6 +4,7 @@ using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
 using DireControl.Modem.Ax25;
+using DireControl.PathParsing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AprsConnectionState = AprsSharp.AprsIsClient.ConnectionState;
@@ -290,6 +291,7 @@ public sealed class AprsIsService(
             RawPacket = tnc2,
             Source = PacketSource.AprsIs,
             InfoField = infoField,
+            HeardVia = AprsPathParser.ClassifyHeardViaFromTnc2(tnc2),
         });
 
         await db.SaveChangesAsync(ct);

@@ -66,6 +66,20 @@ public static class AprsPathParser
     }
 
     /// <summary>
+    /// Classifies reception straight from a TNC2 line's header. Used when a packet row is
+    /// first stored, so it never sits as <see cref="HeardVia.Unknown"/> while it waits for
+    /// the parser — Unknown is reserved for rows stored before classification existed.
+    /// </summary>
+    public static HeardVia ClassifyHeardViaFromTnc2(string raw)
+    {
+        var (_, _, rawPath) = ParseTnc2Header(raw);
+        return ClassifyHeardVia(
+            string.IsNullOrEmpty(rawPath)
+                ? []
+                : rawPath.Split(',', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>
     /// Returns <c>true</c> if <paramref name="callsign"/> is a generic APRS alias
     /// (e.g. WIDE1, WIDE2-1, RELAY, RFONLY) that does not identify a specific station.
     /// Leading or trailing <c>*</c> and whitespace are ignored.

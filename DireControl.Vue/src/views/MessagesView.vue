@@ -65,6 +65,10 @@ function stationTypeName(t: StationType): string {
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 const activeTab = ref<'threads' | 'all' | 'outbox' | 'pms'>('threads')
+// The tabs share one scroll container; each tab opens at its top.
+watch(activeTab, () => {
+  document.querySelector('.messages-card > .v-window')?.scrollTo({ top: 0 })
+})
 
 // ─── All-messages state ──────────────────────────────────────────────────────
 const filterSender = ref('')
@@ -95,6 +99,12 @@ async function fetchAllMessages() {
   } finally {
     allLoading.value = false
   }
+}
+
+function onAllPage() {
+  void fetchAllMessages()
+  // New page starts at its top, not wherever the previous page was scrolled to.
+  document.querySelector('.messages-card > .v-window')?.scrollTo({ top: 0 })
 }
 
 let filterDebounce: ReturnType<typeof setTimeout> | null = null
@@ -443,8 +453,13 @@ const outboxMessages = computed(() =>
   store.inboxMessages.filter(
     (m) =>
       m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase() &&
-      m.retryState !== RetryState.Acknowledged,
+      m.retryState !== RetryState.Acknowledged &&
+      // Cancelled = the operator dismissed it; it stays in its conversation.
+      m.retryState !== RetryState.Cancelled,
   ),
+)
+const failedOutbox = computed(() =>
+  outboxMessages.value.filter((m) => m.retryState === RetryState.Failed),
 )
 
 const actionLoading = ref<Record<number, 'retry' | 'reset' | 'cancel' | null>>({})
@@ -502,6 +517,21 @@ async function doCancel(msg: InboxMessageDto) {
     toasts.toast(apiErrorDetail(e, "Couldn't cancel the message"), 'error')
   } finally {
     delete actionLoading.value[msg.id]
+  }
+}
+
+/** Failed messages: give up on them so they leave the Outbox and the nav badge. */
+const dismissingAll = ref(false)
+async function dismissAllFailed() {
+  dismissingAll.value = true
+  try {
+    const results = await Promise.allSettled(
+      failedOutbox.value.map((m) => store.cancelRetry(m.id)),
+    )
+    const bad = results.filter((r) => r.status === 'rejected').length
+    if (bad) toasts.toast(`Couldn't dismiss ${bad} message${bad === 1 ? '' : 's'}`, 'error')
+  } finally {
+    dismissingAll.value = false
   }
 }
 
@@ -1101,6 +1131,26 @@ onUnmounted(() => {
 
         <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
         <v-window-item value="outbox">
+          <div
+            v-if="failedOutbox.length"
+            class="d-flex align-center flex-wrap ga-2 px-3 py-2 outbox-failed-bar"
+          >
+            <v-icon icon="mdi-alert-circle" color="error" size="18" />
+            <span class="text-body-2">
+              {{ failedOutbox.length }} message{{ failedOutbox.length === 1 ? '' : 's' }} gave up
+              without an ACK. Retry them, or dismiss to clear the badge.
+            </span>
+            <v-spacer />
+            <v-btn
+              size="small"
+              variant="tonal"
+              color="error"
+              :loading="dismissingAll"
+              @click="dismissAllFailed"
+            >
+              Dismiss all failed
+            </v-btn>
+          </div>
           <!-- v-table scrolls horizontally inside the card on narrow screens -->
           <v-table density="compact" class="outbox-table">
             <thead>
@@ -1171,7 +1221,9 @@ onUnmounted(() => {
                     Reset
                   </v-btn>
                   <v-btn
-                    v-if="msg.retryState === RetryState.Retrying"
+                    v-if="
+                      msg.retryState === RetryState.Retrying || msg.retryState === RetryState.Failed
+                    "
                     size="small"
                     variant="tonal"
                     color="error"
@@ -1179,13 +1231,13 @@ onUnmounted(() => {
                     :disabled="!!actionLoading[msg.id]"
                     @click="doCancel(msg)"
                   >
-                    Cancel
+                    {{ msg.retryState === RetryState.Failed ? 'Dismiss' : 'Cancel' }}
                   </v-btn>
                 </td>
               </tr>
               <tr v-if="outboxMessages.length === 0">
                 <td colspan="4" class="text-center text-medium-emphasis py-6">
-                  Outbox is empty. Every message has been acknowledged.
+                  Outbox is empty. Everything was acknowledged or dismissed.
                 </td>
               </tr>
             </tbody>
@@ -1196,7 +1248,7 @@ onUnmounted(() => {
         <v-window-item value="all">
           <!-- Filters -->
           <v-row dense class="px-3 pt-3">
-            <v-col cols="4">
+            <v-col cols="12" sm="4">
               <v-text-field
                 v-model="filterSender"
                 label="Filter by sender"
@@ -1206,7 +1258,7 @@ onUnmounted(() => {
                 hide-details
               />
             </v-col>
-            <v-col cols="4">
+            <v-col cols="12" sm="4">
               <v-text-field
                 v-model="filterAddressee"
                 label="Filter by addressee"
@@ -1216,7 +1268,7 @@ onUnmounted(() => {
                 hide-details
               />
             </v-col>
-            <v-col cols="4">
+            <v-col cols="12" sm="4">
               <v-text-field
                 v-model="filterText"
                 label="Filter by text"
@@ -1276,15 +1328,25 @@ onUnmounted(() => {
             </tbody>
           </v-table>
 
-          <div class="d-flex align-center justify-space-between px-3 py-2">
-            <span class="text-caption text-medium-emphasis"> {{ allTotalCount }} total </span>
+          <div class="all-pager d-flex align-center flex-wrap ga-2 px-3 py-2">
+            <span class="text-caption text-medium-emphasis">
+              <template v-if="allTotalCount">
+                {{ ((allPage - 1) * allPageSize + 1).toLocaleString() }}–{{
+                  Math.min(allPage * allPageSize, allTotalCount).toLocaleString()
+                }}
+                of {{ allTotalCount.toLocaleString() }}
+              </template>
+              <template v-else>0 messages</template>
+            </span>
+            <v-spacer />
             <v-pagination
               v-if="allTotalPages > 1"
               v-model="allPage"
               :length="allTotalPages"
-              :total-visible="7"
+              :total-visible="5"
               density="compact"
-              @update:model-value="fetchAllMessages"
+              size="small"
+              @update:model-value="onAllPage"
             />
           </div>
         </v-window-item>
@@ -1701,12 +1763,35 @@ onUnmounted(() => {
 .messages-card {
   display: flex;
   flex-direction: column;
+  /* Fill the page; the tab row stays put and only the tab content scrolls. */
+  flex: 1 1 auto;
+  min-height: 360px;
+}
+
+.messages-card > .v-window {
+  flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+}
+
+/* All tab: the pager stays reachable at the bottom while the rows scroll. */
+.all-pager {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: rgb(var(--v-theme-surface));
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.outbox-failed-bar {
+  background: rgba(var(--v-theme-error), 0.08);
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 /* Tab row: underline text tabs with count chips, Compose at the right. */
 .msg-tabs {
   display: flex;
+  flex-shrink: 0;
   gap: 2px;
   padding: 0 10px;
   overflow-x: auto;

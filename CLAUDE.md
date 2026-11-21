@@ -34,6 +34,10 @@ dotnet ef migrations remove \
     --startup-project DireControl.Api/DireControl.Api.csproj
 ```
 
+## Git
+
+- Commit messages are a single line of at most 80 characters — no body, no bullet lists
+
 ## .NET / EF Core
 
 - EF Core models live in the `DireControl.Data.Models` namespace under `DireControl/Data/Models/`
