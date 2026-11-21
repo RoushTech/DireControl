@@ -525,9 +525,7 @@ const dismissingAll = ref(false)
 async function dismissAllFailed() {
   dismissingAll.value = true
   try {
-    const results = await Promise.allSettled(
-      failedOutbox.value.map((m) => store.cancelRetry(m.id)),
-    )
+    const results = await Promise.allSettled(failedOutbox.value.map((m) => store.cancelRetry(m.id)))
     const bad = results.filter((r) => r.status === 'rejected').length
     if (bad) toasts.toast(`Couldn't dismiss ${bad} message${bad === 1 ? '' : 's'}`, 'error')
   } finally {
@@ -724,6 +722,40 @@ onUnmounted(() => {
       </v-chip>
     </div>
 
+    <!-- Failed sends badge the nav on every screen; clear them from any tab. -->
+    <v-alert
+      v-if="failedOutbox.length"
+      type="error"
+      variant="tonal"
+      density="compact"
+      class="mb-3 flex-shrink-0"
+    >
+      <div class="d-flex align-center flex-wrap ga-2">
+        <span class="text-body-2">
+          {{ failedOutbox.length }} message{{ failedOutbox.length === 1 ? '' : 's' }} gave up
+          without an ACK. Retry them from the Outbox, or dismiss to clear the badge.
+        </span>
+        <v-spacer />
+        <v-btn
+          v-if="activeTab !== 'outbox'"
+          size="small"
+          variant="text"
+          @click="activeTab = 'outbox'"
+        >
+          Show outbox
+        </v-btn>
+        <v-btn
+          size="small"
+          variant="tonal"
+          color="error"
+          :loading="dismissingAll"
+          @click="dismissAllFailed"
+        >
+          Dismiss all failed
+        </v-btn>
+      </div>
+    </v-alert>
+
     <!-- One card: tab row (with counts + Compose) over the table -->
     <v-card variant="outlined" class="messages-card">
       <div class="msg-tabs" role="tablist">
@@ -750,7 +782,12 @@ onUnmounted(() => {
           @click="activeTab = 'outbox'"
         >
           Outbox
-          <v-chip size="x-small" variant="tonal" class="ml-1">
+          <v-chip
+            size="x-small"
+            variant="tonal"
+            :color="failedOutbox.length ? 'error' : undefined"
+            class="ml-1"
+          >
             {{ outboxMessages.length.toLocaleString() }}
           </v-chip>
         </button>
@@ -1031,7 +1068,6 @@ onUnmounted(() => {
                             Retry now
                           </v-btn>
                           <v-btn
-                            v-if="item.msg.retryState === RetryState.Retrying"
                             size="small"
                             variant="text"
                             color="error"
@@ -1039,7 +1075,7 @@ onUnmounted(() => {
                             :disabled="!!actionLoading[item.msg.id]"
                             @click="doCancel(item.msg)"
                           >
-                            Cancel
+                            {{ item.msg.retryState === RetryState.Failed ? 'Dismiss' : 'Cancel' }}
                           </v-btn>
                         </div>
                       </div>
@@ -1131,26 +1167,6 @@ onUnmounted(() => {
 
         <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
         <v-window-item value="outbox">
-          <div
-            v-if="failedOutbox.length"
-            class="d-flex align-center flex-wrap ga-2 px-3 py-2 outbox-failed-bar"
-          >
-            <v-icon icon="mdi-alert-circle" color="error" size="18" />
-            <span class="text-body-2">
-              {{ failedOutbox.length }} message{{ failedOutbox.length === 1 ? '' : 's' }} gave up
-              without an ACK. Retry them, or dismiss to clear the badge.
-            </span>
-            <v-spacer />
-            <v-btn
-              size="small"
-              variant="tonal"
-              color="error"
-              :loading="dismissingAll"
-              @click="dismissAllFailed"
-            >
-              Dismiss all failed
-            </v-btn>
-          </div>
           <!-- v-table scrolls horizontally inside the card on narrow screens -->
           <v-table density="compact" class="outbox-table">
             <thead>
@@ -1781,11 +1797,6 @@ onUnmounted(() => {
   z-index: 1;
   background: rgb(var(--v-theme-surface));
   border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-}
-
-.outbox-failed-bar {
-  background: rgba(var(--v-theme-error), 0.08);
-  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 /* Tab row: underline text tabs with count chips, Compose at the right. */
