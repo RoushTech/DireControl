@@ -56,8 +56,8 @@ const shortcuts = [
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 // One flat set of destinations in three groups; no hover menus anywhere
-// (review 1.20). Desktop: labelled rail. Tablet: icon rail with labels under
-// the icons. Phone: bottom nav with the four most-used pages plus More.
+// (review 1.20). Desktop: labelled rail. Tablet / collapsed: icons only,
+// names on hover. Phone: bottom nav with the four most-used pages plus More.
 interface NavItem {
   to: string
   title: string
@@ -249,7 +249,7 @@ async function syncServerClock() {
     <v-navigation-drawer
       v-if="!route.meta.isPopOut && navMode !== 'bottom'"
       permanent
-      :width="navMode === 'rail' ? 208 : 84"
+      :width="navMode === 'rail' ? 208 : 56"
       class="app-rail"
       :class="`app-rail--${navMode}`"
       aria-label="Main"
@@ -290,7 +290,8 @@ async function syncServerClock() {
               </v-badge>
               <v-icon v-else :icon="item.icon" size="22" />
             </span>
-            <span class="rail-label">{{ item.title }}</span>
+            <span v-if="navMode === 'rail'" class="rail-label">{{ item.title }}</span>
+            <v-tooltip v-else activator="parent" location="end" :text="item.title" />
             <v-badge
               v-if="badgeFor(item) && navMode === 'rail'"
               :content="badgeFor(item)!.content"
@@ -704,17 +705,12 @@ body,
 .v-btn--disabled.v-btn--variant-flat .v-btn__overlay {
   opacity: 0 !important;
 }
-/* Tablet: icon over a small label, centred. */
+/* Tablet / collapsed: icon only, centred; the name shows in a tooltip. */
 .app-rail--icons .rail-item {
-  flex-direction: column;
-  gap: 2px;
-  margin: 1px 6px;
-  padding: 6px 2px;
-  text-align: center;
-}
-.app-rail--icons .rail-label {
-  font-size: 0.6875rem;
-  line-height: 1.1;
+  justify-content: center;
+  margin: 2px 6px;
+  padding: 0;
+  min-height: 40px;
 }
 .rail-foot {
   padding: 12px 16px 0;
