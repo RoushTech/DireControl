@@ -26,6 +26,7 @@ public class DireControlContext(DbContextOptions<DireControlContext> options) : 
     public DbSet<TerminalMacro> TerminalMacros => Set<TerminalMacro>();
     public DbSet<LightningStrikeRecord> LightningStrikes => Set<LightningStrikeRecord>();
     public DbSet<RfHeardDaily> RfHeardDailies => Set<RfHeardDaily>();
+    public DbSet<ModemRxMinute> ModemRxMinutes => Set<ModemRxMinute>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

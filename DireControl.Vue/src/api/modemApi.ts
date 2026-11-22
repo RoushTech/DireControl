@@ -195,6 +195,35 @@ export async function getModemDiagnostics(): Promise<ModemDiagnosticsDto[]> {
   return data
 }
 
+/** One time bucket of a radio's decode history. */
+export interface ModemRxBucketDto {
+  /** Start of the bucket (UTC ISO string). */
+  start: string
+  /** Frames decoded with a passing checksum, repaired ones included. */
+  decodedFrames: number
+  /** Frames that failed their checksum and could not be repaired. */
+  invalidFrames: number
+  /** Decoded frames that needed a bit repair to pass their checksum. */
+  repairedFrames: number
+}
+
+/** GET api/v0/modem/{radioId}/rx-history — decode counts over time, oldest bucket first. */
+export interface ModemRxHistoryDto {
+  bucketMinutes: number
+  buckets: ModemRxBucketDto[]
+}
+
+export async function getModemRxHistory(
+  radioId: string,
+  hours: number,
+): Promise<ModemRxHistoryDto> {
+  const { data } = await http.get<ModemRxHistoryDto>(
+    `/api/v0/modem/${encodeURIComponent(radioId)}/rx-history`,
+    { params: { hours } },
+  )
+  return data
+}
+
 export async function restartModem(): Promise<void> {
   await http.post('/api/v0/modem/restart')
 }

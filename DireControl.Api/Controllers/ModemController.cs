@@ -37,6 +37,20 @@ public class ModemController(
     public ActionResult<List<ModemDiagnosticsDto>> GetDiagnostics() =>
         Ok(modemService.GetDiagnostics().ToList());
 
+    /// <summary>
+    /// One radio's decoded, bad-CRC and bit-repaired frame counts over the last
+    /// <paramref name="hours"/> hours (1 to 720), bucketed for a chart.
+    /// </summary>
+    [HttpGet("{radioId}/rx-history")]
+    public async Task<ActionResult<ModemRxHistoryDto>> GetRxHistory(
+        string radioId, [FromQuery] int hours = 24, CancellationToken ct = default)
+    {
+        if (hours is < 1 or > ModemRxHistoryLogic.MaxHours)
+            return BadRequest($"hours must be between 1 and {ModemRxHistoryLogic.MaxHours}.");
+
+        return Ok(await ModemRxHistoryService.QueryAsync(db, radioId, hours, DateTime.UtcNow, ct));
+    }
+
     internal static ModemStatusDto ToDto(ModemStatusSnapshot s) => new()
     {
         RadioId = s.RadioId,

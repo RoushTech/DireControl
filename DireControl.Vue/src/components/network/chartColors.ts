@@ -19,6 +19,14 @@ export function sourceColors(colors: ThemeColors): { rf: string; is: string } {
   }
 }
 
+/** Decoded frames are the info blue, bad-CRC frames the error red: apart under colour-blind vision. */
+export function decodeColors(colors: ThemeColors): { decoded: string; badCrc: string } {
+  return {
+    decoded: pick(colors, 'info') ?? '#1c60ba',
+    badCrc: pick(colors, 'error') ?? '#c02430',
+  }
+}
+
 /** `#rrggbb` (or `#rgb`) → `rgba(r, g, b, alpha)`; other strings pass through unchanged. */
 export function withAlpha(color: string, alpha: number): string {
   let hex = color.trim()

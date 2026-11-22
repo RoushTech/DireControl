@@ -19,13 +19,14 @@ import { useHealthStore, agoShort, durationShort } from '@/stores/health'
 import { useRadiosStore } from '@/stores/radiosStore'
 import { TxFrameStates } from '@/api/txApi'
 import CaptureDiagnostics from '@/components/CaptureDiagnostics.vue'
+import RxHistoryChart from '@/components/RxHistoryChart.vue'
 
 /**
  * The RF internals that used to be hidden under the headphones button or not
  * shown at all: carrier-detect duty
  * and the stuck rule, TX lanes and drops, CSMA waits and timeouts, ALSA
- * period and overruns, PTT state and watchdog, decodes per profile, plus
- * recording, auto-capture and the log pack.
+ * period and overruns, PTT state and watchdog, decodes per profile, decoded
+ * and bad-CRC frames over time, plus recording, auto-capture and the log pack.
  */
 const toast = useToastStore()
 const txStore = useTxStore()
@@ -393,6 +394,13 @@ async function doForceUnkey(d: ModemDiagnosticsDto) {
             </v-card-text>
           </v-card>
         </div>
+
+        <v-card variant="outlined" class="mt-4">
+          <v-card-title class="text-subtitle-2">Decode history</v-card-title>
+          <v-card-text>
+            <RxHistoryChart :radio-id="d.radioId" />
+          </v-card-text>
+        </v-card>
       </section>
 
       <!-- Recording, auto-capture and the log pack (moved from the headphones menu) -->

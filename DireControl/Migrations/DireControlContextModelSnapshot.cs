@@ -276,6 +276,30 @@ namespace DireControl.Migrations
                     b.ToTable("Messages");
                 });
 
+            modelBuilder.Entity("DireControl.Data.Models.ModemRxMinute", b =>
+                {
+                    b.Property<string>("RadioId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Minute")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DecodedFrames")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("InvalidFrames")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("RepairedFrames")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("RadioId", "Minute");
+
+                    b.HasIndex("Minute");
+
+                    b.ToTable("ModemRxMinutes");
+                });
+
             modelBuilder.Entity("DireControl.Data.Models.OwnBeacon", b =>
                 {
                     b.Property<int>("Id")

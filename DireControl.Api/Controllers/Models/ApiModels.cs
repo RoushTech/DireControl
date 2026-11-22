@@ -350,6 +350,31 @@ public sealed class ModemDiagnosticsDto
     public DateTime? LastTxAt { get; init; }
 }
 
+/// <summary>GET api/v0/modem/{radioId}/rx-history — one radio's decode counts over time.</summary>
+public sealed class ModemRxHistoryDto
+{
+    /// <summary>Width of every bucket in minutes.</summary>
+    public int BucketMinutes { get; init; }
+
+    /// <summary>Every bucket in the range, oldest first; the last one is still filling.</summary>
+    public required IReadOnlyList<ModemRxBucketDto> Buckets { get; init; }
+}
+
+public sealed class ModemRxBucketDto
+{
+    /// <summary>Start of the bucket (UTC).</summary>
+    public DateTime Start { get; init; }
+
+    /// <summary>Frames decoded with a passing checksum, repaired ones included.</summary>
+    public int DecodedFrames { get; init; }
+
+    /// <summary>Frames that failed their checksum and could not be repaired.</summary>
+    public int InvalidFrames { get; init; }
+
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public int RepairedFrames { get; init; }
+}
+
 public sealed class UpdateStationIdentityRequest
 {
     public string? Callsign { get; init; }

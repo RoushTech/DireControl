@@ -90,6 +90,7 @@ services
     .AddSingleton<SoundModemService>()
     .AddHostedService(sp => sp.GetRequiredService<SoundModemService>())
     .AddHostedService<ModemStatusBroadcaster>()
+    .AddHostedService<ModemRxHistoryService>()
     .AddSingleton<IFrameTransmitter, FrameTransmitService>()
     .AddSingleton(TimeProvider.System)
     .AddSingleton<TxFrameRegistry>()
