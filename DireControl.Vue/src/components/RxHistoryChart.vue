@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -10,14 +10,17 @@ import {
   type TooltipItem,
 } from 'chart.js'
 import { useTheme } from 'vuetify'
-import { getModemRxHistory, type ModemRxHistoryDto } from '@/api/modemApi'
+import { getModemRxHistory, type ModemRxBucketDto, type ModemRxHistoryDto } from '@/api/modemApi'
 import { apiErrorDetail } from '@/api/axios'
 import { formatDateLabel, formatTimeOfDay } from '@/utils/time'
-import { axisColors, decodeColors, withAlpha } from '@/components/network/chartColors'
+import { axisColors, decodeColors } from '@/components/network/chartColors'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ChartTooltip)
 
-/** One radio's decoded and bad-CRC frame counts over a chosen range, from the stored per-minute history. */
+/**
+ * One radio's bad-CRC, bit-repaired and cleanly decoded frame counts over a chosen
+ * range, from the stored per-minute history. Each series can be hidden from the legend.
+ */
 const props = defineProps<{ radioId: string }>()
 
 const RANGES = [
@@ -101,24 +104,41 @@ const totals = computed(() => {
   return { decoded, invalid, repaired, frames: decoded + invalid }
 })
 
+type SeriesKey = 'badCrc' | 'repaired' | 'clean'
+
+/** Which series are drawn. A hidden one leaves the stack, so the rest sit on the baseline. */
+const shown = reactive<Record<SeriesKey, boolean>>({ badCrc: true, repaired: true, clean: true })
+
+/** Stack order, bottom first. Repaired frames are counted inside decoded, so "clean" is the rest. */
+const series = computed<
+  Array<{ key: SeriesKey; label: string; color: string; value: (b: ModemRxBucketDto) => number }>
+>(() => [
+  { key: 'badCrc', label: 'Bad CRC', color: palette.value.badCrc, value: (b) => b.invalidFrames },
+  {
+    key: 'repaired',
+    label: 'Recovered by bit repair',
+    color: palette.value.repaired,
+    value: (b) => b.repairedFrames,
+  },
+  {
+    key: 'clean',
+    label: 'Decoded as received',
+    color: palette.value.decoded,
+    value: (b) => b.decodedFrames - b.repairedFrames,
+  },
+])
+
 const data = computed(() => ({
   labels: buckets.value.map((b) => tickLabel(b.start)),
-  datasets: [
-    {
-      label: 'Bad CRC',
-      data: buckets.value.map((b) => b.invalidFrames),
-      backgroundColor: palette.value.badCrc,
+  datasets: series.value
+    .filter((s) => shown[s.key])
+    .map((s) => ({
+      label: s.label,
+      data: buckets.value.map(s.value),
+      backgroundColor: s.color,
       borderRadius: 2,
       stack: 'frames',
-    },
-    {
-      label: 'Decoded',
-      data: buckets.value.map((b) => b.decodedFrames),
-      backgroundColor: withAlpha(palette.value.decoded, 0.85),
-      borderRadius: 2,
-      stack: 'frames',
-    },
-  ],
+    })),
 }))
 
 const options = computed(() => ({
@@ -138,11 +158,7 @@ const options = computed(() => ({
         footer: (items: TooltipItem<'bar'>[]) => {
           const b = buckets.value[items[0]?.dataIndex ?? -1]
           if (!b) return ''
-          const lines = [
-            `Bad CRC share: ${percent(b.invalidFrames, b.invalidFrames + b.decodedFrames)}`,
-          ]
-          if (b.repairedFrames > 0) lines.push(`Recovered by bit repair: ${b.repairedFrames}`)
-          return lines
+          return `Bad CRC share: ${percent(b.invalidFrames, b.invalidFrames + b.decodedFrames)}`
         },
       },
     },
@@ -209,22 +225,33 @@ const options = computed(() => ({
     v-else-if="history"
     class="chart-wrap"
     role="img"
-    :aria-label="`Decoded and bad CRC frames per ${bucketLabel}`"
+    :aria-label="`Bad CRC, bit-repaired and decoded frames per ${bucketLabel}`"
   >
     <Bar :data="data" :options="options" />
   </div>
   <div v-else class="chart-wrap" />
 
-  <div class="d-flex align-center flex-wrap ga-4 mt-2 text-caption">
-    <span class="d-flex align-center ga-1">
-      <span class="swatch" :style="{ background: withAlpha(palette.decoded, 0.85) }" />
-      Decoded
-    </span>
-    <span class="d-flex align-center ga-1">
-      <span class="swatch" :style="{ background: palette.badCrc }" />
-      Bad CRC
-    </span>
-    <span class="text-medium-emphasis">Frames per {{ bucketLabel }}</span>
+  <div class="d-flex align-center flex-wrap ga-2 mt-2 text-caption">
+    <v-chip
+      v-for="s in series"
+      :key="s.key"
+      size="small"
+      :variant="shown[s.key] ? 'tonal' : 'outlined'"
+      :class="{ 'series-off': !shown[s.key] }"
+      role="button"
+      :aria-pressed="shown[s.key]"
+      :aria-label="`${shown[s.key] ? 'Hide' : 'Show'} ${s.label}`"
+      @click="shown[s.key] = !shown[s.key]"
+    >
+      <span
+        class="swatch mr-2"
+        :style="
+          shown[s.key] ? { background: s.color } : { boxShadow: `inset 0 0 0 2px ${s.color}` }
+        "
+      />
+      {{ s.label }}
+    </v-chip>
+    <span class="text-medium-emphasis ml-2">Frames per {{ bucketLabel }}</span>
   </div>
 </template>
 
@@ -239,5 +266,9 @@ const options = computed(() => ({
   width: 10px;
   height: 10px;
   border-radius: 2px;
+}
+
+.series-off {
+  opacity: 0.7;
 }
 </style>

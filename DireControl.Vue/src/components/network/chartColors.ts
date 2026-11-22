@@ -19,10 +19,20 @@ export function sourceColors(colors: ThemeColors): { rf: string; is: string } {
   }
 }
 
-/** Decoded frames are the info blue, bad-CRC frames the error red: apart under colour-blind vision. */
-export function decodeColors(colors: ThemeColors): { decoded: string; badCrc: string } {
+/**
+ * Decode-history series. Frames decoded as received are the info blue, bit-repaired
+ * ones a half-strength tint of it (they are a subset of decoded), bad-CRC frames the
+ * error red. Every pair stays apart under colour-blind vision in both themes.
+ */
+export function decodeColors(colors: ThemeColors): {
+  decoded: string
+  repaired: string
+  badCrc: string
+} {
+  const decoded = pick(colors, 'info') ?? '#1c60ba'
   return {
-    decoded: pick(colors, 'info') ?? '#1c60ba',
+    decoded,
+    repaired: withAlpha(decoded, 0.5),
     badCrc: pick(colors, 'error') ?? '#c02430',
   }
 }
