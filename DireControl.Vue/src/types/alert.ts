@@ -61,6 +61,29 @@ export interface CreateProximityRuleRequest {
   radiusMetres: number
 }
 
+export interface LightningAlertDto {
+  distanceKm: number
+  /** Bearing from the home position to the strike, degrees 0–360. */
+  bearingDegrees: number
+  latitude: number
+  longitude: number
+  strikeTimeUtc: string
+  radiusKm: number
+  /**
+   * Seconds between the strike and the alert being broadcast, measured on the server —
+   * i.e. how far behind the lightning feed was running. Unaffected by client clock skew.
+   */
+  feedLagSeconds: number
+}
+
+/** A strike that fired a proximity alert, kept client-side so the map can mark it. */
+export interface TriggeringStrike extends LightningAlertDto {
+  /** Stable identity for the strike (time + rounded position). */
+  key: string
+  /** Local clock time the alert arrived, used for expiry. */
+  alertedAt: number
+}
+
 export const ALERT_TYPE_COLORS: Record<string, string> = {
   WatchList: 'amber',
   Proximity: 'blue',

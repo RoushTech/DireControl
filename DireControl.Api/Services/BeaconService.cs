@@ -1,27 +1,67 @@
-using System.Text;
+using DireControl.Enums;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Hubs;
 using DireControl.Data;
 using DireControl.Data.Models;
+using DireControl.Modem.Ax25;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Reflection;
 
 namespace DireControl.Api.Services;
 
 /// <summary>
-/// Sends an immediate APRS position beacon via KISS and records it as an
+/// Sends an immediate APRS position beacon over RF and records it as an
 /// <see cref="OwnBeacon"/> in the database so it always appears in the UI
 /// regardless of whether it is heard back from RF (e.g. when a collision
 /// prevents the normal KISS echo from arriving).
 /// </summary>
+/// <summary>A queued beacon: its history row and its TX frame id (lifecycle on <c>txFrameStateChanged</c>).</summary>
+public sealed record BeaconSendResult(OwnBeacon Beacon, long FrameId);
+
 public sealed class BeaconService(
-    KissConnectionHolder connectionHolder,
+    IFrameTransmitter transmitter,
     IHubContext<PacketHub> hubContext,
     IServiceScopeFactory scopeFactory,
     IOptions<DireControlOptions> options,
     ILogger<BeaconService> logger)
 {
+    /// <summary>Comment template used when the radio has none configured.</summary>
+    internal const string DefaultCommentTemplate = "DireControl v{version}";
+
+    /// <summary>
+    /// App version substituted for <c>{version}</c> tokens, with any
+    /// "+buildmetadata" suffix trimmed off the informational version.
+    /// </summary>
+    internal static readonly string Version = ResolveVersion(
+        typeof(BeaconService).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion);
+
+    internal static string ResolveVersion(string? informationalVersion)
+    {
+        var version = informationalVersion ?? "unknown";
+        var plus = version.IndexOf('+');
+        return plus >= 0 ? version[..plus] : version;
+    }
+
+    /// <summary>
+    /// The comment actually transmitted for <paramref name="radio"/>: the
+    /// configured comment (or <see cref="DefaultCommentTemplate"/> when blank)
+    /// with <c>{version}</c> tokens expanded.
+    /// </summary>
+    internal static string EffectiveComment(Radio radio) =>
+        EffectiveComment(radio, Version);
+
+    internal static string EffectiveComment(Radio radio, string version)
+    {
+        var template = string.IsNullOrWhiteSpace(radio.BeaconComment)
+            ? DefaultCommentTemplate
+            : radio.BeaconComment;
+        return template.Replace("{version}", version, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Transmits a position beacon for <paramref name="radio"/> and immediately
     /// records it as a <see cref="OwnBeacon"/> with <c>HopCount = -2</c> and
@@ -30,7 +70,7 @@ public sealed class BeaconService(
     /// Returns the saved record, or <see langword="null"/> if the beacon could
     /// not be sent (no connection, or home position not configured).
     /// </summary>
-    public async Task<OwnBeacon?> BeaconNowAsync(Radio radio, CancellationToken ct = default)
+    public async Task<BeaconSendResult?> BeaconNowAsync(Radio radio, CancellationToken ct = default)
     {
         var opts = options.Value;
 
@@ -46,13 +86,16 @@ public sealed class BeaconService(
         var lon = opts.HomeLon.Value;
         var path = radio.BeaconPath ?? string.Empty;
 
-        var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", radio.BeaconComment);
-        var frame = BuildAx25Frame(radio.FullCallsign, info, path);
+        var comment = EffectiveComment(radio);
+        var info = BuildPositionInfo(lat, lon, radio.BeaconSymbol ?? "/-", comment);
+        var frame = Ax25Encoder.EncodeUiFrame(radio.FullCallsign, info, path);
 
-        if (!connectionHolder.TrySend(frame))
+        var frameId = transmitter.Send(
+            frame, radio.ChannelNumber, new TxFrameInfo(TxFrameKind.Beacon, "Position beacon"));
+        if (frameId is null)
         {
             logger.LogWarning(
-                "Cannot beacon for {Callsign}: no active Direwolf connection.",
+                "Cannot beacon for {Callsign}: no RF transmit backend available.",
                 radio.FullCallsign);
             return null;
         }
@@ -71,7 +114,7 @@ public sealed class BeaconService(
             BeaconedAt = DateTime.UtcNow,
             Latitude = lat,
             Longitude = lon,
-            Comment = string.IsNullOrEmpty(radio.BeaconComment) ? null : radio.BeaconComment,
+            Comment = comment,
             PathUsed = string.IsNullOrEmpty(path) ? null : path,
             HopCount = -2,
             Heard = false,
@@ -92,21 +135,17 @@ public sealed class BeaconService(
             Heard = false,
         }, ct);
 
-        return beacon;
+        return new BeaconSendResult(beacon, frameId.Value);
     }
 
     // ── APRS position info field ───────────────────────────────────────────────
 
-    private static string BuildPositionInfo(double lat, double lon, string symbol, string? comment)
+    internal static string BuildPositionInfo(double lat, double lon, string symbol, string? comment)
     {
-        var latAbs = Math.Abs(lat);
-        var latDeg = (int)latAbs;
-        var latMin = (latAbs - latDeg) * 60.0;
+        var (latDeg, latMin) = SplitDegreesMinutes(lat);
         var latDir = lat >= 0 ? 'N' : 'S';
 
-        var lonAbs = Math.Abs(lon);
-        var lonDeg = (int)lonAbs;
-        var lonMin = (lonAbs - lonDeg) * 60.0;
+        var (lonDeg, lonMin) = SplitDegreesMinutes(lon);
         var lonDir = lon >= 0 ? 'E' : 'W';
 
         var symbolTable = symbol.Length >= 1 ? symbol[0] : '/';
@@ -114,55 +153,18 @@ public sealed class BeaconService(
 
         var commentPart = string.IsNullOrEmpty(comment) ? string.Empty : comment;
 
-        return $"!{latDeg:D2}{latMin:00.00}{latDir}{symbolTable}{lonDeg:D3}{lonMin:00.00}{lonDir}{symbolCode}{commentPart}";
+        return $"!{latDeg:D2}{latMin / 100:D2}.{latMin % 100:D2}{latDir}{symbolTable}"
+            + $"{lonDeg:D3}{lonMin / 100:D2}.{lonMin % 100:D2}{lonDir}{symbolCode}{commentPart}";
     }
 
-    // ── AX.25 frame encoding (mirrors MessageSendingService) ──────────────────
-
-    private static byte[] BuildAx25Frame(string sourceCallsign, string aprsInfo, string path)
+    /// <summary>
+    /// Whole degrees and minutes ×100 for an APRS ddmm.mm field.  Rounds the
+    /// total in hundredths of a minute <em>before</em> splitting, so 45.99999°
+    /// becomes 46°00.00' rather than the invalid 45°60.00'.
+    /// </summary>
+    private static (int Degrees, int HundredthsOfMinute) SplitDegreesMinutes(double value)
     {
-        const string destination = "APRS";
-
-        var (destBase, destSsid) = SplitCallsign(destination);
-        var (srcBase, srcSsid) = SplitCallsign(sourceCallsign);
-
-        var pathItems = string.IsNullOrWhiteSpace(path)
-            ? []
-            : path.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var frame = new List<byte>(128);
-
-        frame.AddRange(EncodeAddress(destBase, destSsid, isLast: false));
-        frame.AddRange(EncodeAddress(srcBase, srcSsid, isLast: pathItems.Length == 0));
-
-        for (var i = 0; i < pathItems.Length; i++)
-        {
-            var (dBase, dSsid) = SplitCallsign(pathItems[i]);
-            frame.AddRange(EncodeAddress(dBase, dSsid, isLast: i == pathItems.Length - 1));
-        }
-
-        frame.Add(0x03); // Control: Unnumbered Information (UI)
-        frame.Add(0xF0); // PID: no layer-3 protocol
-
-        frame.AddRange(Encoding.ASCII.GetBytes(aprsInfo));
-
-        return [.. frame];
-    }
-
-    private static byte[] EncodeAddress(string callsign, int ssid, bool isLast)
-    {
-        var padded = callsign.ToUpperInvariant().PadRight(6)[..6];
-        var bytes = new byte[7];
-        for (var i = 0; i < 6; i++)
-            bytes[i] = (byte)((padded[i] & 0x7F) << 1);
-        bytes[6] = (byte)(0x60 | ((ssid & 0x0F) << 1) | (isLast ? 0x01 : 0x00));
-        return bytes;
-    }
-
-    private static (string callsign, int ssid) SplitCallsign(string raw)
-    {
-        var parts = raw.Split('-', 2);
-        var ssid = parts.Length > 1 && int.TryParse(parts[1], out var n) ? n : 0;
-        return (parts[0], ssid);
+        var total = (long)Math.Round(Math.Abs(value) * 6000.0, MidpointRounding.AwayFromZero);
+        return ((int)(total / 6000), (int)(total % 6000));
     }
 }

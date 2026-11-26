@@ -15,7 +15,7 @@ namespace DireControl.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.3");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.15");
 
             modelBuilder.Entity("DireControl.Data.Models.Alert", b =>
                 {
@@ -166,6 +166,28 @@ namespace DireControl.Migrations
                     b.ToTable("Geofences");
                 });
 
+            modelBuilder.Entity("DireControl.Data.Models.LightningStrikeRecord", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("Latitude")
+                        .HasColumnType("REAL");
+
+                    b.Property<double>("Longitude")
+                        .HasColumnType("REAL");
+
+                    b.Property<DateTime>("TimeUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TimeUtc");
+
+                    b.ToTable("LightningStrikes");
+                });
+
             modelBuilder.Entity("DireControl.Data.Models.LogLevelOverride", b =>
                 {
                     b.Property<string>("Category")
@@ -200,6 +222,9 @@ namespace DireControl.Migrations
                     b.Property<bool>("IsRead")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("LastReceivedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("LastSentAt")
                         .HasColumnType("TEXT");
 
@@ -213,8 +238,16 @@ namespace DireControl.Migrations
                     b.Property<DateTime?>("NextRetryAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("PacketId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("PathUsed")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("ReceiveCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1);
 
                     b.Property<DateTime>("ReceivedAt")
                         .HasColumnType("TEXT");
@@ -234,11 +267,37 @@ namespace DireControl.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("PacketId");
+
                     b.HasIndex("ReceivedAt");
 
                     b.HasIndex("RetryState", "NextRetryAt");
 
                     b.ToTable("Messages");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.ModemRxMinute", b =>
+                {
+                    b.Property<string>("RadioId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Minute")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DecodedFrames")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("InvalidFrames")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("RepairedFrames")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("RadioId", "Minute");
+
+                    b.HasIndex("Minute");
+
+                    b.ToTable("ModemRxMinutes");
                 });
 
             modelBuilder.Entity("DireControl.Data.Models.OwnBeacon", b =>
@@ -300,6 +359,9 @@ namespace DireControl.Migrations
 
                     b.Property<string>("GridSquare")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("HeardVia")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int>("HopCount")
                         .HasColumnType("INTEGER");
@@ -370,7 +432,63 @@ namespace DireControl.Migrations
 
                     b.HasIndex("StationCallsign", "ReceivedAt");
 
+                    b.HasIndex("HeardVia", "Source", "ReceivedAt");
+
                     b.ToTable("Packets");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.PmsMessage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FromCallsign")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsKilled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("KilledAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Origin")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("ReadAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ToCallsign")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("IsKilled");
+
+                    b.HasIndex("ToCallsign");
+
+                    b.ToTable("PmsMessages");
                 });
 
             modelBuilder.Entity("DireControl.Data.Models.ProximityRule", b =>
@@ -411,6 +529,12 @@ namespace DireControl.Migrations
                         .HasMaxLength(36)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("AutoBeaconEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AutoBeaconIntervalSeconds")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("BeaconComment")
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
@@ -437,6 +561,9 @@ namespace DireControl.Migrations
                     b.Property<int>("ExpectedIntervalSeconds")
                         .HasColumnType("INTEGER");
 
+                    b.Property<double?>("FrequencyMhz")
+                        .HasColumnType("REAL");
+
                     b.Property<string>("FullCallsign")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -444,6 +571,23 @@ namespace DireControl.Migrations
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("Mode")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ModemCaptureDevice")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ModemEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ModemPlaybackDevice")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -454,9 +598,70 @@ namespace DireControl.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("PttGpioActiveLow")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PttGpioChip")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PttGpioLine")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PttHidDevice")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("PttHidPin")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PttMethod")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PttRigctldHost")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("PttRigctldPort")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PttSerialPort")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("PttSerialUseDtr")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("PttSerialUseRts")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("RxBitRepair")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Ssid")
                         .HasMaxLength(4)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("TxAudioLevelPct")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TxDelayMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("TxEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TxPersistence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TxSlotTimeMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("TxSpaceBoostDb")
+                        .HasColumnType("REAL");
+
+                    b.Property<int>("TxTailMs")
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
@@ -465,6 +670,42 @@ namespace DireControl.Migrations
                     b.HasIndex("IsActive");
 
                     b.ToTable("Radios");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.RfHeardDaily", b =>
+                {
+                    b.Property<int>("ChannelNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DirectPackets")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DirectStationsWithPosition")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("LastComputedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<double?>("MaxDirectDistanceKm")
+                        .HasColumnType("REAL");
+
+                    b.Property<double?>("MedianDirectDistanceKm")
+                        .HasColumnType("REAL");
+
+                    b.Property<int>("NewDirectStations")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("UniqueDirectStations")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("ChannelNumber", "Day");
+
+                    b.HasIndex("Day");
+
+                    b.ToTable("RfHeardDailies");
                 });
 
             modelBuilder.Entity("DireControl.Data.Models.Station", b =>
@@ -560,10 +801,182 @@ namespace DireControl.Migrations
                     b.ToTable("StationStatistics");
                 });
 
+            modelBuilder.Entity("DireControl.Data.Models.TerminalMacro", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("AppendCr")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PayloadBase64")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SortOrder");
+
+                    b.ToTable("TerminalMacros");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.TerminalPreset", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Channel")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DigiPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsPinned")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("LastUsedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LocalCallsign")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Params")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RemoteCallsign")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("UseCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RemoteCallsign", "Channel", "DigiPath")
+                        .IsUnique();
+
+                    b.ToTable("TerminalPresets");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.TerminalSessionRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("BytesIn")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("BytesOut")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Channel")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DigiPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EndReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EndedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LocalCallsign")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Origin")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RemoteCallsign")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("StartedAt");
+
+                    b.ToTable("TerminalSessionRecords");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.TerminalTranscriptChunk", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte[]>("Data")
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<int>("Direction")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TerminalSessionRecordId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TerminalSessionRecordId", "Id");
+
+                    b.ToTable("TerminalTranscriptChunks");
+                });
+
             modelBuilder.Entity("DireControl.Data.Models.UserSetting", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgwpeServerBindAddress")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("AgwpeServerEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AgwpeServerPort")
                         .HasColumnType("INTEGER");
 
                     b.Property<bool>("AprsIsEnabled")
@@ -583,10 +996,103 @@ namespace DireControl.Migrations
                     b.Property<int>("AprsIsPort")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("AudioCaptureEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ConnectedModeDefaultPaclen")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ConnectedModeInboundEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ConnectedModeMaxSessions")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ConnectedModePreferMod128")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ConnectedModeRetries")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ConnectedModeT1Seconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ConnectedModeWindowSize")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("DeduplicationWindowSeconds")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("DigipeaterEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("DigipeaterFillInOnly")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DigipeaterMaxWideN")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("DirewolfEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DirewolfHost")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DirewolfPort")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DirewolfReconnectDelaySeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double?>("HomeLat")
+                        .HasColumnType("REAL");
+
+                    b.Property<double?>("HomeLon")
+                        .HasColumnType("REAL");
+
+                    b.Property<int?>("InitialRetryDelaySeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsToRfGatingEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("IsToRfPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("IsToRfRecentHeardMinutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("KissServerBindAddress")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("KissServerEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("KissServerPort")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("LightningAlertAutoPan")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("LightningAlertCooldownMinutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("LightningAlertEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("LightningAlertRadiusKm")
+                        .HasColumnType("REAL");
+
+                    b.Property<int?>("MaxRetryAttempts")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("OpenWeatherMapApiKey")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OurCallsign")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("OutboundPath")
@@ -602,14 +1108,30 @@ namespace DireControl.Migrations
                     b.Property<int>("PacketRetentionRfDays")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("PmsBannerText")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("PmsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PmsRetentionDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PmsSsid")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("RadarProvider")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("RainViewerProApiKey")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("TomorrowIoApiKey")
-                        .HasColumnType("TEXT");
+                    b.Property<bool>("RfToIsGatingEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TerminalTranscriptRetentionDays")
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
@@ -619,16 +1141,50 @@ namespace DireControl.Migrations
                         new
                         {
                             Id = 1,
+                            AgwpeServerBindAddress = "127.0.0.1",
+                            AgwpeServerEnabled = false,
+                            AgwpeServerPort = 8000,
                             AprsIsEnabled = false,
-                            AprsIsFilter = "r/39.0/-98.0/500 t/m",
+                            AprsIsFilter = "r/39.0/-98.0/500",
                             AprsIsHost = "rotate.aprs2.net",
                             AprsIsPort = 14580,
+                            AudioCaptureEnabled = true,
+                            ConnectedModeDefaultPaclen = 128,
+                            ConnectedModeInboundEnabled = false,
+                            ConnectedModeMaxSessions = 10,
+                            ConnectedModePreferMod128 = false,
+                            ConnectedModeRetries = 10,
+                            ConnectedModeT1Seconds = 3,
+                            ConnectedModeWindowSize = 4,
                             DeduplicationWindowSeconds = 60,
+                            DigipeaterEnabled = false,
+                            DigipeaterFillInOnly = false,
+                            DigipeaterMaxWideN = 2,
+                            DirewolfEnabled = false,
+                            DirewolfHost = "localhost",
+                            DirewolfPort = 8001,
+                            DirewolfReconnectDelaySeconds = 5,
+                            IsToRfGatingEnabled = false,
+                            IsToRfPath = "",
+                            IsToRfRecentHeardMinutes = 30,
+                            KissServerBindAddress = "0.0.0.0",
+                            KissServerEnabled = false,
+                            KissServerPort = 8010,
+                            LightningAlertAutoPan = false,
+                            LightningAlertCooldownMinutes = 5,
+                            LightningAlertEnabled = false,
+                            LightningAlertRadiusKm = 30.0,
                             OutboundPath = "WIDE1-1,WIDE2-1",
                             PacketRetentionAprsIsDays = 14,
                             PacketRetentionOwnDays = 0,
                             PacketRetentionRfDays = 0,
-                            RadarProvider = 0
+                            PmsBannerText = "Welcome to the DireControl mailbox. H for help.",
+                            PmsEnabled = false,
+                            PmsRetentionDays = 0,
+                            PmsSsid = 1,
+                            RadarProvider = 0,
+                            RfToIsGatingEnabled = false,
+                            TerminalTranscriptRetentionDays = 90
                         });
                 });
 
@@ -641,6 +1197,16 @@ namespace DireControl.Migrations
                         .IsRequired();
 
                     b.Navigation("OwnBeacon");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.Message", b =>
+                {
+                    b.HasOne("DireControl.Data.Models.Packet", "Packet")
+                        .WithMany()
+                        .HasForeignKey("PacketId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Packet");
                 });
 
             modelBuilder.Entity("DireControl.Data.Models.OwnBeacon", b =>
@@ -676,6 +1242,17 @@ namespace DireControl.Migrations
                     b.Navigation("Station");
                 });
 
+            modelBuilder.Entity("DireControl.Data.Models.TerminalTranscriptChunk", b =>
+                {
+                    b.HasOne("DireControl.Data.Models.TerminalSessionRecord", "TerminalSessionRecord")
+                        .WithMany("Chunks")
+                        .HasForeignKey("TerminalSessionRecordId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TerminalSessionRecord");
+                });
+
             modelBuilder.Entity("DireControl.Data.Models.OwnBeacon", b =>
                 {
                     b.Navigation("Confirmations");
@@ -691,6 +1268,11 @@ namespace DireControl.Migrations
                     b.Navigation("Packets");
 
                     b.Navigation("Statistics");
+                });
+
+            modelBuilder.Entity("DireControl.Data.Models.TerminalSessionRecord", b =>
+                {
+                    b.Navigation("Chunks");
                 });
 #pragma warning restore 612, 618
         }

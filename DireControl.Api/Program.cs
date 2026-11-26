@@ -22,9 +22,11 @@ var runtimeLoggingSource = new RuntimeLoggingConfigSource();
 services
     .AddSingleton(runtimeLoggingSource)
     .AddSingleton<LogLevelService>()
+    .AddSingleton<StationIdentityService>()
     .Configure<DireControlOptions>(config.GetSection(DireControlOptions.Section))
-    .Configure<DirewolfOptions>(config.GetSection(DirewolfOptions.Section))
     .Configure<QrzOptions>(config.GetSection(QrzOptions.Section))
+    .Configure<AudioCaptureOptions>(config.GetSection(AudioCaptureOptions.Section))
+    .Configure<ModemOptions>(config.GetSection(ModemOptions.Section))
     .AddOpenApi()
     .AddDbContext<DireControlContext>(options =>
         options.UseSqlite(config.GetConnectionString("Default") ?? "Data Source=direcontrol.db"))
@@ -71,13 +73,6 @@ services
             c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
         })
         .Services
-    .AddHttpClient("TomorrowIo")
-        .ConfigureHttpClient(c =>
-        {
-            c.Timeout = TimeSpan.FromSeconds(15);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("DireControl/1.0");
-        })
-        .Services
     .AddHttpClient("IEM")
         .ConfigureHttpClient(c =>
         {
@@ -86,6 +81,36 @@ services
         })
         .Services
     .AddHostedService<KissTcpService>()
+    .AddSingleton<RfFrameIngestService>()
+    .AddKeyedSingleton<RestartSignal>(RestartSignals.Modem)
+    .AddKeyedSingleton<RestartSignal>(RestartSignals.KissServer)
+    .AddSingleton<RadioAudioBroker>()
+    .AddSingleton<ModemAudioCaptureService>()
+    .AddHostedService(sp => sp.GetRequiredService<ModemAudioCaptureService>())
+    .AddSingleton<SoundModemService>()
+    .AddHostedService(sp => sp.GetRequiredService<SoundModemService>())
+    .AddHostedService<ModemStatusBroadcaster>()
+    .AddHostedService<ModemRxHistoryService>()
+    .AddSingleton<IFrameTransmitter, FrameTransmitService>()
+    .AddSingleton(TimeProvider.System)
+    .AddSingleton<TxFrameRegistry>()
+    .AddHostedService<TxFrameBroadcaster>()
+    .AddSingleton<DireControl.Api.Services.Ax25.Ax25SessionManager>()
+    .AddKeyedSingleton<RestartSignal>(RestartSignals.PacketServices)
+    .AddSingleton<DireControl.Api.Services.Terminal.TerminalTranscriptRecorder>()
+    .AddSingleton<DireControl.Api.Services.Terminal.TerminalSessionService>()
+    .AddHostedService(sp => sp.GetRequiredService<DireControl.Api.Services.Terminal.TerminalSessionService>())
+    .AddSingleton<DireControl.Api.Services.Pms.IPmsMailStore, DireControl.Api.Services.Pms.PmsMailStore>()
+    .AddSingleton<DireControl.Api.Services.Terminal.IPmsSessionServer, DireControl.Api.Services.Pms.PmsSessionHandler>()
+    .AddHostedService<DireControl.Api.Services.Pms.PmsHostService>()
+    .AddSingleton<DigipeaterService>()
+    .AddSingleton<AprsIsTxQueue>()
+    .AddSingleton<AprsIsTxInbound>()
+    .AddHostedService<AprsIsTxService>()
+    .AddSingleton<KissTcpServerService>()
+    .AddHostedService(sp => sp.GetRequiredService<KissTcpServerService>())
+    .AddSingleton<AgwpeTcpServerService>()
+    .AddHostedService(sp => sp.GetRequiredService<AgwpeTcpServerService>())
     .AddSingleton<AprsPacketParsingService>()
     .AddHostedService(sp => sp.GetRequiredService<AprsPacketParsingService>())
     .AddSingleton<PacketReprocessingService>()
@@ -94,15 +119,18 @@ services
     .AddHostedService<StationExpiryService>()
     .AddHostedService<AlertingService>()
     .AddHostedService<MessageRetryService>()
+    .AddHostedService<AutoBeaconService>()
     .AddHostedService<WeatherCacheService>()
     .AddHostedService<StatisticsAggregationService>()
+    .AddHostedService<RfHeardAggregationService>()
     .AddHostedService<LogBroadcastService>()
     .AddHostedService<DatabaseCleanupHostedService>()
     .AddSingleton<DatabaseMaintenanceService>()
     .AddSingleton<LogStreamBroadcaster>()
     .AddSingleton<ILoggerProvider, SignalRLoggerProvider>()
     .AddSingleton<KissConnectionHolder>()
-    .AddSingleton<AprsIsReconnectTrigger>()
+    .AddKeyedSingleton<RestartSignal>(RestartSignals.AprsIs)
+    .AddKeyedSingleton<RestartSignal>(RestartSignals.KissClient)
     .AddSingleton<IAprsIsStatusService, AprsIsStatusService>()
     .AddSingleton<BeaconService>()
     .AddSingleton<MessageSendingService>()
@@ -112,12 +140,19 @@ services
     .AddSingleton<RainViewerRadarProvider>()
     .AddSingleton<IemRadarProvider>()
     .AddSingleton<WindTileCache>()
-    .AddSingleton<LightningCache>();
+    .AddSingleton<LightningStrikeBuffer>()
+    .AddHostedService<BlitzortungService>()
+    .AddHostedService<LightningPersistenceService>()
+    .AddHostedService<LightningAlertService>();
 
 var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
+await LightningPersistenceService.RehydrateBufferAsync(app.Services);
 await app.Services.GetRequiredService<LogLevelService>().ApplyFromDatabaseAsync();
+await app.Services.GetRequiredService<StationIdentityService>().ApplyFromDatabaseAsync();
+await DatabaseInitializer.RepairInboxAsync(app.Services);
+await app.Services.GetRequiredService<ModemAudioCaptureService>().ApplyFromDatabaseAsync();
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
@@ -135,6 +170,8 @@ if (app.Environment.IsDevelopment())
 app.MapControllers();
 app.MapHub<PacketHub>(PacketHub.HubPath);
 app.MapHub<LogHub>(LogHub.HubPath);
+app.MapHub<TerminalHub>(TerminalHub.HubPath);
+app.MapHub<AudioHub>(AudioHub.HubPath);
 app.MapFallbackToFile("index.html");
 
 await app.RunAsync();

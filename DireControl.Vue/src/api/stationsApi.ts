@@ -1,27 +1,33 @@
-import http from "./axios";
-import type { StationDto, SettingsDto, CallsignLookupDto, StationStatisticDto } from "@/types/station";
-import type { TrackPointDto, PacketDto, WeatherReadingDto, SignalPointDto } from "@/types/packet";
+import http from './axios'
+import type {
+  StationDto,
+  SettingsDto,
+  CallsignLookupDto,
+  StationStatisticDto,
+} from '@/types/station'
+import type { TrackPointDto, PacketDto, WeatherReadingDto, SignalPointDto } from '@/types/packet'
 
 export async function getStations(includeStale = false): Promise<StationDto[]> {
-  const { data } = await http.get<StationDto[]>("/api/v0/stations", {
+  const { data } = await http.get<StationDto[]>('/api/v0/stations', {
     params: includeStale ? { includeStale: true } : undefined,
-  });
-  return data;
+  })
+  return data
 }
 
 export async function getStation(callsign: string): Promise<StationDto> {
-  const { data } = await http.get<StationDto>(
-    `/api/v0/stations/${encodeURIComponent(callsign)}`,
-  );
-  return data;
+  const { data } = await http.get<StationDto>(`/api/v0/stations/${encodeURIComponent(callsign)}`)
+  return data
 }
 
-export async function getStationTrack(callsign: string, durationMinutes = 60): Promise<TrackPointDto[]> {
+export async function getStationTrack(
+  callsign: string,
+  durationMinutes = 60,
+): Promise<TrackPointDto[]> {
   const { data } = await http.get<TrackPointDto[]>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/track`,
     { params: { durationMinutes } },
-  );
-  return data;
+  )
+  return data
 }
 
 export async function getStationPackets(
@@ -32,30 +38,26 @@ export async function getStationPackets(
   const { data } = await http.get<{ items: PacketDto[]; totalCount: number }>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/packets`,
     { params: { page, pageSize } },
-  );
-  return data;
+  )
+  return data
 }
 
-export async function getRecentPackets(): Promise<PacketDto[]> {
-  const { data } = await http.get<PacketDto[]>("/api/v0/packets/recent");
-  return data;
-}
-
+/** Returns the most recent `limit` packets since `since`, newest first. */
 export async function getPacketsSince(since: string, limit = 200): Promise<PacketDto[]> {
-  const { data } = await http.get<PacketDto[]>("/api/v0/packets", {
+  const { data } = await http.get<PacketDto[]>('/api/v0/packets', {
     params: { since, limit },
-  });
-  return data;
+  })
+  return data
 }
 
 export async function getPacket(id: number): Promise<PacketDto> {
-  const { data } = await http.get<PacketDto>(`/api/v0/packets/${id}`);
-  return data;
+  const { data } = await http.get<PacketDto>(`/api/v0/packets/${id}`)
+  return data
 }
 
 export async function getSettings(): Promise<SettingsDto> {
-  const { data } = await http.get<SettingsDto>("/api/v0/settings");
-  return data;
+  const { data } = await http.get<SettingsDto>('/api/v0/settings')
+  return data
 }
 
 export async function getStationWeather(
@@ -66,8 +68,8 @@ export async function getStationWeather(
   const { data } = await http.get<WeatherReadingDto[]>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/weather`,
     { params: from != null || to != null ? { from, to } : undefined },
-  );
-  return data;
+  )
+  return data
 }
 
 export async function getWatchList(): Promise<StationDto[]> {
@@ -97,11 +99,31 @@ export async function getStationStats(callsign: string): Promise<StationStatisti
   return data
 }
 
-export async function getStationSignal(callsign: string): Promise<SignalPointDto[]> {
+export async function getStationSignal(callsign: string, hours = 24): Promise<SignalPointDto[]> {
   const { data } = await http.get<SignalPointDto[]>(
     `/api/v0/stations/${encodeURIComponent(callsign)}/signal`,
+    { params: { hours } },
   )
   return data
+}
+
+export interface UpdateStationIdentityRequest {
+  callsign: string
+  homeLat?: number | null
+  homeLon?: number | null
+}
+
+/** Saves the station callsign and home position (used for beaconing and range). */
+export async function updateStationIdentity(request: UpdateStationIdentityRequest): Promise<void> {
+  await http.put('/api/v0/settings/station', request)
+}
+
+/** PUT api/v0/settings/message-retry — attempts 1–10, first delay 10–600 s (doubles each retry). */
+export async function updateMessageRetry(payload: {
+  maxRetryAttempts: number
+  initialRetryDelaySeconds: number
+}): Promise<void> {
+  await http.put('/api/v0/settings/message-retry', payload)
 }
 
 export async function updateOutboundPath(outboundPath: string): Promise<void> {
@@ -124,13 +146,30 @@ export const RadarProvider = {
   RainViewer: 1,
   RainViewerPro: 2,
 } as const
-export type RadarProvider = typeof RadarProvider[keyof typeof RadarProvider]
+export type RadarProvider = (typeof RadarProvider)[keyof typeof RadarProvider]
+
+export async function updateLightningAlerts(
+  lightningAlertEnabled: boolean,
+  lightningAlertRadiusKm: number,
+  lightningAlertCooldownMinutes: number,
+  lightningAlertAutoPan: boolean,
+): Promise<void> {
+  await http.put('/api/v0/settings/lightning-alerts', {
+    lightningAlertEnabled,
+    lightningAlertRadiusKm,
+    lightningAlertCooldownMinutes,
+    lightningAlertAutoPan,
+  })
+}
 
 export async function updateWeatherApiKeys(
   openWeatherMapApiKey: string | null,
-  tomorrowIoApiKey: string | null,
   radarProvider: RadarProvider,
   rainViewerProApiKey: string | null,
 ): Promise<void> {
-  await http.put('/api/v0/settings/weather-keys', { openWeatherMapApiKey, tomorrowIoApiKey, radarProvider, rainViewerProApiKey })
+  await http.put('/api/v0/settings/weather-keys', {
+    openWeatherMapApiKey,
+    radarProvider,
+    rainViewerProApiKey,
+  })
 }

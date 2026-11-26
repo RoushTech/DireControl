@@ -74,4 +74,12 @@ public class CallsignMatcherTests
         Assert.That(CallsignMatcher.Matches(mobile, "W3UWU"), Is.False);
         Assert.That(CallsignMatcher.Matches(mobile, "W3UWU-1"), Is.False);
     }
+
+    [TestCase("w3uwu-10", "W3UWU")]
+    [TestCase("W3UWU", "W3UWU")]
+    [TestCase(" k4abc-1 ", "K4ABC")]
+    public void BaseCallsign_StripsSsidAndUppercases(string input, string expected)
+    {
+        Assert.That(CallsignMatcher.BaseCallsign(input), Is.EqualTo(expected));
+    }
 }

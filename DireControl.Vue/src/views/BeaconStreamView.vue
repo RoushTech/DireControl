@@ -1,34 +1,71 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { useOwnCallsign } from '@/composables/useOwnCallsign'
+import { sourceChip, isOwnCallsign, type SourceChip } from '@/types/packet'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
 import { useBeaconStreamStore } from '@/stores/beaconStream'
+import { usePacketHubStore } from '@/stores/packetHub'
 import { useStationSelectionStore } from '@/stores/stationSelection'
+import { useHealthStore, agoShort } from '@/stores/health'
+import { useRadiosStore } from '@/stores/radiosStore'
 import { getPacketsSince } from '@/api/stationsApi'
 import {
   PacketType,
   PACKET_TYPE_LABELS,
   PACKET_TYPE_COLORS,
   parsedTypeFromString,
+  packetDtoToBroadcast,
   type PacketBroadcastDto,
-  type PacketDto,
 } from '@/types/packet'
-import { timeAgo, formatUtc } from '@/utils/time'
+import { timeAgo, formatDateTime, formatTimeOfDay } from '@/utils/time'
+import { useTick } from '@/composables/useTick'
 import PacketInspectionDialog from '@/components/PacketInspectionDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
 const store = useBeaconStreamStore()
+const hub = usePacketHubStore()
 const selectionStore = useStationSelectionStore()
 
 const filterFieldRef = ref<{ focus: () => void } | null>(null)
+const { now } = useTick(5000)
 
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+const connectionStatus = computed(() => hub.state)
+const healthStore = useHealthStore()
+const radiosStore = useRadiosStore()
+
+/** Newest RF heard: modem decode time, or an RF packet on the hub (external TNC). */
+const freshRf = computed(() => {
+  const t = healthStore.now
+  const decodes = Object.values(radiosStore.modemStatus)
+    .map((m) => (m?.lastDecodedAt ? new Date(m.lastDecodedAt).getTime() : 0))
+    .concat(hub.lastRfAt ?? 0)
+  const last = Math.max(0, ...decodes)
+  const rf = healthStore.health.lanes.rf
+  const color = !healthStore.health.live
+    ? 'grey'
+    : rf.level === 'warn' || rf.level === 'err'
+      ? 'warning'
+      : last
+        ? 'success'
+        : 'grey'
+  return { text: last ? `${agoShort(last, t)} ago` : 'none yet', color }
+})
+
+const freshIs = computed(() => {
+  const t = healthStore.now
+  const s = healthStore.status
+  const fromStatus = s?.lastIsPacketAt ? new Date(s.lastIsPacketAt).getTime() : 0
+  const last = Math.max(fromStatus, hub.lastIsAt ?? 0)
+  const lane = healthStore.health.lanes.is
+  if (lane.level === 'off' && !lane.stale) return { text: 'APRS-IS off', color: 'grey' }
+  const color = !healthStore.health.live
+    ? 'grey'
+    : lane.level === 'err' || lane.level === 'warn'
+      ? 'warning'
+      : 'success'
+  return { text: last ? `${agoShort(last, t)} ago` : 'none yet', color }
+})
 
 const inspectedPacketId = ref<number | null>(null)
 
@@ -38,23 +75,29 @@ const packetTypeOptions = [
   { label: 'Message', value: `${PacketType.Message}` },
   { label: 'Weather', value: `${PacketType.Weather}` },
   { label: 'Telemetry', value: `${PacketType.Telemetry}` },
+  { label: 'Third-party', value: `${PacketType.ThirdParty}` },
+  { label: 'Capabilities', value: `${PacketType.StationCapabilities}` },
+  { label: 'Beacon', value: `${PacketType.Beacon}` },
   { label: 'Unknown', value: `${PacketType.Unknown}` },
   { label: 'Unparseable', value: `${PacketType.Unparseable}` },
 ]
 
-function packetDtoToStreamEntry(p: PacketDto): PacketBroadcastDto {
-  return {
-    id: p.id,
-    callsign: p.stationCallsign,
-    parsedType: PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown',
-    receivedAt: typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
-    latitude: p.latitude,
-    longitude: p.longitude,
-    summary: p.comment || (PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown'),
-    hopCount: p.hopCount,
-    resolvedPath: p.resolvedPath,
-    source: p.source,
-  }
+const sourceOptions = [
+  { label: 'RF + IS', value: '' },
+  { label: 'RF only', value: 'rf' },
+  { label: 'APRS-IS only', value: 'is' },
+]
+
+/** Click the Time header to flip relative ("12s ago") ↔ absolute UTC. */
+const absoluteTime = ref(false)
+
+function timeLabel(p: PacketBroadcastDto): string {
+  return absoluteTime.value ? formatTimeOfDay(p.receivedAt) : timeAgo(p.receivedAt, now.value)
+}
+
+const { ownCallsign } = useOwnCallsign()
+function packetSourceChip(p: PacketBroadcastDto): SourceChip {
+  return sourceChip(p.source, isOwnCallsign(p.callsign, ownCallsign.value))
 }
 
 function typeLabel(parsedType: string): string {
@@ -77,56 +120,33 @@ function openInspectDialog(id: number) {
 }
 
 function onDialogSelectStation(callsign: string) {
+  // The dialog's button reads "Open station page" — honor it.
   selectionStore.selectStation(callsign)
-  router.push('/')
+  router.push(`/stations/${encodeURIComponent(callsign)}`)
 }
+
+const seedFailed = ref(false)
 
 async function seedFromApi() {
   try {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
     const packets = await getPacketsSince(since, 200)
-    // API returns ascending (oldest first) — seed in that order so newest is at bottom
-    store.seedFromApi(packets.map(packetDtoToStreamEntry))
+    // API returns newest first — matches the live unshift convention (newest at top)
+    store.seedFromApi(packets.map(packetDtoToBroadcast))
+    seedFailed.value = false
   } catch {
-    // ignore
-  }
-}
-
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
-
-  connection.on('packetReceived', (packet: PacketBroadcastDto) => {
-    store.addPacket(packet)
-  })
-
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
-
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
+    seedFailed.value = true
   }
 }
 
 onMounted(async () => {
+  // Live packets flow into the store via the shared packet hub (see
+  // stores/beaconStream.ts) — this view only seeds history and renders.
   await seedFromApi()
-  await connectSignalR()
   window.addEventListener('shortcut:focus-search', onShortcutFocusSearch)
 })
 
-onUnmounted(async () => {
-  if (connection) {
-    await connection.stop()
-    connection = null
-  }
+onUnmounted(() => {
   window.removeEventListener('shortcut:focus-search', onShortcutFocusSearch)
 })
 
@@ -141,50 +161,51 @@ function openPopOut() {
 
 <template>
   <div class="beacon-view">
-    <!-- Toolbar -->
+    <!-- Toolbar — one row: search + type + source, then status/actions -->
     <div class="beacon-toolbar">
-      <div class="beacon-filters">
-        <div class="beacon-filter-row">
-          <v-text-field
-            ref="filterFieldRef"
-            v-model="store.callsignFilter"
-            placeholder="Callsign filter"
-            density="compact"
-            variant="outlined"
-            hide-details
-            clearable
-            class="beacon-filter-input"
-          />
-        </div>
-        <div class="beacon-filter-row">
-          <v-text-field
-            v-model="store.textFilter"
-            placeholder="Search packets…"
-            density="compact"
-            variant="outlined"
-            hide-details
-            clearable
-            class="beacon-filter-input"
-          />
-        </div>
-        <div class="beacon-filter-row">
-          <v-select
-            v-model="store.typeFilter"
-            :items="packetTypeOptions"
-            item-title="label"
-            item-value="value"
-            label="Type"
-            density="compact"
-            variant="outlined"
-            hide-details
-            class="beacon-filter-input"
-          />
-        </div>
-      </div>
+      <v-text-field
+        ref="filterFieldRef"
+        v-model="store.searchFilter"
+        placeholder="Search callsign or packet text…"
+        prepend-inner-icon="mdi-magnify"
+        density="compact"
+        variant="outlined"
+        hide-details
+        clearable
+        class="beacon-search"
+      />
+      <v-select
+        v-model="store.typeFilter"
+        :items="packetTypeOptions"
+        item-title="label"
+        item-value="value"
+        density="compact"
+        variant="outlined"
+        hide-details
+        aria-label="Packet type"
+        class="beacon-select"
+      />
+      <v-select
+        v-model="store.sourceFilter"
+        :items="sourceOptions"
+        item-title="label"
+        item-value="value"
+        density="compact"
+        variant="outlined"
+        hide-details
+        aria-label="Packet source"
+        class="beacon-select beacon-select--narrow"
+      />
 
-      <div class="d-flex align-center ga-2">
+      <div class="d-flex align-center ga-2 ml-auto">
         <v-chip
-          :color="connectionStatus === 'connected' ? 'success' : connectionStatus === 'connecting' ? 'warning' : 'error'"
+          :color="
+            connectionStatus === 'connected'
+              ? 'success'
+              : connectionStatus === 'connecting'
+                ? 'warning'
+                : 'error'
+          "
           size="x-small"
           variant="flat"
           label
@@ -203,13 +224,7 @@ function openPopOut() {
         >
           Pause
         </v-btn>
-        <v-btn
-          v-else
-          color="green"
-          size="small"
-          variant="tonal"
-          @click="store.unpause()"
-        >
+        <v-btn v-else color="green" size="small" variant="tonal" @click="store.unpause()">
           <v-icon start>mdi-play</v-icon>
           Unpause
           <v-badge
@@ -227,41 +242,113 @@ function openPopOut() {
           size="small"
           variant="tonal"
           :title="'Open stream in new window'"
+          aria-label="Open stream in new window"
           @click="openPopOut"
         />
       </div>
     </div>
 
+    <!-- Freshness per source: a busy stream must not hide a deaf receiver. -->
+    <div class="beacon-fresh" role="status" aria-label="Feed freshness">
+      <span class="fresh-item">
+        <span class="fresh-dot" :class="`bg-${freshRf.color}`" />
+        <span class="fresh-k">Last RF</span>
+        <span class="fresh-v">{{ freshRf.text }}</span>
+      </span>
+      <span class="fresh-item">
+        <span class="fresh-dot" :class="`bg-${freshIs.color}`" />
+        <span class="fresh-k">Last APRS-IS</span>
+        <span class="fresh-v">{{ freshIs.text }}</span>
+      </span>
+      <v-chip v-if="!healthStore.health.live" size="small" color="warning" variant="tonal">
+        Not live: frozen as of the drop
+      </v-chip>
+      <v-btn
+        v-if="freshRf.color === 'warning'"
+        to="/radio"
+        size="small"
+        variant="text"
+        color="warning"
+      >
+        Check RX
+      </v-btn>
+    </div>
+
     <v-divider />
 
-    <!-- Header row -->
+    <!-- Header row (cells share the row classes so widths can never drift apart) -->
     <div class="beacon-header">
-      <span style="width: 80px" class="text-caption font-weight-medium text-medium-emphasis">Time</span>
-      <span style="width: 110px" class="text-caption font-weight-medium text-medium-emphasis">Callsign</span>
-      <span style="width: 90px" class="text-caption font-weight-medium text-medium-emphasis">Type</span>
+      <button
+        class="beacon-cell beacon-time beacon-th text-caption font-weight-medium text-medium-emphasis"
+        :title="
+          absoluteTime ? 'Showing UTC. Click for relative.' : 'Showing relative. Click for UTC.'
+        "
+        @click="absoluteTime = !absoluteTime"
+      >
+        Time <v-icon size="10">mdi-swap-horizontal</v-icon>
+      </button>
+      <span class="beacon-cell beacon-callsign text-caption font-weight-medium text-medium-emphasis"
+        >Callsign</span
+      >
+      <span class="beacon-cell beacon-type text-caption font-weight-medium text-medium-emphasis"
+        >Type</span
+      >
+      <span class="beacon-cell beacon-src text-caption font-weight-medium text-medium-emphasis"
+        >Src</span
+      >
       <span class="text-caption font-weight-medium text-medium-emphasis">Summary</span>
     </div>
 
     <v-divider />
 
-    <!-- Packet list -->
-    <div v-if="store.filteredPackets.length === 0" class="text-center text-medium-emphasis py-8">
-      No packets heard yet — waiting for Direwolf…
+    <!-- Paused banner -->
+    <div v-if="store.paused" class="beacon-paused-banner">
+      <v-icon size="14">mdi-pause</v-icon>
+      Paused: {{ store.pendingCount }} new packet{{ store.pendingCount === 1 ? '' : 's' }} buffered
+      <v-btn size="x-small" variant="text" color="primary" @click="store.unpause()">Resume</v-btn>
+    </div>
+
+    <!-- Packet list: distinct error / empty / filtered-out states -->
+    <div
+      v-if="seedFailed && store.displayedPackets.length === 0"
+      class="text-center text-medium-emphasis py-8"
+    >
+      <div class="mb-2">Couldn't load packet history. The backend may be unreachable.</div>
+      <div class="text-caption mb-3">
+        Live packets will still appear when the connection recovers.
+      </div>
+      <v-btn size="small" color="primary" variant="tonal" @click="seedFromApi">Retry</v-btn>
+    </div>
+    <div v-else-if="store.displayedPackets.length === 0" class="text-center py-8">
+      <v-icon size="36" class="text-medium-emphasis mb-2">mdi-radio-tower</v-icon>
+      <div class="text-body-1 font-weight-medium mb-1">No packets heard yet</div>
+      <div class="text-caption text-medium-emphasis">The sound modem is listening.</div>
+    </div>
+    <div
+      v-else-if="store.filteredPackets.length === 0"
+      class="text-center text-medium-emphasis py-8"
+    >
+      <div class="mb-3">
+        No packets match your filters ({{ store.displayedPackets.length }} hidden).
+      </div>
+      <v-btn size="small" color="primary" variant="tonal" @click="store.clearFilters()">
+        Clear filters
+      </v-btn>
     </div>
     <v-virtual-scroll
       v-else
       class="beacon-list"
+      :class="{ 'beacon-list--paused': store.paused }"
       :items="store.filteredPackets"
       :item-height="36"
     >
       <template #default="{ item: p }">
-        <div
-          :key="`${p.callsign}-${p.receivedAt}`"
-          class="beacon-row"
-          @click="openInspectDialog(p.id)"
-        >
-          <span class="beacon-cell beacon-time text-caption text-medium-emphasis" :title="formatUtc(p.receivedAt)">
-            {{ timeAgo(p.receivedAt) }}
+        <div :key="p.id" class="beacon-row" @click="openInspectDialog(p.id)">
+          <span
+            class="beacon-cell beacon-time text-caption text-medium-emphasis"
+            :title="formatDateTime(p.receivedAt)"
+          >
+            {{ timeLabel(p) }}
           </span>
           <span class="beacon-cell beacon-callsign">
             <a class="callsign-link" @click.stop.prevent="onCallsignClick(p.callsign)">
@@ -271,6 +358,11 @@ function openPopOut() {
           <span class="beacon-cell beacon-type">
             <v-chip :color="typeColor(p.parsedType)" size="x-small" label>
               {{ typeLabel(p.parsedType) }}
+            </v-chip>
+          </span>
+          <span class="beacon-cell beacon-src">
+            <v-chip :color="packetSourceChip(p).color" size="x-small" variant="tonal">
+              {{ packetSourceChip(p).label }}
             </v-chip>
           </span>
           <span class="beacon-cell beacon-summary text-body-2 text-truncate" :title="p.summary">
@@ -296,31 +388,84 @@ function openPopOut() {
   overflow: hidden;
 }
 
+.beacon-fresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 0 12px 8px;
+  font-size: 0.8125rem;
+}
+.fresh-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fresh-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.fresh-k {
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+.fresh-v {
+  font-variant-numeric: tabular-nums;
+}
+
 .beacon-toolbar {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   padding: 8px 12px;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
-.beacon-filters {
-  flex: 1;
-  min-width: 0;
+.beacon-search {
+  flex: 1 1 240px;
+  min-width: 180px;
+}
+
+.beacon-select {
+  flex: 0 1 170px;
+  min-width: 130px;
+}
+
+.beacon-select--narrow {
+  flex-basis: 150px;
+}
+
+.beacon-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.beacon-th:hover {
+  color: rgba(var(--v-theme-primary), 1);
+}
+
+.beacon-paused-banner {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgb(var(--v-theme-warning));
+  background: rgba(var(--v-theme-warning), 0.12);
+  flex-shrink: 0;
 }
 
-.beacon-filter-row {
-  width: 100%;
-}
-
-.beacon-filter-input {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
+.beacon-list--paused {
+  opacity: 0.55;
 }
 
 .beacon-header {
@@ -369,10 +514,17 @@ function openPopOut() {
   width: 86px;
 }
 
+.beacon-src {
+  width: 44px;
+}
+
 .beacon-summary {
   flex: 1;
   min-width: 0;
   max-width: 100%;
+  /* Packet payloads read better in mono */
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.8rem;
 }
 
 .callsign-link {

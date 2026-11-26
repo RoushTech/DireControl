@@ -10,6 +10,7 @@ import {
   type ResolvedPathEntry,
 } from '@/types/packet'
 import { compassDir16 } from '@/utils/time'
+import { useUnits } from '@/composables/useUnits'
 
 const { mobile } = useDisplay()
 
@@ -69,7 +70,9 @@ async function copyRaw() {
     document.body.removeChild(el)
     copyFeedback.value = true
   } finally {
-    setTimeout(() => { copyFeedback.value = false }, 1500)
+    setTimeout(() => {
+      copyFeedback.value = false
+    }, 1500)
   }
 }
 
@@ -88,13 +91,7 @@ function toDMS(deg: number, posDir: string, negDir: string): string {
   return `${d}° ${m}′ ${s}″ ${dir}`
 }
 
-function fToC(f: number): number {
-  return Math.round((f - 32) * (5 / 9) * 10) / 10
-}
-
-function mphToKmh(mph: number): number {
-  return Math.round(mph * 1.60934 * 10) / 10
-}
+const { formatTempF, formatWindMph } = useUnits()
 
 const typeLabel = computed(() =>
   packet.value ? (PACKET_TYPE_LABELS[packet.value.parsedType as PacketType] ?? 'Unknown') : '',
@@ -131,10 +128,16 @@ function heardViaLabel(p: PacketDto): string {
     :max-width="mobile ? undefined : '680'"
     :fullscreen="mobile"
     scrollable
-    @update:model-value="v => !v && onClose()"
+    @update:model-value="(v) => !v && onClose()"
     @keydown.esc="onClose()"
   >
-    <v-card :style="mobile ? 'display:flex;flex-direction:column' : 'max-height:80vh;display:flex;flex-direction:column'">
+    <v-card
+      :style="
+        mobile
+          ? 'display:flex;flex-direction:column'
+          : 'max-height:80vh;display:flex;flex-direction:column'
+      "
+    >
       <!-- Header -->
       <div class="dialog-header">
         <div class="d-flex align-center ga-2 flex-wrap">
@@ -154,18 +157,17 @@ function heardViaLabel(p: PacketDto): string {
           >
             {{ copyFeedback ? 'Copied ✓' : 'Copy Raw' }}
           </v-btn>
-          <v-btn icon="mdi-close" size="small" variant="text" @click="onClose" />
+          <v-btn aria-label="Close" icon="mdi-close" size="small" variant="text" @click="onClose" />
         </div>
       </div>
 
       <v-divider />
 
       <!-- Body -->
-      <v-card-text class="pa-0" style="overflow-y: auto; flex: 1;">
+      <v-card-text class="pa-0" style="overflow-y: auto; flex: 1">
         <v-progress-linear v-if="loading" indeterminate color="primary" />
 
         <template v-if="packet && !loading">
-
           <!-- ── Position ── -->
           <template v-if="packet.latitude != null || packet.gridSquare">
             <div class="section-label">Position</div>
@@ -174,12 +176,16 @@ function heardViaLabel(p: PacketDto): string {
                 <div class="field-key">Latitude</div>
                 <div class="field-val">
                   {{ packet.latitude.toFixed(6) }}°
-                  <span class="text-medium-emphasis ml-1">{{ toDMS(packet.latitude, 'N', 'S') }}</span>
+                  <span class="text-medium-emphasis ml-1">{{
+                    toDMS(packet.latitude, 'N', 'S')
+                  }}</span>
                 </div>
                 <div class="field-key">Longitude</div>
                 <div class="field-val">
                   {{ packet.longitude!.toFixed(6) }}°
-                  <span class="text-medium-emphasis ml-1">{{ toDMS(packet.longitude!, 'E', 'W') }}</span>
+                  <span class="text-medium-emphasis ml-1">{{
+                    toDMS(packet.longitude!, 'E', 'W')
+                  }}</span>
                 </div>
               </template>
               <template v-if="packet.gridSquare">
@@ -194,7 +200,9 @@ function heardViaLabel(p: PacketDto): string {
             <div class="section-label">Path</div>
             <div class="field-grid">
               <div class="field-key">Raw Path</div>
-              <div class="field-val"><code>{{ packet.path }}</code></div>
+              <div class="field-val">
+                <code>{{ packet.path }}</code>
+              </div>
 
               <div class="field-key">Hop Count</div>
               <div class="field-val">{{ packet.hopCount }}</div>
@@ -226,11 +234,15 @@ function heardViaLabel(p: PacketDto): string {
                         @click="onHopClick(entry.callsign)"
                       >
                         <span class="hop-callsign">{{ entry.callsign }} ✓</span>
-                        <span v-if="entry.aliasUsed" class="hop-alias">via {{ entry.aliasUsed }}</span>
+                        <span v-if="entry.aliasUsed" class="hop-alias"
+                          >via {{ entry.aliasUsed }}</span
+                        >
                       </span>
                       <span v-else class="hop-node hop-node--unknown">
                         <span class="hop-callsign">{{ entry.callsign }} ?</span>
-                        <span v-if="entry.aliasUsed" class="hop-alias">via {{ entry.aliasUsed }}</span>
+                        <span v-if="entry.aliasUsed" class="hop-alias"
+                          >via {{ entry.aliasUsed }}</span
+                        >
                       </span>
                     </template>
                   </div>
@@ -254,31 +266,36 @@ function heardViaLabel(p: PacketDto): string {
               <template v-if="packet.weatherData.temperatureF != null">
                 <div class="field-key">Temperature</div>
                 <div class="field-val">
-                  {{ packet.weatherData.temperatureF.toFixed(1) }}°F
-                  <span class="text-medium-emphasis">({{ fToC(packet.weatherData.temperatureF) }}°C)</span>
+                  {{ formatTempF(packet.weatherData.temperatureF) }}
                 </div>
               </template>
               <template v-if="packet.weatherData.humidityPercent != null">
                 <div class="field-key">Humidity</div>
                 <div class="field-val">{{ packet.weatherData.humidityPercent }}%</div>
               </template>
-              <template v-if="packet.weatherData.windSpeedMph != null || packet.weatherData.windDirectionDeg != null">
+              <template
+                v-if="
+                  packet.weatherData.windSpeedMph != null ||
+                  packet.weatherData.windDirectionDeg != null
+                "
+              >
                 <div class="field-key">Wind</div>
                 <div class="field-val">
                   <template v-if="packet.weatherData.windSpeedMph != null">
-                    {{ packet.weatherData.windSpeedMph.toFixed(1) }} mph
-                    <span class="text-medium-emphasis">({{ mphToKmh(packet.weatherData.windSpeedMph) }} km/h)</span>
+                    {{ formatWindMph(packet.weatherData.windSpeedMph) }}
                   </template>
                   <template v-if="packet.weatherData.windDirectionDeg != null">
-                    <span class="ml-1">from {{ packet.weatherData.windDirectionDeg }}°
-                      ({{ compassDir16(packet.weatherData.windDirectionDeg) }})
+                    <span class="ml-1"
+                      >from {{ packet.weatherData.windDirectionDeg }}° ({{
+                        compassDir16(packet.weatherData.windDirectionDeg)
+                      }})
                     </span>
                   </template>
                 </div>
               </template>
               <template v-if="packet.weatherData.windGustMph != null">
                 <div class="field-key">Wind Gust</div>
-                <div class="field-val">{{ packet.weatherData.windGustMph.toFixed(1) }} mph</div>
+                <div class="field-val">{{ formatWindMph(packet.weatherData.windGustMph) }}</div>
               </template>
               <template v-if="packet.weatherData.pressureMbar != null">
                 <div class="field-key">Pressure</div>
@@ -286,15 +303,21 @@ function heardViaLabel(p: PacketDto): string {
               </template>
               <template v-if="packet.weatherData.rainfallLastHourIn != null">
                 <div class="field-key">Rain (1h)</div>
-                <div class="field-val">{{ packet.weatherData.rainfallLastHourIn.toFixed(2) }} in</div>
+                <div class="field-val">
+                  {{ packet.weatherData.rainfallLastHourIn.toFixed(2) }} in
+                </div>
               </template>
               <template v-if="packet.weatherData.rainfallLast24hIn != null">
                 <div class="field-key">Rain (24h)</div>
-                <div class="field-val">{{ packet.weatherData.rainfallLast24hIn.toFixed(2) }} in</div>
+                <div class="field-val">
+                  {{ packet.weatherData.rainfallLast24hIn.toFixed(2) }} in
+                </div>
               </template>
               <template v-if="packet.weatherData.rainfallSinceMidnightIn != null">
                 <div class="field-key">Rain (midnight)</div>
-                <div class="field-val">{{ packet.weatherData.rainfallSinceMidnightIn.toFixed(2) }} in</div>
+                <div class="field-val">
+                  {{ packet.weatherData.rainfallSinceMidnightIn.toFixed(2) }} in
+                </div>
               </template>
             </div>
           </template>
@@ -322,12 +345,42 @@ function heardViaLabel(p: PacketDto): string {
           <template v-if="isTelemetry && packet.telemetryData">
             <div class="section-label">Telemetry</div>
             <div class="px-3 pb-3">
-              <pre class="raw-block">{{ JSON.stringify(packet.telemetryData, null, 2) }}</pre>
+              <v-table density="compact">
+                <tbody>
+                  <tr v-if="packet.telemetryData.sequenceNumber != null">
+                    <td class="text-medium-emphasis">Sequence</td>
+                    <td>{{ packet.telemetryData.sequenceNumber }}</td>
+                  </tr>
+                  <tr v-for="(value, i) in packet.telemetryData.analogs ?? []" :key="`a${i}`">
+                    <td class="text-medium-emphasis">Analog {{ i + 1 }}</td>
+                    <td>{{ value }}</td>
+                  </tr>
+                  <tr v-if="packet.telemetryData.digitals?.length">
+                    <td class="text-medium-emphasis">Digital bits</td>
+                    <td class="font-mono">
+                      {{ packet.telemetryData.digitals.map((b) => (b ? '1' : '0')).join('') }}
+                    </td>
+                  </tr>
+                  <tr v-if="packet.telemetryData.comment">
+                    <td class="text-medium-emphasis">Comment</td>
+                    <td>{{ packet.telemetryData.comment }}</td>
+                  </tr>
+                </tbody>
+              </v-table>
             </div>
           </template>
 
           <!-- ── Signal ── -->
-          <template v-if="packet.signalData && (packet.signalData.decodeQuality != null || packet.signalData.frequencyOffsetHz != null)">
+          <template
+            v-if="
+              packet.signalData &&
+              (packet.signalData.decodeQuality != null ||
+                packet.signalData.frequencyOffsetHz != null ||
+                packet.signalData.audioLevel != null ||
+                packet.signalData.demodProfile != null ||
+                packet.signalData.repairedBits)
+            "
+          >
             <div class="section-label">Signal</div>
             <div class="field-grid">
               <template v-if="packet.signalData.decodeQuality != null">
@@ -337,7 +390,29 @@ function heardViaLabel(p: PacketDto): string {
               <template v-if="packet.signalData.frequencyOffsetHz != null">
                 <div class="field-key">Frequency Offset</div>
                 <div class="field-val">
-                  {{ packet.signalData.frequencyOffsetHz > 0 ? '+' : '' }}{{ packet.signalData.frequencyOffsetHz.toFixed(0) }} Hz
+                  {{ packet.signalData.frequencyOffsetHz > 0 ? '+' : ''
+                  }}{{ packet.signalData.frequencyOffsetHz.toFixed(0) }} Hz
+                </div>
+              </template>
+              <template v-if="packet.signalData.audioLevel != null">
+                <div class="field-key">Audio Level</div>
+                <div class="field-val">{{ (packet.signalData.audioLevel * 100).toFixed(0) }}%</div>
+              </template>
+              <template v-if="packet.signalData.demodProfile != null">
+                <div class="field-key">Demod Profile</div>
+                <div class="field-val">{{ packet.signalData.demodProfile }}</div>
+              </template>
+              <template v-if="packet.signalData.repairedBits">
+                <div class="field-key">Bit Repair</div>
+                <div class="field-val">
+                  <v-chip size="x-small" color="warning" variant="tonal" label>
+                    Recovered: {{ packet.signalData.repairedBits }}
+                    {{ packet.signalData.repairedBits === 1 ? 'bit' : 'bits' }} corrected
+                  </v-chip>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    The checksum failed as received and passed after the modem corrected its
+                    least-certain bit decisions.
+                  </div>
                 </div>
               </template>
             </div>
@@ -345,18 +420,13 @@ function heardViaLabel(p: PacketDto): string {
 
           <!-- ── Raw Packet (toggle) ── -->
           <div class="raw-toggle-row">
-            <v-btn
-              size="x-small"
-              variant="tonal"
-              @click="showRaw = !showRaw"
-            >
+            <v-btn size="x-small" variant="tonal" @click="showRaw = !showRaw">
               {{ showRaw ? 'Hide Raw' : 'Show Raw' }}
             </v-btn>
           </div>
           <div v-if="showRaw" class="px-3 pb-4">
             <pre class="raw-block">{{ packet.rawPacket }}</pre>
           </div>
-
         </template>
 
         <div v-else-if="!loading" class="text-center text-medium-emphasis py-8">
@@ -366,13 +436,22 @@ function heardViaLabel(p: PacketDto): string {
 
       <!-- Full-width Copy Raw for mobile -->
       <v-card-actions v-if="mobile && packet" class="pa-3">
-        <v-btn
-          :color="copyFeedback ? 'success' : 'primary'"
-          variant="tonal"
-          block
-          @click="copyRaw"
-        >
+        <v-btn :color="copyFeedback ? 'success' : 'primary'" variant="tonal" block @click="copyRaw">
           {{ copyFeedback ? 'Copied ✓' : 'Copy Raw Packet' }}
+        </v-btn>
+      </v-card-actions>
+
+      <!-- Footer: jump to the sender's station page -->
+      <v-card-actions v-if="!mobile && packet" class="px-4 pb-3 pt-0">
+        <v-spacer />
+        <v-btn
+          color="primary"
+          variant="tonal"
+          size="small"
+          prepend-icon="mdi-account-details"
+          @click="emit('selectStation', packet.stationCallsign)"
+        >
+          Open station page
         </v-btn>
       </v-card-actions>
     </v-card>

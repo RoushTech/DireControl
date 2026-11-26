@@ -27,7 +27,7 @@ public sealed class DatabaseCleanupHostedService(
         while (!stoppingToken.IsCancellationRequested)
         {
             if (!maintenance.TryStart(options.Value.VacuumOnCleanup))
-                logger.LogDebug("Skipped scheduled cleanup — a run is already in progress.");
+                logger.LogDebug("Skipped scheduled cleanup: a run is already in progress.");
 
             await Task.Delay(TimeSpan.FromHours(intervalHours), stoppingToken);
         }

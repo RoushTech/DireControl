@@ -2,6 +2,8 @@ import http from './axios'
 
 export interface AboutDto {
   version: string
+  /** Source commit of the build, when known. */
+  commit: string | null
   serverTime: string
 }
 

@@ -1,6 +1,4 @@
-using DireControl.Api.Hubs;
 using DireControl.Enums;
-using Microsoft.AspNetCore.SignalR;
 
 namespace DireControl.Api.Services;
 
@@ -26,6 +24,15 @@ public interface IAprsIsStatusService
     /// <summary>Message from the most recent connection failure; null while connected.</summary>
     string? LastError { get; }
 
+    /// <summary>UTC time the last line (packet) arrived from APRS-IS; survives reconnects.</summary>
+    DateTime? LastPacketAt { get; }
+
+    /// <summary>
+    /// The server answered the login with <c>logresp … verified</c> on the current
+    /// connection. False while connecting, disconnected or rejected.
+    /// </summary>
+    bool Verified { get; }
+
     void SetState(AprsIsConnectionState state, string? serverName = null);
     void SetActiveFilter(string filter);
     void IncrementPacketCount();
@@ -42,8 +49,11 @@ public interface IAprsIsStatusService
 }
 
 /// <inheritdoc/>
+/// <remarks>
+/// State is read by polling <c>GET api/v0/status</c>; nothing subscribed to a
+/// push of it, so none is sent.
+/// </remarks>
 public sealed class AprsIsStatusService(
-    IHubContext<PacketHub> hubContext,
     ILogger<AprsIsStatusService> logger) : IAprsIsStatusService
 {
     private AprsIsConnectionState _state = AprsIsConnectionState.Disabled;
@@ -54,6 +64,7 @@ public sealed class AprsIsStatusService(
     private DateTime? _lastConnectAttemptAt;
     private int _failedAttempts;
     private string? _lastError;
+    private long _lastPacketAtTicks;
 
     public AprsIsConnectionState State => _state;
     public string? ServerName => _serverName;
@@ -63,6 +74,9 @@ public sealed class AprsIsStatusService(
     public DateTime? LastConnectAttemptAt => _lastConnectAttemptAt;
     public int FailedAttempts => _failedAttempts;
     public string? LastError => _lastError;
+    public DateTime? LastPacketAt => Interlocked.Read(ref _lastPacketAtTicks) is > 0 and var t
+        ? new DateTime(t, DateTimeKind.Utc) : null;
+    public bool Verified => _state == AprsIsConnectionState.Connected;
 
     public void SetState(AprsIsConnectionState state, string? serverName = null)
     {
@@ -79,10 +93,6 @@ public sealed class AprsIsStatusService(
         }
 
         logger.LogInformation("APRS-IS state changed to {State} (server={Server})", state, _serverName ?? "(none)");
-
-        _ = hubContext.Clients.All.SendAsync(
-            PacketHub.AprsIsStateChangedMethod,
-            BuildDto());
     }
 
     public void SetActiveFilter(string filter)
@@ -93,6 +103,7 @@ public sealed class AprsIsStatusService(
     public void IncrementPacketCount()
     {
         Interlocked.Increment(ref _sessionPacketCount);
+        Interlocked.Exchange(ref _lastPacketAtTicks, DateTime.UtcNow.Ticks);
     }
 
     public void ResetSessionCount()
@@ -111,28 +122,4 @@ public sealed class AprsIsStatusService(
         _lastError = error;
         _firstDisconnectedAt ??= DateTime.UtcNow;
     }
-
-    internal AprsIsStateDto BuildDto() => new()
-    {
-        State = _state.ToString(),
-        ServerName = _serverName,
-        ActiveFilter = _activeFilter,
-        SessionPacketCount = SessionPacketCount,
-        FirstDisconnectedAt = _firstDisconnectedAt,
-        LastConnectAttemptAt = _lastConnectAttemptAt,
-        FailedAttempts = _failedAttempts,
-        LastError = _lastError,
-    };
-}
-
-public sealed class AprsIsStateDto
-{
-    public required string State { get; init; }
-    public string? ServerName { get; init; }
-    public string ActiveFilter { get; init; } = string.Empty;
-    public long SessionPacketCount { get; init; }
-    public DateTime? FirstDisconnectedAt { get; init; }
-    public DateTime? LastConnectAttemptAt { get; init; }
-    public int FailedAttempts { get; init; }
-    public string? LastError { get; init; }
 }

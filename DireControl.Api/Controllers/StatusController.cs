@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using DireControl.Api.Controllers.Models;
 using DireControl.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -9,16 +10,26 @@ namespace DireControl.Api.Controllers;
 public class StatusController(
     KissConnectionHolder connectionHolder,
     IAprsIsStatusService aprsIsStatus,
-    AprsIsReconnectTrigger reconnectTrigger) : ControllerBase
+    SoundModemService modemService,
+    DigipeaterService digipeaterService,
+    KissTcpServerService kissServer,
+    AprsIsTxQueue aprsIsTxQueue,
+    [FromKeyedServices(RestartSignals.AprsIs)] RestartSignal reconnectTrigger) : ControllerBase
 {
     [HttpGet]
     public ActionResult<StatusDto> GetStatus()
     {
         var s = aprsIsStatus;
+        var running = modemService.Statuses.Where(m => m.State == Enums.ModemState.Running).ToList();
         return Ok(new StatusDto
         {
-            DirewolfConnected = connectionHolder.IsConnected,
-            AprsIsState = s.State.ToString(),
+            ExternalTncConnected = connectionHolder.IsConnected,
+            DigipeatedFrames = digipeaterService.DigipeatedFrames,
+            KissServerClients = kissServer.ClientCount,
+            RfToIsGatedLines = aprsIsTxQueue.SentCount,
+            AprsIsState = s.State,
+            AprsIsVerified = s.Verified,
+            LastIsPacketAt = s.LastPacketAt,
             AprsIsServerName = s.ServerName,
             AprsIsFilter = s.ActiveFilter,
             AprsIsSessionPacketCount = s.SessionPacketCount,
@@ -26,6 +37,9 @@ public class StatusController(
             AprsIsLastConnectAttemptAt = s.LastConnectAttemptAt,
             AprsIsFailedAttempts = s.FailedAttempts,
             AprsIsLastError = s.LastError,
+            ModemState = modemService.AggregateState,
+            ModemLastDecodedAt = running.Max(m => m.LastDecodedAt),
+            ModemRunningSince = running.Min(m => m.RunningSince),
         });
     }
 

@@ -112,7 +112,7 @@ public class PacketsController(DireControlContext db) : ControllerBase
         }
 
         var packets = await query
-            .OrderBy(p => p.ReceivedAt)
+            .OrderByDescending(p => p.ReceivedAt)
             .Take(Math.Min(limit, 500))
             .Select(p => new PacketDto
             {

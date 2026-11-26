@@ -1,0 +1,161 @@
+using Microsoft.Extensions.DependencyInjection;
+using System.Net.Sockets;
+using System.Text;
+using DireControl.Data;
+using DireControl.Data.Models;
+using Microsoft.Extensions.Options;
+
+namespace DireControl.Api.Services;
+
+/// <summary>
+/// Send-only APRS-IS connection that drains <see cref="AprsIsTxQueue"/>:
+/// RF→IS gated packets plus our own APRS-IS-originated traffic (message ACKs).  Kept separate from the receive client —
+/// the AprsSharp client exposes no public send path — and logged in without a
+/// filter so the server pushes (almost) nothing back.  Standard practice for
+/// transmit-only igate/tracker connections.
+/// </summary>
+public sealed class AprsIsTxService(
+    IServiceScopeFactory scopeFactory,
+    AprsIsTxQueue txQueue,
+    AprsIsTxInbound txInbound,
+    [FromKeyedServices(RestartSignals.AprsIs)] RestartSignal reconnectTrigger,
+    IOptions<DireControlOptions> options,
+    ILogger<AprsIsTxService> logger) : BackgroundService
+{
+    /// <summary>Wait before reconnecting after a failed or dropped connection.</summary>
+    internal TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Servers send a keepalive comment roughly every 20 s; nothing at all for
+    /// this long means a half-open connection that would silently swallow
+    /// gated packets and ACKs, so it is dropped and reopened.
+    /// </summary>
+    internal TimeSpan InactivityTimeout { get; set; } = TimeSpan.FromSeconds(90);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using var iterCts = CancellationTokenSource.CreateLinkedTokenSource(
+                stoppingToken, reconnectTrigger.Token);
+            var ct = iterCts.Token;
+
+            try
+            {
+                // Wait for something to send before holding a connection open.
+                if (!await txQueue.Reader.WaitToReadAsync(ct))
+                    break;
+
+                var settings = await GetSettingsAsync(stoppingToken);
+                // Gated lines are only queued while RF→IS gating is on; our own
+                // traffic (ACKs) only needs APRS-IS itself.
+                if (settings is not { AprsIsEnabled: true })
+                {
+                    // APRS-IS switched off with lines still queued — drop them.
+                    while (txQueue.Reader.TryRead(out _)) { }
+                    continue;
+                }
+
+                await ConnectAndSendAsync(settings, ct);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (OperationCanceledException)
+            {
+                continue; // settings changed — reconnect with new values
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "APRS-IS TX connection failed; retrying in {Delay}s.", RetryDelay.TotalSeconds);
+                try { await Task.Delay(RetryDelay, ct); }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (OperationCanceledException) { }
+            }
+        }
+
+        logger.LogInformation("AprsIsTxService stopped.");
+    }
+
+    private async Task ConnectAndSendAsync(UserSetting settings, CancellationToken ct)
+    {
+        var callsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
+        var passcode = settings.AprsIsPasscode ?? AprsPasscodeHelper.GeneratePasscode(callsign);
+
+        logger.LogInformation("Opening APRS-IS TX connection to {Host}:{Port}…", settings.AprsIsHost, settings.AprsIsPort);
+
+        using var client = new TcpClient();
+        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+        await client.ConnectAsync(settings.AprsIsHost, settings.AprsIsPort, ct);
+        var stream = client.GetStream();
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\r\n", AutoFlush = true };
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+
+        // Send-only login: no filter, so the server pushes back only keepalives
+        // and traffic for stations gated through this connection.
+        await writer.WriteLineAsync($"user {callsign} pass {passcode} vers DireControl 0.3");
+
+        // Read server lines in the background; a completed read task means the
+        // server closed the connection (or went silent past the watchdog).
+        using var inactivity = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        inactivity.CancelAfter(InactivityTimeout);
+        var readTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (await reader.ReadLineAsync(inactivity.Token) is { } line)
+                {
+                    inactivity.CancelAfter(InactivityTimeout);
+                    if (line.StartsWith('#'))
+                    {
+                        if (line.Contains("unverified", StringComparison.OrdinalIgnoreCase))
+                            logger.LogError("APRS-IS TX login unverified. The server will drop gated packets and ACKs. Check the passcode.");
+                        continue;
+                    }
+
+                    // Messages for stations we gate arrive here, not on the
+                    // filtered receive login — hand them to the RX pipeline.
+                    txInbound.Publish(line);
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"No data on the APRS-IS TX connection for {InactivityTimeout.TotalSeconds:F0} s. Reconnecting.");
+            }
+        }, ct);
+
+        logger.LogInformation("APRS-IS TX connection ready.");
+
+        while (!ct.IsCancellationRequested)
+        {
+            var waitToRead = txQueue.Reader.WaitToReadAsync(ct).AsTask();
+            var completed = await Task.WhenAny(waitToRead, readTask);
+            if (completed == readTask)
+            {
+                await readTask; // propagate any error
+                throw new EndOfStreamException("APRS-IS TX connection closed by server.");
+            }
+
+            if (!await waitToRead)
+                return;
+
+            while (txQueue.Reader.TryRead(out var line))
+            {
+                await writer.WriteLineAsync(line.AsMemory(), ct);
+                txQueue.RecordSent();
+                logger.LogDebug("Sent to APRS-IS: {Line}", line);
+            }
+        }
+
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private async Task<UserSetting?> GetSettingsAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        return await db.UserSettings.FindAsync([1], ct);
+    }
+}

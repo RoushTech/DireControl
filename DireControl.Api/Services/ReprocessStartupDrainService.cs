@@ -32,6 +32,6 @@ public sealed class ReprocessStartupDrainService(
         if (reprocessor.TryStart(new ReprocessFilter()))
             logger.LogInformation("Startup reprocessing drain of stale packets started.");
         else
-            logger.LogInformation("Startup reprocessing drain skipped — a run is already in progress.");
+            logger.LogInformation("Startup reprocessing drain skipped: a run is already in progress.");
     }
 }

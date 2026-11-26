@@ -6,6 +6,10 @@ namespace DireControl.Api.Controllers.Models;
 public sealed class AboutDto
 {
     public required string Version { get; init; }
+
+    /// <summary>Source commit the build came from, when known.</summary>
+    public string? Commit { get; init; }
+
     public DateTime ServerTime { get; init; }
 }
 
@@ -56,7 +60,7 @@ public sealed class PacketDto
     public string? GridSquare { get; init; }
 }
 
-public sealed class InboxMessageDto
+public sealed record InboxMessageDto
 {
     public int Id { get; init; }
     public required string FromCallsign { get; init; }
@@ -65,6 +69,14 @@ public sealed class InboxMessageDto
     public string MessageId { get; init; } = string.Empty;
     public string? PathUsed { get; init; }
     public DateTime ReceivedAt { get; init; }
+    /// <summary>Inbound: copies heard (above 1 means the sender retransmitted).</summary>
+    public int ReceiveCount { get; init; }
+    public DateTime? LastReceivedAt { get; init; }
+    /// <summary>Inbound: how the first copy reached us. Null when the packet is unknown.</summary>
+    public PacketSource? Source { get; init; }
+    public HeardVia? HeardVia { get; init; }
+    /// <summary>Inbound: via-path of the first copy, tocall excluded (e.g. "K4ABC-1*,WIDE2-1,qAR,N4WR-2").</summary>
+    public string? Path { get; init; }
     public bool IsRead { get; init; }
     public bool AckSent { get; init; }
     public bool ReplySent { get; init; }
@@ -73,6 +85,9 @@ public sealed class InboxMessageDto
     public DateTime? NextRetryAt { get; init; }
     public RetryState RetryState { get; init; }
     public DateTime? LastSentAt { get; init; }
+
+    /// <summary>Send responses only: the TX frame id of the part just queued (null for held parts).</summary>
+    public long? TxFrameId { get; init; }
 }
 
 public sealed class AllMessagePacketDto
@@ -120,6 +135,279 @@ public sealed class SettingsDto
     public int AprsIsPasscodeComputed { get; init; }
     public required string AprsIsFilter { get; init; }
     public int DeduplicationWindowSeconds { get; init; }
+
+    // RF backend / services
+    public bool DirewolfEnabled { get; init; }
+    public bool DigipeaterEnabled { get; init; }
+    public int DigipeaterMaxWideN { get; init; }
+    public bool DigipeaterFillInOnly { get; init; }
+    public bool KissServerEnabled { get; init; }
+    public int KissServerPort { get; init; }
+    public required string KissServerBindAddress { get; init; }
+    public bool RfToIsGatingEnabled { get; init; }
+    public bool IsToRfGatingEnabled { get; init; }
+    public required string IsToRfPath { get; init; }
+    public int IsToRfRecentHeardMinutes { get; init; }
+
+    // Connected-mode packet: LAPB defaults, PMS, AGWPE, terminal
+    public bool ConnectedModeInboundEnabled { get; init; }
+    public int ConnectedModeMaxSessions { get; init; }
+    public int ConnectedModeDefaultPaclen { get; init; }
+    public int ConnectedModeWindowSize { get; init; }
+    public int ConnectedModeT1Seconds { get; init; }
+    public int ConnectedModeRetries { get; init; }
+    public bool ConnectedModePreferMod128 { get; init; }
+    public bool PmsEnabled { get; init; }
+    public int PmsSsid { get; init; }
+    public required string PmsBannerText { get; init; }
+    public int PmsRetentionDays { get; init; }
+    public bool AgwpeServerEnabled { get; init; }
+    public int AgwpeServerPort { get; init; }
+    public required string AgwpeServerBindAddress { get; init; }
+    public int TerminalTranscriptRetentionDays { get; init; }
+
+    // Lightning proximity alerts
+    public bool LightningAlertEnabled { get; init; }
+    public double LightningAlertRadiusKm { get; init; }
+    public int LightningAlertCooldownMinutes { get; init; }
+    public bool LightningAlertAutoPan { get; init; }
+}
+
+/// <summary>PUT api/v0/settings/packet — connected-mode, PMS, AGWPE, terminal settings.</summary>
+public sealed class UpdatePacketSettingsRequest
+{
+    public bool ConnectedModeInboundEnabled { get; init; }
+    public int ConnectedModeMaxSessions { get; init; } = 10;
+    public int ConnectedModeDefaultPaclen { get; init; } = 128;
+    public int ConnectedModeWindowSize { get; init; } = 4;
+    public int ConnectedModeT1Seconds { get; init; } = 3;
+    public int ConnectedModeRetries { get; init; } = 10;
+    public bool ConnectedModePreferMod128 { get; init; }
+    public bool PmsEnabled { get; init; }
+    public int PmsSsid { get; init; } = 1;
+    public string? PmsBannerText { get; init; }
+    public int PmsRetentionDays { get; init; }
+    public bool AgwpeServerEnabled { get; init; }
+    public int AgwpeServerPort { get; init; } = 8000;
+    public string? AgwpeServerBindAddress { get; init; }
+    public int TerminalTranscriptRetentionDays { get; init; } = 90;
+}
+
+public sealed class ModemDeviceDto
+{
+    public required string Name { get; init; }
+    public required string Description { get; init; }
+    public bool SupportsCapture { get; init; }
+    public bool SupportsPlayback { get; init; }
+}
+
+public sealed class HidDeviceDto
+{
+    public required string Path { get; init; }
+    public required string Name { get; init; }
+}
+
+public sealed class ModemDevicesDto
+{
+    public required List<ModemDeviceDto> Audio { get; init; }
+    public required List<string> SerialPorts { get; init; }
+    public required List<HidDeviceDto> HidDevices { get; init; }
+}
+
+public sealed class ModemStatusDto
+{
+    public required string RadioId { get; init; }
+    public required string RadioName { get; init; }
+    public required string FullCallsign { get; init; }
+    public int Channel { get; init; }
+    public ModemState State { get; init; }
+    public string? CaptureDevice { get; init; }
+    public string? ErrorMessage { get; init; }
+    public float AudioLevel { get; init; }
+    public bool CarrierDetected { get; init; }
+
+    /// <summary>UTC start of the current carrier-detect burst; null while the channel is clear.</summary>
+    public DateTime? CarrierSince { get; init; }
+
+    /// <summary>Preambles (flag runs) seen since <see cref="CarrierSince"/>; 0 with a long carrier means noise.</summary>
+    public long PreamblesSinceCarrier { get; init; }
+
+    /// <summary>UTC time the capture thread last delivered audio, i.e. when <see cref="AudioLevel"/> was measured.</summary>
+    public DateTime? LevelUpdatedAt { get; init; }
+    public bool CarrierStuck { get; init; }
+    public long CsmaTimeouts { get; init; }
+    public long IngestDropped { get; init; }
+    public string? TxError { get; init; }
+    public bool PttStuck { get; init; }
+    public PttState PttState { get; init; }
+    public long PttWatchdogTrips { get; init; }
+    public long TxDropped { get; init; }
+    public int TxQueueDepth { get; init; }
+    public long CaptureOverruns { get; init; }
+    public long DecodedFrames { get; init; }
+    public DateTime? LastDecodedAt { get; init; }
+    public DateTime? RunningSince { get; init; }
+    public long InvalidFrames { get; init; }
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public long RepairedFrames { get; init; }
+    public bool TxEnabled { get; init; }
+    public bool Transmitting { get; init; }
+    public long TransmittedFrames { get; init; }
+    public DateTime? LastTxAt { get; init; }
+    public DateTime? CsmaWaitingSince { get; init; }
+    public long? RigFrequencyHz { get; init; }
+    public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
+}
+
+/// <summary>
+/// One outbound frame's lifecycle state (hub event <c>txFrameStateChanged</c>
+/// and <c>GET api/v0/tx/recent</c>).
+/// </summary>
+public sealed record TxFrameDto
+{
+    public long Id { get; init; }
+    public string? RadioId { get; init; }
+    public string? RadioName { get; init; }
+    public TxFrameKind Kind { get; init; }
+    public TxFrameState State { get; init; }
+    /// <summary>Why the frame failed or was dropped; null otherwise.</summary>
+    public string? Reason { get; init; }
+    /// <summary>UTC time of this state.</summary>
+    public DateTime At { get; init; }
+    public DateTime QueuedAt { get; init; }
+    public DateTime? WaitingSince { get; init; }
+    public DateTime? OnAirAt { get; init; }
+    public DateTime? SentAt { get; init; }
+    /// <summary>Short human title ("Position beacon", "Message to N0XYZ").</summary>
+    public required string Title { get; init; }
+    /// <summary>TNC2 rendering of the frame.</summary>
+    public string? Detail { get; init; }
+    /// <summary>Correlation key: the APRS message number for messages and ACKs.</summary>
+    public string? Ref { get; init; }
+}
+
+/// <summary>POST api/v0/radios/{id}/ptt-test — did the radio key and release?</summary>
+public sealed class PttTestResultDto
+{
+    public long TxFrameId { get; init; }
+    public bool Keyed { get; init; }
+    public string? Reason { get; init; }
+}
+
+/// <summary>Frame ids returned by endpoints that queue a transmission.</summary>
+public sealed class TxQueuedResponse
+{
+    public required IReadOnlyList<long> TxFrameIds { get; init; }
+}
+
+/// <summary>GET api/v0/modem/diagnostics — one radio's receive/transmit internals.</summary>
+public sealed class ModemDiagnosticsDto
+{
+    public required string RadioId { get; init; }
+    public required string RadioName { get; init; }
+    public ModemState State { get; init; }
+
+    // Receive
+    /// <summary>Fraction (0–1) of the last minute with carrier detect held; null without audio.</summary>
+    public double? CarrierDutyLastMinute { get; init; }
+    public bool CarrierDetected { get; init; }
+    public DateTime? CarrierSince { get; init; }
+    public long PreamblesSinceCarrier { get; init; }
+    public bool CarrierStuck { get; init; }
+    /// <summary>Carrier held this long with no preamble counts as stuck (CSMA then ignores it).</summary>
+    public int CarrierStuckSeconds { get; init; }
+    public long DecodedFrames { get; init; }
+    public long InvalidFrames { get; init; }
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public long RepairedFrames { get; init; }
+    public IReadOnlyDictionary<string, long>? DecodedByProfile { get; init; }
+    public long IngestDropped { get; init; }
+
+    // Audio
+    public string? CaptureDevice { get; init; }
+    /// <summary>Requested ALSA capture period in ms; 0 = the driver default.</summary>
+    public int CapturePeriodMs { get; init; }
+    /// <summary>The driver accepted the requested period.</summary>
+    public bool CaptureExplicitPeriod { get; init; }
+    public long CaptureOverruns { get; init; }
+    public DateTime? LevelUpdatedAt { get; init; }
+
+    // Transmit
+    public bool TxEnabled { get; init; }
+    public int NormalLaneDepth { get; init; }
+    public int DigipeatLaneDepth { get; init; }
+    public int SessionLaneDepth { get; init; }
+    public long TxDropped { get; init; }
+    public DateTime? CsmaWaitingSince { get; init; }
+    public long CsmaTimeouts { get; init; }
+    public int CsmaMaxWaitSeconds { get; init; }
+    public CsmaTimeoutAction CsmaTimeoutAction { get; init; }
+    public PttMethod PttMethod { get; init; }
+    public PttState PttState { get; init; }
+    public long PttWatchdogTrips { get; init; }
+    public string? TxError { get; init; }
+    public long TransmittedFrames { get; init; }
+    public DateTime? LastTxAt { get; init; }
+}
+
+/// <summary>GET api/v0/modem/{radioId}/rx-history — one radio's decode counts over time.</summary>
+public sealed class ModemRxHistoryDto
+{
+    /// <summary>Width of every bucket in minutes.</summary>
+    public int BucketMinutes { get; init; }
+
+    /// <summary>Every bucket in the range, oldest first; the last one is still filling.</summary>
+    public required IReadOnlyList<ModemRxBucketDto> Buckets { get; init; }
+}
+
+public sealed class ModemRxBucketDto
+{
+    /// <summary>Start of the bucket (UTC).</summary>
+    public DateTime Start { get; init; }
+
+    /// <summary>Frames decoded with a passing checksum, repaired ones included.</summary>
+    public int DecodedFrames { get; init; }
+
+    /// <summary>Frames that failed their checksum and could not be repaired.</summary>
+    public int InvalidFrames { get; init; }
+
+    /// <summary>Decoded frames that needed a bit repair to pass their checksum.</summary>
+    public int RepairedFrames { get; init; }
+}
+
+public sealed class UpdateStationIdentityRequest
+{
+    public string? Callsign { get; init; }
+    public double? HomeLat { get; init; }
+    public double? HomeLon { get; init; }
+}
+
+public sealed class UpdateMessageRetryRequest
+{
+    public int MaxRetryAttempts { get; init; }
+    public int InitialRetryDelaySeconds { get; init; }
+}
+
+public sealed class UpdateRfServicesRequest
+{
+    public bool DigipeaterEnabled { get; init; }
+    public int DigipeaterMaxWideN { get; init; } = 2;
+    public bool DigipeaterFillInOnly { get; init; }
+    public bool KissServerEnabled { get; init; }
+    public int KissServerPort { get; init; } = 8010;
+    public string? KissServerBindAddress { get; init; }
+    public bool RfToIsGatingEnabled { get; init; }
+    public bool IsToRfGatingEnabled { get; init; }
+    public string IsToRfPath { get; init; } = string.Empty;
+    public int IsToRfRecentHeardMinutes { get; init; } = 30;
+}
+
+public sealed class UpdateExternalTncRequest
+{
+    public bool DirewolfEnabled { get; init; }
+    public string DirewolfHost { get; init; } = "localhost";
+    public int DirewolfPort { get; init; } = 8001;
+    public int DirewolfReconnectDelaySeconds { get; init; } = 5;
 }
 
 public sealed class UpdateAprsIsSettingsRequest
@@ -135,9 +423,17 @@ public sealed class UpdateAprsIsSettingsRequest
 public sealed class UpdateWeatherApiKeysRequest
 {
     public string? OpenWeatherMapApiKey { get; init; }
-    public string? TomorrowIoApiKey { get; init; }
     public RadarProvider? RadarProvider { get; init; }
     public string? RainViewerProApiKey { get; init; }
+}
+
+/// <summary>PUT api/v0/settings/lightning-alerts — lightning proximity alert settings.</summary>
+public sealed class UpdateLightningAlertsRequest
+{
+    public bool LightningAlertEnabled { get; init; }
+    public double LightningAlertRadiusKm { get; init; } = 30;
+    public int LightningAlertCooldownMinutes { get; init; } = 5;
+    public bool LightningAlertAutoPan { get; init; }
 }
 
 // ─── Weather proxy DTOs ────────────────────────────────────────────────────
@@ -177,6 +473,54 @@ public sealed class WeatherLayerStatusDto
     public int? FrameCount { get; init; }
     public DateTime? LastUpdated { get; init; }
     public string? Reason { get; init; }
+}
+
+public sealed class LightningStrikesDto
+{
+    public bool Connected { get; init; }
+    public DateTime GeneratedAt { get; init; }
+    public required List<LightningStrikeDto> Strikes { get; init; }
+}
+
+public sealed class LightningStrikeDto
+{
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    public int AgeSeconds { get; init; }
+}
+
+public sealed class LightningHistoryDto
+{
+    public DateTime GeneratedAt { get; init; }
+    /// <summary>True when the strike count hit the query limit and older strikes were dropped.</summary>
+    public bool Truncated { get; init; }
+    public required List<LightningHistoryStrikeDto> Strikes { get; init; }
+}
+
+public sealed class LightningHistoryStrikeDto
+{
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    /// <summary>Strike time as Unix epoch seconds (UTC) — same time base as radar frame times.</summary>
+    public long TimeSeconds { get; init; }
+}
+
+/// <summary>Broadcast on the packet hub when a strike lands within the alert radius of home.</summary>
+public sealed class LightningAlertDto
+{
+    public double DistanceKm { get; init; }
+    /// <summary>Bearing from the home position to the strike, degrees 0–360.</summary>
+    public double BearingDegrees { get; init; }
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    public DateTime StrikeTimeUtc { get; init; }
+    public double RadiusKm { get; init; }
+    /// <summary>
+    /// Seconds between the strike time reported by the feed and this alert being broadcast —
+    /// i.e. how stale the strike already was. Measured on the server so it is unaffected by
+    /// client clock skew.
+    /// </summary>
+    public double FeedLagSeconds { get; init; }
 }
 
 public sealed class TrackPointDto
@@ -230,12 +574,6 @@ public sealed class SendMessageRequest
 public sealed class UpdateOutboundPathRequest
 {
     public string OutboundPath { get; init; } = string.Empty;
-}
-
-public sealed class MessageAckDto
-{
-    public int Id { get; init; }
-    public required string MessageId { get; init; }
 }
 
 public sealed class MessageRetriedDto
@@ -353,8 +691,12 @@ public sealed class StatisticsDto
     public int UniqueStationsToday { get; init; }
     public int UniqueStationsThisWeek { get; init; }
     public int UniqueStationsAllTime { get; init; }
+    /// <summary>All packets per hour (every source), oldest first; index 23 is the current hour.</summary>
     public int[] PacketsPerHour { get; init; } = new int[24];
-    public IReadOnlyList<CallsignCountDto> BusiestDigipeaters { get; init; } = [];
+    /// <summary>Packets heard on RF per hour, same bucketing as <see cref="PacketsPerHour"/>.</summary>
+    public int[] PacketsPerHourRf { get; init; } = new int[24];
+    /// <summary>Packets received from APRS-IS per hour, same bucketing as <see cref="PacketsPerHour"/>.</summary>
+    public int[] PacketsPerHourIs { get; init; } = new int[24];
     public IReadOnlyList<CallsignCountDto> BusiestStations { get; init; } = [];
     public IReadOnlyList<RecentlyHeardDto> RecentlyFirstHeard { get; init; } = [];
     public IReadOnlyList<string> GridSquares { get; init; } = [];
@@ -376,9 +718,18 @@ public sealed class RecentlyHeardDto
 
 public sealed class StatusDto
 {
-    public bool DirewolfConnected { get; init; }
-    public bool ApiOnline { get; init; } = true;
-    public required string AprsIsState { get; init; }
+    /// <summary>The external KISS TCP TNC client (Direwolf etc.) is connected.</summary>
+    public bool ExternalTncConnected { get; init; }
+    public long DigipeatedFrames { get; init; }
+    public int KissServerClients { get; init; }
+    public long RfToIsGatedLines { get; init; }
+    public AprsIsConnectionState AprsIsState { get; init; }
+
+    /// <summary>The server verified our login on the current connection (logresp … verified).</summary>
+    public bool AprsIsVerified { get; init; }
+
+    /// <summary>UTC time of the last line received from APRS-IS — IS freshness, never RF health.</summary>
+    public DateTime? LastIsPacketAt { get; init; }
     public string? AprsIsServerName { get; init; }
     public string AprsIsFilter { get; init; } = string.Empty;
     public long AprsIsSessionPacketCount { get; init; }
@@ -386,6 +737,13 @@ public sealed class StatusDto
     public DateTime? AprsIsLastConnectAttemptAt { get; init; }
     public int AprsIsFailedAttempts { get; init; }
     public string? AprsIsLastError { get; init; }
+    public ModemState ModemState { get; init; }
+
+    /// <summary>Newest RF decode across running modems — RF health, not APRS-IS traffic.</summary>
+    public DateTime? ModemLastDecodedAt { get; init; }
+
+    /// <summary>Earliest start among running modems, to judge "silent since".</summary>
+    public DateTime? ModemRunningSince { get; init; }
 }
 
 public sealed class SignalPointDto
@@ -393,6 +751,11 @@ public sealed class SignalPointDto
     public DateTime ReceivedAt { get; init; }
     public int? DecodeQuality { get; init; }
     public double? FrequencyOffsetHz { get; init; }
+    public double? AudioLevel { get; init; }
+    public string? DemodProfile { get; init; }
+    public int HopCount { get; init; }
+    /// <summary>First digipeater the packet came through, null when heard direct.</summary>
+    public string? FirstDigi { get; init; }
 }
 
 public sealed class DigipeaterAnalysisEntryDto
@@ -428,6 +791,34 @@ public sealed class CoverageGridSquareDto
 
 // ─── Radio management ────────────────────────────────────────────────────────
 
+/// <summary>Per-radio sound modem + PTT configuration (audio feed).</summary>
+public sealed class RadioModemConfigDto
+{
+    public bool ModemEnabled { get; init; }
+    public string ModemCaptureDevice { get; init; } = "default";
+    public string ModemPlaybackDevice { get; init; } = "default";
+    /// <summary>Receive bit repair depth: 0 off, 1 (default) or 2 bits.</summary>
+    public int RxBitRepair { get; init; } = 1;
+    public bool TxEnabled { get; init; }
+    public int TxAudioLevelPct { get; init; } = 80;
+    public double TxSpaceBoostDb { get; init; }
+    public int TxDelayMs { get; init; } = 300;
+    public int TxTailMs { get; init; } = 50;
+    public int TxPersistence { get; init; } = 63;
+    public int TxSlotTimeMs { get; init; } = 100;
+    public PttMethod PttMethod { get; init; } = PttMethod.None;
+    public string? PttSerialPort { get; init; }
+    public bool PttSerialUseRts { get; init; } = true;
+    public bool PttSerialUseDtr { get; init; }
+    public string? PttHidDevice { get; init; }
+    public int PttHidPin { get; init; } = 3;
+    public int PttGpioChip { get; init; }
+    public int PttGpioLine { get; init; }
+    public bool PttGpioActiveLow { get; init; }
+    public string PttRigctldHost { get; init; } = "localhost";
+    public int PttRigctldPort { get; init; } = 4532;
+}
+
 public sealed class RadioDto
 {
     public required string Id { get; init; }
@@ -442,10 +833,15 @@ public sealed class RadioDto
     public string? BeaconComment { get; init; }
     public bool IsActive { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
+    public bool AutoBeaconEnabled { get; init; }
+    public int AutoBeaconIntervalSeconds { get; init; }
+    public double? FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
     public DateTime? LastBeaconedAt { get; init; }
     public int? SecondsSinceBeacon { get; init; }
     public int ConfirmationCount { get; init; }
     public int BeaconCount { get; init; }
+    public required RadioModemConfigDto Modem { get; init; }
 }
 
 public sealed class CreateRadioRequest
@@ -459,6 +855,11 @@ public sealed class CreateRadioRequest
     public string? BeaconSymbol { get; init; }
     public string? BeaconComment { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 600;
+    public bool AutoBeaconEnabled { get; init; }
+    public int AutoBeaconIntervalSeconds { get; init; } = 1800;
+    public double? FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
+    public RadioModemConfigDto? Modem { get; init; }
 }
 
 public sealed class UpdateRadioRequest
@@ -472,6 +873,24 @@ public sealed class UpdateRadioRequest
     public string? BeaconSymbol { get; init; }
     public string? BeaconComment { get; init; }
     public int ExpectedIntervalSeconds { get; init; }
+    public bool AutoBeaconEnabled { get; init; }
+    public int AutoBeaconIntervalSeconds { get; init; }
+    public double? FrequencyMhz { get; init; }
+    public string? Mode { get; init; }
+    public RadioModemConfigDto? Modem { get; init; }
+}
+
+/// <summary>Live TX audio-level (gain) adjustment for a single radio.</summary>
+public sealed class SetTxLevelRequest
+{
+    public int TxAudioLevelPct { get; init; }
+}
+
+/// <summary>A TX calibration test tone to transmit on a single radio.</summary>
+public sealed class TestToneRequest
+{
+    public TestToneKind Kind { get; init; } = TestToneKind.Mark;
+    public int DurationMs { get; init; } = 2000;
 }
 
 public sealed class DigiConfirmationDto
@@ -539,4 +958,39 @@ public sealed class DigiConfirmationBroadcastDto
     public int SecondsAfterBeacon { get; init; }
     public double? Lat { get; init; }
     public double? Lon { get; init; }
+}
+
+/// <summary>One captured off-air audio file available for offline replay.</summary>
+public sealed class AudioCaptureDto
+{
+    public required string Name { get; init; }
+    public long SizeBytes { get; init; }
+    public DateTime CapturedAtUtc { get; init; }
+    public double DurationSeconds { get; init; }
+
+    /// <summary>Why it was captured — "missed-decode" or "manual".</summary>
+    public required string Reason { get; init; }
+}
+
+/// <summary>State of automatic off-air audio capture.</summary>
+public sealed class AudioCaptureSettingsDto
+{
+    public bool Enabled { get; init; }
+    public int CaptureCount { get; init; }
+}
+
+public sealed class SetAudioCaptureRequest
+{
+    public bool Enabled { get; init; }
+}
+
+/// <summary>One received copy of an inbound message — a retransmission may arrive by a different route.</summary>
+public sealed class MessageCopyDto
+{
+    public int PacketId { get; init; }
+    public DateTime ReceivedAt { get; init; }
+    public PacketSource Source { get; init; }
+    public HeardVia HeardVia { get; init; }
+    public string Path { get; init; } = string.Empty;
+    public int HopCount { get; init; }
 }

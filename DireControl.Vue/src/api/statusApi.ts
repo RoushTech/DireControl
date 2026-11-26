@@ -1,9 +1,34 @@
 import http from './axios'
+import type { ModemState } from './modemApi'
+
+/** Mirrors DireControl.Enums.AprsIsConnectionState (numeric JSON). */
+export const AprsIsStates = {
+  Unknown: 0,
+  Disabled: 1,
+  Connecting: 2,
+  Connected: 3,
+  AuthFailed: 4,
+  Disconnected: 5,
+} as const
+export type AprsIsState = (typeof AprsIsStates)[keyof typeof AprsIsStates]
+
+export const aprsIsStateLabels: Record<AprsIsState, string> = {
+  [AprsIsStates.Unknown]: 'Unknown',
+  [AprsIsStates.Disabled]: 'Disabled',
+  [AprsIsStates.Connecting]: 'Connecting…',
+  [AprsIsStates.Connected]: 'Connected',
+  [AprsIsStates.AuthFailed]: 'Auth failed',
+  [AprsIsStates.Disconnected]: 'Disconnected',
+}
 
 export interface StatusDto {
-  direwolfConnected: boolean
-  apiOnline: boolean
-  aprsIsState: string
+  /** The external KISS TCP TNC client (Direwolf etc.) is connected. */
+  externalTncConnected: boolean
+  aprsIsState: AprsIsState
+  /** The server verified our login on the current connection. */
+  aprsIsVerified: boolean
+  /** Last line received from APRS-IS — IS freshness, never RF health. */
+  lastIsPacketAt: string | null
   aprsIsServerName: string | null
   aprsIsFilter: string
   aprsIsSessionPacketCount: number
@@ -11,6 +36,13 @@ export interface StatusDto {
   aprsIsLastConnectAttemptAt: string | null
   aprsIsFailedAttempts: number
   aprsIsLastError: string | null
+  modemState: ModemState
+  /** Newest RF decode across running modems (APRS-IS traffic never sets this). */
+  modemLastDecodedAt: string | null
+  modemRunningSince: string | null
+  digipeatedFrames: number
+  kissServerClients: number
+  rfToIsGatedLines: number
 }
 
 export async function getStatus(): Promise<StatusDto> {

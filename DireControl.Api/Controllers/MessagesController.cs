@@ -17,6 +17,7 @@ public class MessagesController(
     DireControlContext db,
     IOptions<DireControlOptions> options,
     MessageSendingService messageSendingService,
+    TxFrameRegistry txFrames,
     IHubContext<PacketHub> hubContext) : ControllerBase
 {
     [HttpGet("inbox")]
@@ -39,6 +40,11 @@ public class MessagesController(
                 MessageId = m.MessageId,
                 PathUsed = m.PathUsed,
                 ReceivedAt = m.ReceivedAt,
+                ReceiveCount = m.ReceiveCount,
+                LastReceivedAt = m.LastReceivedAt,
+                Source = m.Packet != null ? m.Packet.Source : null,
+                HeardVia = m.Packet != null ? m.Packet.HeardVia : null,
+                Path = m.Packet != null ? m.Packet.Path : null,
                 IsRead = m.IsRead,
                 AckSent = m.AckSent,
                 ReplySent = m.ReplySent,
@@ -69,14 +75,29 @@ public class MessagesController(
             .AsNoTracking()
             .Where(p => p.ParsedType == PacketType.Message);
 
+        // Filters run in SQL against plain columns. MessageData is a JSON-converted column
+        // EF cannot see into, so the addressee and text come from the APRS message info
+        // field ":ADDRESSEE:text" (addressee padded to 9 characters). Callsigns are stored
+        // upper-case, so the input is normalised; free text uses LIKE, which SQLite matches
+        // case-insensitively for ASCII.
         if (!string.IsNullOrWhiteSpace(sender))
-            query = query.Where(p => p.StationCallsign.Contains(sender));
+        {
+            var s = sender.Trim().ToUpperInvariant();
+            query = query.Where(p => p.StationCallsign.Contains(s));
+        }
 
         if (!string.IsNullOrWhiteSpace(addressee))
-            query = query.Where(p => p.MessageData != null && p.MessageData.Addressee.Contains(addressee));
+        {
+            var a = addressee.Trim().ToUpperInvariant();
+            query = query.Where(p => p.InfoField != null && p.InfoField.Substring(1, 9).Contains(a));
+        }
 
         if (!string.IsNullOrWhiteSpace(text))
-            query = query.Where(p => p.MessageData != null && p.MessageData.Text.Contains(text));
+        {
+            var pattern = "%" + EscapeLike(text.Trim()) + "%";
+            query = query.Where(p => p.InfoField != null
+                && EF.Functions.Like(p.InfoField.Substring(11), pattern, "\\"));
+        }
 
         var totalCount = await query.CountAsync(ct);
 
@@ -108,7 +129,7 @@ public class MessagesController(
     [HttpPut("{id:int}/read")]
     public async Task<ActionResult<InboxMessageDto>> MarkRead(int id, CancellationToken ct)
     {
-        var message = await db.Messages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        var message = await db.Messages.Include(m => m.Packet).FirstOrDefaultAsync(m => m.Id == id, ct);
         if (message is null)
             return NotFound();
 
@@ -121,17 +142,52 @@ public class MessagesController(
         return Ok(ToInboxDto(message));
     }
 
+    /// <summary>
+    /// Every received copy of an inbound message, oldest first, with the route
+    /// each took.  Retransmissions often arrive by different paths (direct,
+    /// via a digipeater, or through APRS-IS).
+    /// </summary>
+    [HttpGet("{id:int}/copies")]
+    public async Task<ActionResult<IReadOnlyList<MessageCopyDto>>> GetCopies(int id, CancellationToken ct)
+    {
+        var message = await db.Messages.AsNoTracking().FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (message is null)
+            return NotFound();
+
+        var copies = await MessageHandlingLogic.FindCopiesAsync(message, db, ct);
+        return Ok(copies.Select(p => new MessageCopyDto
+        {
+            PacketId = p.Id,
+            ReceivedAt = p.ReceivedAt,
+            Source = p.Source,
+            HeardVia = p.HeardVia,
+            Path = p.Path,
+            HopCount = p.HopCount,
+        }).ToList());
+    }
+
+    /// <summary>
+    /// Sends a message, splitting text longer than 67 characters into numbered
+    /// parts (see <see cref="MessageSplitter"/>).  Each part is its own APRS
+    /// message with its own ID, ACK and retry schedule.  Returns every part sent,
+    /// in order.
+    /// </summary>
     [HttpPost("send")]
-    public async Task<ActionResult<InboxMessageDto>> Send(
+    public async Task<ActionResult<IReadOnlyList<InboxMessageDto>>> Send(
         [FromBody] SendMessageRequest request,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.ToCallsign))
             return BadRequest("ToCallsign is required.");
 
-        var body = request.Body?.Trim() ?? string.Empty;
-        if (body.Length > 67)
-            body = body[..67];
+        if (StationIdentityLogic.TransmitBlockedReason(options.Value.OurCallsign) is { } blocked)
+            return Problem(statusCode: StatusCodes.Status409Conflict, detail: blocked);
+
+        var parts = MessageSplitter.Split(request.Body ?? string.Empty);
+        if (parts.Count == 0)
+            return BadRequest("Body is required.");
+        if (parts.Count > MessageSplitter.MaxParts)
+            return BadRequest($"Message too long: {parts.Count} parts (max {MessageSplitter.MaxParts}).");
 
         // Resolve path: per-message override takes precedence over the stored default.
         string path;
@@ -145,18 +201,30 @@ public class MessagesController(
             path = userSetting?.OutboundPath ?? "WIDE1-1,WIDE2-1";
         }
 
-        var messageId = MessageSendingService.GenerateMessageId();
-        var message = await messageSendingService.SendMessageAsync(
-            request.ToCallsign.Trim().ToUpperInvariant(),
-            body,
-            messageId,
-            path,
-            ct);
+        var toCallsign = request.ToCallsign.Trim().ToUpperInvariant();
+        var sent = new List<InboxMessageDto>(parts.Count);
 
-        if (message is null)
-            return StatusCode(503, "No active Direwolf connection.");
+        // Only the first part transmits now.  Later parts are stored held and
+        // released one at a time by the retry service as each earlier part is
+        // acknowledged or gives up — no multi-frame burst, no retries in step.
+        var first = await messageSendingService.SendMessageAsync(
+            toCallsign, parts[0], await messageSendingService.NextMessageIdAsync(db, ct), path, ct);
+        if (first is null)
+            return StatusCode(503, "No transmitter available (modem TX off or external TNC down).");
+        // Queued, not sent: the part's lifecycle follows on txFrameStateChanged.
+        sent.Add(ToInboxDto(first) with
+        {
+            TxFrameId = txFrames.LatestByRef(TxFrameKind.Message, first.MessageId)?.Id,
+        });
 
-        return Ok(ToInboxDto(message));
+        foreach (var part in parts.Skip(1))
+        {
+            var held = await messageSendingService.QueueHeldPartAsync(
+                toCallsign, part, await messageSendingService.NextMessageIdAsync(db, ct), path, ct);
+            sent.Add(ToInboxDto(held));
+        }
+
+        return Ok(sent);
     }
 
     /// <summary>
@@ -176,7 +244,7 @@ public class MessagesController(
 
         var sent = await messageSendingService.RetransmitAsync(msg, ct);
         if (!sent)
-            return StatusCode(503, "No active Direwolf connection.");
+            return StatusCode(503, "No transmitter available (modem TX off or external TNC down).");
 
         msg.RetryCount++;
         msg.LastSentAt = DateTime.UtcNow;
@@ -249,6 +317,9 @@ public class MessagesController(
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    internal static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
     private static InboxMessageDto ToInboxDto(Message m) => new()
     {
         Id = m.Id,
@@ -258,6 +329,11 @@ public class MessagesController(
         MessageId = m.MessageId,
         PathUsed = m.PathUsed,
         ReceivedAt = m.ReceivedAt,
+        ReceiveCount = m.ReceiveCount,
+        LastReceivedAt = m.LastReceivedAt,
+        Source = m.Packet?.Source,
+        HeardVia = m.Packet?.HeardVia,
+        Path = m.Packet?.Path,
         IsRead = m.IsRead,
         AckSent = m.AckSent,
         ReplySent = m.ReplySent,

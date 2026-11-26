@@ -5,9 +5,10 @@ namespace DireControl.Enums;
 /// </summary>
 public enum AprsIsConnectionState
 {
-    Disabled = 0,
-    Connecting = 1,
-    Connected = 2,
-    AuthFailed = 3,
-    Disconnected = 4,
+    Unknown = 0,
+    Disabled = 1,
+    Connecting = 2,
+    Connected = 3,
+    AuthFailed = 4,
+    Disconnected = 5,
 }

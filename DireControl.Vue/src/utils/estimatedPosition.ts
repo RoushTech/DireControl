@@ -27,8 +27,8 @@ export function estimatePosition(
   lastLat: number,
   lastLon: number,
   lastHeading: number | null | undefined,
-  lastSpeed: number | null | undefined,  // knots
-  lastSeen: string,                       // ISO UTC string
+  lastSpeed: number | null | undefined, // knots
+  lastSeen: string, // ISO UTC string
 ): EstimatedPosition | null {
   if (lastHeading == null || lastSpeed == null || lastSpeed <= 0) return null
 
@@ -47,8 +47,7 @@ export function estimatePosition(
   const angDist = distanceM / EARTH_RADIUS_M
 
   const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(angDist) +
-    Math.cos(lat1) * Math.sin(angDist) * Math.cos(bearingRad),
+    Math.sin(lat1) * Math.cos(angDist) + Math.cos(lat1) * Math.sin(angDist) * Math.cos(bearingRad),
   )
   const lon2 =
     lon1 +

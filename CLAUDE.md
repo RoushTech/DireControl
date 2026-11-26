@@ -34,6 +34,10 @@ dotnet ef migrations remove \
     --startup-project DireControl.Api/DireControl.Api.csproj
 ```
 
+## Git
+
+- Commit messages are a single line of at most 80 characters — no body, no bullet lists
+
 ## .NET / EF Core
 
 - EF Core models live in the `DireControl.Data.Models` namespace under `DireControl/Data/Models/`
@@ -60,6 +64,7 @@ dotnet ef migrations remove \
 - Use Vuetify for all UI components
 - Path alias `@` resolves to `src/`
 - Formatting is handled by `oxfmt`; linting by `oxlint` then `eslint` — run `npm run lint` before committing
+- UI copy: state what the thing is or what to do, in one sentence where possible. No em dashes (split with a period, use a colon before an explanation, use `·` in titles and labels; `—` is only the empty-value placeholder), no "isn't X, it's Y" contrasts, no "lands here" / "in one place" phrasing, no explaining design rationale to the operator, no "actually/just/simply"
 
 ## Testing
 

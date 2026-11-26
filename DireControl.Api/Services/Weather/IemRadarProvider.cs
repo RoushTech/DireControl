@@ -33,8 +33,18 @@ public sealed class IemRadarProvider(
 
     private readonly ConcurrentDictionary<string, (byte[] Data, DateTime FetchedAt)> _tiles = new();
 
-    // IEM frames are time-derived so RefreshAsync has nothing to do.
-    public Task RefreshAsync(CancellationToken ct) => Task.CompletedTask;
+    // IEM frames are time-derived so there is no manifest to refresh; use the periodic
+    // refresh tick to evict tiles from expired 5-minute buckets instead.
+    public Task RefreshAsync(CancellationToken ct)
+    {
+        var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(15);
+        foreach (var entry in _tiles)
+        {
+            if (entry.Value.FetchedAt < cutoff)
+                _tiles.TryRemove(entry.Key, out _);
+        }
+        return Task.CompletedTask;
+    }
 
     public (NormalizedRadarManifest? Manifest, DateTime FetchedAt) GetManifest()
     {
@@ -43,6 +53,7 @@ public sealed class IemRadarProvider(
         var currentBucket = new DateTime(
             now.Year, now.Month, now.Day,
             now.Hour, (now.Minute / 5) * 5, 0, DateTimeKind.Utc);
+        var bucketUnix = ((DateTimeOffset)currentBucket).ToUnixTimeSeconds();
 
         var frames = FrameLayers
             .Select((layer, i) =>
@@ -53,7 +64,13 @@ public sealed class IemRadarProvider(
                 return new NormalizedRadarFrame
                 {
                     Time = ((DateTimeOffset)frameTime).ToUnixTimeSeconds(),
-                    Path = layer,
+                    // IEM layer names are relative to "now" (e.g. m30m = 30 minutes ago), so
+                    // the same path silently changes imagery as time passes. Embedding the
+                    // 5-minute bucket makes every tile URL of a frame generation unique and
+                    // consistent: browser and server caches roll over atomically per bucket
+                    // instead of tile-by-tile, which is what caused adjacent map sectors to
+                    // show different radar times.
+                    Path = $"{layer}/{bucketUnix}",
                 };
             })
             .ToList();
@@ -70,12 +87,16 @@ public sealed class IemRadarProvider(
 
     public async Task<byte[]?> GetTileAsync(string framePath, int z, int x, int y, string? apiKey, CancellationToken ct)
     {
+        // framePath is "{layer}/{bucketUnix}" (see GetManifest); the bucket only exists to
+        // version the cache key — IEM itself is addressed by the bare layer name.
         var key = $"{framePath}/{z}/{x}/{y}";
 
         if (_tiles.TryGetValue(key, out var cached) && DateTime.UtcNow - cached.FetchedAt < Ttl)
             return cached.Data;
 
-        var url = $"https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/{framePath}/{z}/{x}/{y}.png";
+        var slash = framePath.IndexOf('/');
+        var layer = slash >= 0 ? framePath[..slash] : framePath;
+        var url = $"https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/{layer}/{z}/{x}/{y}.png";
         var http = httpClientFactory.CreateClient("IEM");
         var data = await http.GetByteArrayAsync(url, ct);
         _tiles[key] = (data, DateTime.UtcNow);

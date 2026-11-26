@@ -64,12 +64,13 @@ function selectSymbol(table: string, code: string) {
         label="Symbol"
         density="compact"
         placeholder="e.g. /-"
-        hint="Table+code — click the icon to browse"
+        hint="Table+code. Click the icon to browse."
         persistent-hint
         maxlength="2"
         style="flex: 1"
       />
       <v-btn
+        aria-label="Browse symbols"
         icon="mdi-grid"
         size="small"
         variant="tonal"
@@ -84,11 +85,17 @@ function selectSymbol(table: string, code: string) {
         <v-card-title class="d-flex align-center">
           <span>Select APRS Symbol</span>
           <v-spacer />
-          <v-btn icon="mdi-close" variant="text" size="small" @click="pickerOpen = false" />
+          <v-btn
+            aria-label="Close symbol picker"
+            icon="mdi-close"
+            variant="text"
+            size="small"
+            @click="pickerOpen = false"
+          />
         </v-card-title>
         <v-divider />
 
-        <v-card-text style="max-height: 70vh; overflow-y: auto;">
+        <v-card-text style="max-height: 70vh; overflow-y: auto">
           <!-- Common symbols -->
           <div class="text-subtitle-2 font-weight-medium mb-2">Common</div>
           <div class="symbol-grid mb-4">
@@ -172,7 +179,9 @@ function selectSymbol(table: string, code: string) {
   border: 1px solid rgba(var(--v-border-color), 0.2);
   border-radius: 4px;
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
   min-width: 60px;
 }
 

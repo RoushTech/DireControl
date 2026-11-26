@@ -1,4 +1,5 @@
 import { ref, watch, type Ref } from 'vue'
+import type { StationSourceFilter } from '@/utils/stationSource'
 
 function pref<T>(key: string, defaultVal: T): Ref<T> {
   const stored = localStorage.getItem(`mapPrefs.${key}`)
@@ -10,8 +11,12 @@ function pref<T>(key: string, defaultVal: T): Ref<T> {
 export function useMapPrefs() {
   return {
     tracks: pref('tracks', true),
+    /** How far back movement tracks reach, in minutes. */
+    trackMinutes: pref('trackMinutes', 30),
     estPos: pref('estPos', true),
     stale: pref('stale', false),
+    /** Show stations heard on the radio, only via APRS-IS, or both. */
+    stationSource: pref<StationSourceFilter>('stationSource', 'all'),
     zones: pref('zones', false),
     heatmap: pref('heatmap', false),
     coverage: pref('coverage', false),

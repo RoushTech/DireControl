@@ -91,6 +91,100 @@ public sealed class PacketReprocessingTests
         });
     }
 
+    // =========================================================================
+    // ReprocessOneAsync — classification of packet types that were previously
+    // stored as Unparseable (AprsSharp 0.5.1-rc.3 fixes + new DireControl types).
+    // =========================================================================
+
+    private static IEnumerable<TestCaseData> PreviouslyUnparseableCases()
+    {
+        // Mic-E whose longitude/course bytes are 0x1C / 0x7F — previously rejected by
+        // AprsSharp's text check and decoded as AX.25 garbage.
+        yield return new TestCaseData(
+            "KR4DSW-7>SUQV3Q,KA4J-3*,WE4MB-3*,WIDE2*:`pWRl*\u001c[/BTECH UV-PRO 7.10V\"6m}",
+            "KR4DSW-7", PacketType.Position, true).SetName("MicE_WithControlBytes_IsPosition");
+        yield return new TestCaseData(
+            "W2JKT-10>SU1X0Y,YORKSC*,KN6RO-13*,WE4MB-3*,WIDE2*:`m<)l!\u007f>/]\"6u}146.610MHz=\r",
+            "W2JKT-10", PacketType.Position, true).SetName("MicE_WithDelByte_IsPosition");
+        // Position with DEL bytes in the comment.
+        yield return new TestCaseData(
+            "K4UAN-3>APN383,KM4BJZ-2*,WE4MB-3*,WIDE2*:!3605.01NS08522.30W#PHG5460 W3\u007f2, TNn-N, Servic\u007fng The Upper Cumberland\r",
+            "K4UAN-3", PacketType.Position, true).SetName("Position_WithDelBytesInComment_IsPosition");
+        // Weather-symbol position with no weather data.
+        yield return new TestCaseData(
+            "WB4E-13>APU25N,W4ETR-10*,KA4J-3*,WE4MB-3*,WIDE2*:=3545.46N/08356.92W_",
+            "WB4E-13", PacketType.Weather, true).SetName("WeatherSymbol_WithoutWeatherData_IsWeather");
+        // Peet Bros Ultimeter data logger.
+        yield return new TestCaseData(
+            "NE4SC-12>APRS,KN6RO-13*,WE4MB-3*,WIDE2*:$ULTW00A100EB013E1152----000086A0000103190013006E0000006E\r\n",
+            "NE4SC-12", PacketType.Weather, false).SetName("UltimeterDataLogger_IsWeather");
+        // Station capabilities.
+        yield return new TestCaseData(
+            "KD4YDD-1>APU25N,AJ4FJ-5*,WIDE1*,WE4MB-3*,WIDE2*:<IGATE,MSG_CNT=10,LOC_CNT=97\r",
+            "KD4YDD-1", PacketType.StationCapabilities, false).SetName("StationCapabilities_IsStationCapabilities");
+        // Plain-text ID beacon.
+        yield return new TestCaseData(
+            "WB4BSD>ID,WE4MB-3*,WIDE2*:WB4BSD/R WB4BSD-1/B\r",
+            "WB4BSD", PacketType.Beacon, false).SetName("IdBeacon_IsBeacon");
+        // Third-party position: classified, stays on the gateway, and the inner
+        // station's position is NOT applied to the gateway's packet.
+        yield return new TestCaseData(
+            RealPacketData.Unparseable_ThirdParty,
+            "AC4AG-4", PacketType.ThirdParty, false).SetName("ThirdParty_InnerPosition_IsThirdPartyWithoutPosition");
+    }
+
+    [TestCaseSource(nameof(PreviouslyUnparseableCases))]
+    public async Task ReprocessOneAsync_ClassifiesPreviouslyUnparseablePackets(
+        string raw, string expectedCallsign, PacketType expectedType, bool expectPosition)
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        connection.Open();
+        var dbOptions = new DbContextOptionsBuilder<DireControlContext>().UseSqlite(connection).Options;
+        using var db = new DireControlContext(dbOptions);
+        db.Database.EnsureCreated();
+
+        db.Stations.Add(new Station
+        {
+            Callsign = expectedCallsign,
+            FirstSeen = DateTime.UtcNow,
+            LastSeen = DateTime.UtcNow,
+            Symbol = "/-",
+        });
+        var colon = raw.IndexOf(':');
+        db.Packets.Add(new Packet
+        {
+            Id = 1,
+            StationCallsign = expectedCallsign,
+            RawPacket = raw,
+            InfoField = raw[(colon + 1)..],
+            ReceivedAt = DateTime.UtcNow,
+            Source = PacketSource.Rf,
+            ParsedType = PacketType.Unparseable,
+            ParserVersion = 1,
+        });
+        await db.SaveChangesAsync();
+
+        var packet = await db.Packets.SingleAsync(p => p.Id == 1);
+        await CreateService().ReprocessOneAsync(packet, db, "N0CALL-10", default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(packet.ParsedType, Is.EqualTo(expectedType));
+            Assert.That(packet.StationCallsign, Is.EqualTo(expectedCallsign));
+            Assert.That(packet.Latitude is not null, Is.EqualTo(expectPosition), "latitude presence");
+            Assert.That(packet.Longitude is not null, Is.EqualTo(expectPosition), "longitude presence");
+        });
+
+        if (expectedType == PacketType.StationCapabilities)
+            Assert.That(packet.Comment, Is.EqualTo("IGATE,MSG_CNT=10,LOC_CNT=97"));
+
+        if (raw.Contains("$ULTW", StringComparison.Ordinal))
+        {
+            Assert.That(packet.WeatherData, Is.Not.Null);
+            Assert.That(packet.WeatherData!.TemperatureF, Is.EqualTo(32));
+        }
+    }
+
     // Builds an AprsPacketParsingService with throwaway dependencies. ReprocessOneAsync
     // only uses the DbContext (passed in), options, and logger — the hub, scope factory,
     // alert channel, and message-sending service are never invoked in reprocess mode, so
@@ -99,7 +193,8 @@ public sealed class PacketReprocessingTests
     {
         var options = Options.Create(new DireControlOptions { OurCallsign = "N0CALL-10" });
         var messageSending = new MessageSendingService(
-            new KissConnectionHolder(),
+            new NullFrameTransmitter(),
+            new AprsIsTxQueue(),
             new ThrowingScopeFactory(),
             options,
             NullLogger<MessageSendingService>.Instance);
@@ -177,6 +272,19 @@ public sealed class PacketReprocessingTests
     private sealed class ThrowingScopeFactory : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => throw new InvalidOperationException("scope factory must not be used during reprocessing");
+    }
+
+    /// <summary>Transmitter stand-in: no RF backend available.</summary>
+    private sealed class NullFrameTransmitter : IFrameTransmitter
+    {
+        public bool TrySend(byte[] ax25Frame, int channel = 0) => false;
+
+        public bool TrySend(
+            byte[] ax25Frame,
+            int channel,
+            TxPriority priority,
+            TaskCompletionSource<bool>? txCompletion,
+            bool exactChannelOnly = false) => false;
     }
 
     private sealed class ThrowingHubContext : IHubContext<PacketHub>

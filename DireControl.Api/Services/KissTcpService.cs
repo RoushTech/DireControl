@@ -1,63 +1,100 @@
-using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using AprsSharp.KissTnc;
 using AprsSharp.Shared;
 using DireControl.Data;
 using DireControl.Data.Models;
-using DireControl.Enums;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Services;
 
 /// <summary>
-/// Long-running service that maintains a KISS TCP connection to Direwolf via
-/// AprsSharp.KissTnc, receives AX.25 UI frames as APRS packets, and persists
-/// the raw TNC2 string to the database.  Reconnects automatically.
+/// Long-running service that maintains a KISS TCP connection to an external
+/// TNC (Direwolf or hardware) via AprsSharp.KissTnc, receives AX.25 UI frames,
+/// and hands them to the shared <see cref="RfFrameIngestService"/>.
+/// Reconnects automatically.  Enabled and configured from the DB-backed
+/// <see cref="UserSetting"/> (External TNC settings), and re-reads them whenever
+/// the <c>KissClient</c> restart signal fires.
 /// </summary>
 public sealed class KissTcpService(
-    IOptions<DirewolfOptions> options,
     IServiceScopeFactory scopeFactory,
+    RfFrameIngestService ingestService,
     KissConnectionHolder connectionHolder,
+    [FromKeyedServices(RestartSignals.KissClient)] RestartSignal reconnectTrigger,
     ILogger<KissTcpService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Per-iteration linked token so a settings change (KissClient restart signal)
+            // tears down the current connection and re-reads configuration.
+            using var iterCts = CancellationTokenSource.CreateLinkedTokenSource(
+                stoppingToken, reconnectTrigger.Token);
+            var ct = iterCts.Token;
+
+            var settings = await LoadSettingsAsync(stoppingToken);
+
             try
             {
-                await ConnectAndReadAsync(stoppingToken);
+                if (!settings.DirewolfEnabled)
+                {
+                    logger.LogInformation(
+                        "External TNC (KISS TCP) disabled. Using the native sound modem only.");
+                    // Sleep until a settings change wakes us to re-evaluate.
+                    await Task.Delay(Timeout.Infinite, ct);
+                    continue;
+                }
+
+                await ConnectAndReadAsync(settings, ct);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
+            catch (OperationCanceledException)
+            {
+                // Settings changed — loop and re-read immediately.
+                continue;
+            }
             catch (Exception ex)
             {
                 logger.LogWarning(
                     ex,
-                    "Direwolf connection lost. Reconnecting in {Delay}s…",
-                    options.Value.ReconnectDelaySeconds);
+                    "External TNC connection lost. Reconnecting in {Delay}s…",
+                    settings.DirewolfReconnectDelaySeconds);
 
-                await Task.Delay(
-                    TimeSpan.FromSeconds(options.Value.ReconnectDelaySeconds),
-                    stoppingToken);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(settings.DirewolfReconnectDelaySeconds), ct);
+                }
+                catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+                {
+                    // Settings changed during the backoff — re-read now.
+                }
             }
         }
 
         logger.LogInformation("KissTcpService stopped.");
     }
 
-    private async Task ConnectAndReadAsync(CancellationToken ct)
+    private async Task<UserSetting> LoadSettingsAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        return await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct)
+            ?? new UserSetting { Id = 1 };
+    }
+
+    private async Task ConnectAndReadAsync(UserSetting settings, CancellationToken ct)
     {
         using var tcpConnection = new TcpConnection();
 
         logger.LogInformation(
-            "Connecting to Direwolf at {Host}:{Port}…",
-            options.Value.Host, options.Value.Port);
+            "Connecting to external TNC at {Host}:{Port}…",
+            settings.DirewolfHost, settings.DirewolfPort);
 
-        tcpConnection.Connect(options.Value.Host, options.Value.Port);
-        logger.LogInformation("Connected to Direwolf.");
+        tcpConnection.Connect(settings.DirewolfHost, settings.DirewolfPort);
+        logger.LogInformation("Connected to external TNC.");
 
         const byte tncPort = 0;
         using var tnc = new TcpTnc(tcpConnection, tncPort);
@@ -67,8 +104,8 @@ public sealed class KissTcpService(
         {
             tnc.FrameReceivedEvent += (_, e) =>
             {
-                var data = e.Data;
-                _ = ProcessFrameAsync(data, tncPort, ct).ContinueWith(
+                var data = e.Data.ToArray();
+                _ = ingestService.IngestAsync(data, tncPort, signalData: null, ct).ContinueWith(
                     t => logger.LogError(t.Exception, "Unhandled error processing APRS frame."),
                     TaskContinuationOptions.OnlyOnFaulted);
             };
@@ -78,191 +115,11 @@ public sealed class KissTcpService(
                 await Task.Delay(500, ct);
 
             if (!ct.IsCancellationRequested)
-                throw new EndOfStreamException("Direwolf closed the connection.");
+                throw new EndOfStreamException("External TNC closed the connection.");
         }
         finally
         {
             connectionHolder.SetTnc(null);
         }
-    }
-
-    private async Task ProcessFrameAsync(IReadOnlyList<byte> data, int kissChannel, CancellationToken ct)
-    {
-        // Decode the raw AX.25 frame to TNC2 format first, preserving the
-        // has-been-repeated (H) bit on each repeater address as a '*' suffix.
-        // This must happen before any APRSSharp parsing so the asterisks are
-        // never lost to APRSSharp's EncodeTnc2() which does not round-trip them.
-        var rawPacket = DecodeAx25ToTnc2(data);
-        if (string.IsNullOrEmpty(rawPacket))
-        {
-            logger.LogTrace("Dropped malformed/non-APRS frame ({Bytes} bytes).", data.Count);
-            return;
-        }
-
-        // APRSSharp is still used only to validate the frame and extract the sender.
-        AprsSharp.AprsParser.Packet aprsPacket;
-        try
-        {
-            aprsPacket = new AprsSharp.AprsParser.Packet(data.ToArray());
-        }
-        catch (Exception ex)
-        {
-            logger.LogTrace(ex, "Dropped malformed/non-APRS frame ({Bytes} bytes).", data.Count);
-            return;
-        }
-
-        var callsign = aprsPacket.Sender;
-        if (string.IsNullOrWhiteSpace(callsign))
-        {
-            logger.LogTrace("Dropped frame with empty callsign.");
-            return;
-        }
-
-        var colonIdx = rawPacket.IndexOf(':');
-        var infoField = colonIdx >= 0 ? rawPacket[(colonIdx + 1)..] : string.Empty;
-
-        using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
-
-        // Load dedup window
-        var setting = await db.UserSettings.FindAsync(new object[] { 1 }, ct);
-        var dedupWindowSeconds = setting?.DeduplicationWindowSeconds ?? 60;
-        var dedupWindow = DateTime.UtcNow.AddSeconds(-dedupWindowSeconds);
-
-        // If an APRS-IS copy arrived first, upgrade it to RF rather than inserting a duplicate.
-        var existingAprsIs = await db.Packets
-            .Where(p =>
-                p.StationCallsign == callsign &&
-                p.InfoField == infoField &&
-                p.Source == PacketSource.AprsIs &&
-                p.ReceivedAt >= dedupWindow)
-            .OrderByDescending(p => p.ReceivedAt)
-            .FirstOrDefaultAsync(ct);
-
-        if (existingAprsIs is not null)
-        {
-            existingAprsIs.Source = PacketSource.Rf;
-            var rfStation = await db.Stations.FindAsync(new object[] { callsign }, ct);
-            if (rfStation is not null)
-            {
-                rfStation.LastSeen = DateTime.UtcNow;
-                rfStation.LastHeardRf = DateTime.UtcNow;
-            }
-            await db.SaveChangesAsync(ct);
-            logger.LogDebug(
-                "RF upgrade: APRS-IS packet id={Id} from {Callsign} upgraded to RF.",
-                existingAprsIs.Id, callsign);
-            return;
-        }
-
-        var station = await db.Stations.FindAsync(new object[] { callsign }, ct);
-        if (station is null)
-        {
-            db.Stations.Add(new Station
-            {
-                Callsign = callsign,
-                FirstSeen = DateTime.UtcNow,
-                LastSeen = DateTime.UtcNow,
-                LastHeardRf = DateTime.UtcNow,
-                Symbol = "/-",
-            });
-        }
-        else
-        {
-            station.LastSeen = DateTime.UtcNow;
-            station.LastHeardRf = DateTime.UtcNow;
-        }
-
-        db.Packets.Add(new Packet
-        {
-            StationCallsign = callsign,
-            ReceivedAt = DateTime.UtcNow,
-            RawPacket = rawPacket,
-            Source = PacketSource.Rf,
-            InfoField = infoField,
-            KissChannel = kissChannel,
-            // Direwolf's standard KISS TCP interface carries only the raw AX.25 frame
-            // bytes — there is no signal-quality metadata (decode quality, frequency
-            // offset, audio level) in the KISS frame header.  The AGW/AGWPE interface
-            // does expose some additional per-frame fields, but this implementation uses
-            // KISS TCP.  SignalData is therefore always null for frames received here.
-        });
-
-        await db.SaveChangesAsync(ct);
-
-        logger.LogDebug("Stored RF packet from {Callsign}: {RawPacket}", callsign, rawPacket);
-    }
-
-    /// <summary>
-    /// Decodes a raw AX.25 UI frame (as delivered by KISS) into a TNC2-format string.
-    /// The AX.25 has-been-repeated (H) bit in each repeater address is emitted as a
-    /// <c>*</c> suffix, preserving the digipeater trail that <c>EncodeTnc2()</c> discards.
-    /// Returns <see cref="string.Empty"/> when the frame is too short to be a valid UI frame.
-    /// </summary>
-    private static string DecodeAx25ToTnc2(IReadOnlyList<byte> data)
-    {
-        // AX.25 UI frame layout (after KISS framing stripped):
-        //   [0..6]   Destination (TOCALL)  — 7 bytes
-        //   [7..13]  Source               — 7 bytes
-        //   [14..]   Repeaters            — 7 bytes each; presence determined by end-bit
-        //   Control byte (0x03 for UI)
-        //   PID byte  (0xF0 for APRS)
-        //   Information field (rest)
-        //
-        // Each address byte layout (byte 6 = SSID byte):
-        //   Bit 7 : H (has-been-repeated) — meaningful only for repeater entries
-        //   Bits 4–1 : SSID value 0–15
-        //   Bit 0 : end-of-address-list flag
-
-        // Minimum: 7 (dest) + 7 (src) + 1 (ctrl) + 1 (pid) = 16 bytes
-        if (data.Count < 16)
-            return string.Empty;
-
-        static (string Call, int Ssid, bool HBit, bool EndBit) DecodeAddr(IReadOnlyList<byte> buf, int offset)
-        {
-            var chars = new char[6];
-            for (var i = 0; i < 6; i++)
-                chars[i] = (char)(buf[offset + i] >> 1);
-            var call = new string(chars).TrimEnd();
-            var ssidByte = buf[offset + 6];
-            var ssid = (ssidByte >> 1) & 0x0F;
-            var hBit = (ssidByte & 0x80) != 0;
-            var endBit = (ssidByte & 0x01) != 0;
-            return (call, ssid, hBit, endBit);
-        }
-
-        static string FormatCall(string call, int ssid, bool star = false)
-        {
-            var s = ssid > 0 ? $"{call}-{ssid}" : call;
-            return star ? s + "*" : s;
-        }
-
-        var (destCall, destSsid, _, _) = DecodeAddr(data, 0);
-        var tocall = FormatCall(destCall, destSsid);
-
-        var (srcCall, srcSsid, _, srcEnd) = DecodeAddr(data, 7);
-        var source = FormatCall(srcCall, srcSsid);
-
-        var viaList = new List<string>();
-        var pos = 14;
-        var endBit = srcEnd;
-
-        while (!endBit && pos + 7 <= data.Count)
-        {
-            var (repCall, repSsid, hBit, rEnd) = DecodeAddr(data, pos);
-            viaList.Add(FormatCall(repCall, repSsid, hBit));
-            endBit = rEnd;
-            pos += 7;
-        }
-
-        // Skip control (1 byte) and PID (1 byte) to reach the info field.
-        pos += 2;
-        if (pos > data.Count)
-            return string.Empty;
-
-        var info = Encoding.ASCII.GetString(data.ToArray(), pos, data.Count - pos);
-        var pathPart = viaList.Count > 0 ? "," + string.Join(",", viaList) : string.Empty;
-
-        return $"{source}>{tocall}{pathPart}:{info}";
     }
 }

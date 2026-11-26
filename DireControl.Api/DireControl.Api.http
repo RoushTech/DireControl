@@ -1,6 +1,11 @@
 @DireControl.Api_HostAddress = http://localhost:5010
 
-GET {{DireControl.Api_HostAddress}}/weatherforecast/
+GET {{DireControl.Api_HostAddress}}/health
+Accept: application/json
+
+###
+
+GET {{DireControl.Api_HostAddress}}/api/v0/status
 Accept: application/json
 
 ###

@@ -2,6 +2,7 @@ import http from './axios'
 import type {
   AllMessagePacketDto,
   InboxMessageDto,
+  MessageCopyDto,
   PaginatedResponse,
   SendMessageRequest,
 } from '@/types/message'
@@ -19,8 +20,18 @@ export interface GetAllMessagesParams {
   text?: string
 }
 
-export async function getAllMessages(params: GetAllMessagesParams = {}): Promise<PaginatedResponse<AllMessagePacketDto>> {
-  const { data } = await http.get<PaginatedResponse<AllMessagePacketDto>>('/api/v0/messages/all', { params })
+export async function getAllMessages(
+  params: GetAllMessagesParams = {},
+): Promise<PaginatedResponse<AllMessagePacketDto>> {
+  const { data } = await http.get<PaginatedResponse<AllMessagePacketDto>>('/api/v0/messages/all', {
+    params,
+  })
+  return data
+}
+
+/** Every received copy of an inbound message, oldest first, with its route. */
+export async function getMessageCopies(id: number): Promise<MessageCopyDto[]> {
+  const { data } = await http.get<MessageCopyDto[]>(`/api/v0/messages/${id}/copies`)
   return data
 }
 
@@ -29,8 +40,9 @@ export async function markMessageRead(id: number): Promise<InboxMessageDto> {
   return data
 }
 
-export async function sendMessage(request: SendMessageRequest): Promise<InboxMessageDto> {
-  const { data } = await http.post<InboxMessageDto>('/api/v0/messages/send', request)
+/** Sends a message; long text is split server-side, so every part sent comes back. */
+export async function sendMessage(request: SendMessageRequest): Promise<InboxMessageDto[]> {
+  const { data } = await http.post<InboxMessageDto[]>('/api/v0/messages/send', request)
   return data
 }
 

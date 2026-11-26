@@ -56,6 +56,13 @@ public static class CallsignMatcher
         return activeRadios.FirstOrDefault(r => Matches(r, packet.StationCallsign));
     }
 
+    /// <summary>The callsign without its SSID, upper-cased: "w3uwu-10" → "W3UWU".</summary>
+    public static string BaseCallsign(string callsign)
+    {
+        var dash = callsign.IndexOf('-');
+        return (dash > 0 ? callsign[..dash] : callsign).Trim().ToUpperInvariant();
+    }
+
     public static string Normalise(string callsign)
     {
         if (string.IsNullOrEmpty(callsign))

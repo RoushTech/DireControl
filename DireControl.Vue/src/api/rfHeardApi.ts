@@ -1,0 +1,43 @@
+import http from './axios'
+import type {
+  RfHeardDailyDto,
+  RfHeardStationDto,
+  RfHeardStatusDto,
+  RfHeardSummaryDto,
+} from '@/types/rfHeard'
+
+/**
+ * Per-radio, per-day direct reception. Days with no reception come back as explicit zero
+ * rows, so the caller can plot a continuous line without filling gaps itself.
+ */
+export async function getRfHeardDaily(days: number, channel?: number): Promise<RfHeardDailyDto[]> {
+  const { data } = await http.get<RfHeardDailyDto[]>('/api/v0/rf-heard/daily', {
+    params: { days, channel },
+  })
+  return data
+}
+
+/**
+ * Stations heard direct. `sinceHours` narrows *which* stations are listed by how recently they
+ * were heard; each one still reports its full first-heard/packet-count history.
+ */
+export async function getRfHeardStations(
+  channel?: number,
+  limit = 500,
+  sinceHours?: number,
+): Promise<RfHeardStationDto[]> {
+  const { data } = await http.get<RfHeardStationDto[]>('/api/v0/rf-heard/stations', {
+    params: { channel, limit, sinceHours },
+  })
+  return data
+}
+
+export async function getRfHeardSummary(): Promise<RfHeardSummaryDto[]> {
+  const { data } = await http.get<RfHeardSummaryDto[]>('/api/v0/rf-heard/summary')
+  return data
+}
+
+export async function getRfHeardStatus(): Promise<RfHeardStatusDto> {
+  const { data } = await http.get<RfHeardStatusDto>('/api/v0/rf-heard/status')
+  return data
+}

@@ -10,9 +10,7 @@ const expanded = defineModel<boolean>('expanded', { default: false })
 
 // Convert internal km value to the current display unit for editing
 function toDisplay(km: number): string {
-  return distanceUnit.value === 'mi'
-    ? (km * 0.621371).toFixed(1)
-    : km.toFixed(1)
+  return distanceUnit.value === 'mi' ? (km * 0.621371).toFixed(1) : km.toFixed(1)
 }
 
 // Editable string versions of distances in the current display unit
@@ -86,6 +84,7 @@ function removeRing(index: number) {
           @keydown.enter="commitEdit(i)"
         />
         <v-btn
+          aria-label="Remove range ring"
           icon="mdi-close"
           size="x-small"
           variant="text"
@@ -108,14 +107,15 @@ function removeRing(index: number) {
 </template>
 
 <style scoped>
+/* Theme surfaces, not hard-coded dark — the panel must read in light mode. */
 .range-rings-panel {
-  background: rgba(30, 30, 40, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-surface), 0.92);
+  border: 1px solid rgba(var(--v-border-color), 0.4);
   border-radius: 6px;
   min-width: 160px;
   max-width: 200px;
   backdrop-filter: blur(4px);
-  color: #e0e0e0;
+  color: rgba(var(--v-theme-on-surface), 0.87);
   font-size: 12px;
   user-select: none;
 }
@@ -130,7 +130,7 @@ function removeRing(index: number) {
 }
 
 .rr-header:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(var(--v-theme-on-surface), 0.07);
 }
 
 .rr-icon {
@@ -152,7 +152,7 @@ function removeRing(index: number) {
 
 .rr-body {
   padding: 4px 8px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .rr-toggle-row {

@@ -495,14 +495,14 @@ public class PathParserTests
 }
 
 // -------------------------------------------------------------------------
-// PathResolver.Resolve — full-path classification including source and home
+// Full-path classification through the live parser (source → digis → home).
+// These used to target a test-only PathResolver copy that production never
+// called, so they could pass while the real path code regressed.
 // -------------------------------------------------------------------------
 
 [TestFixture]
-public class PathResolverTests
+public class LivePathResolutionTests
 {
-    // No station coordinates needed for these tests; pass null for stationLookup.
-    private static readonly IReadOnlyDictionary<string, (double Lat, double Lon)>? MockStations = null;
 
     private static IEnumerable<TestCaseData> PathClassificationData()
     {
@@ -585,29 +585,58 @@ public class PathResolverTests
     }
 
     [TestCaseSource(nameof(PathClassificationData))]
-    public void PathParser_ClassifiesCorrectly(
+    public async Task PathParser_ClassifiesCorrectly(
         string raw,
         string[] expectedCallsigns,
         string?[] expectedAliasUsed,
         int expectedHopCount,
         HeardVia expectedHeardVia)
     {
-        var result = PathResolver.Resolve(raw, homeCallsign: "W3UWU", stationLookup: MockStations);
-
-        Assert.That(result.HopCount, Is.EqualTo(expectedHopCount));
-        Assert.That(result.HeardVia, Is.EqualTo(expectedHeardVia));
-        Assert.That(result.Hops.Count, Is.EqualTo(expectedCallsigns.Length));
-
-        for (var i = 0; i < expectedCallsigns.Length; i++)
+        using var harness = new DireControl.Tests.Fakes.IngestHarness();
+        await using var db = harness.CreateDb();
+        var callsign = raw[..raw.IndexOf('>')];
+        db.Stations.Add(new DireControl.Data.Models.Station { Callsign = callsign, FirstSeen = DateTime.UtcNow, LastSeen = DateTime.UtcNow, Symbol = "/-" });
+        var packet = new DireControl.Data.Models.Packet
         {
-            Assert.That(result.Hops[i].Callsign, Is.EqualTo(expectedCallsigns[i]));
-            Assert.That(result.Hops[i].AliasUsed, Is.EqualTo(expectedAliasUsed[i]));
-        }
+            StationCallsign = callsign,
+            RawPacket = raw,
+            ReceivedAt = DateTime.UtcNow,
+            Source = expectedHeardVia == HeardVia.Internet || raw.Contains(",qA") ? PacketSource.AprsIs : PacketSource.Rf,
+        };
+        db.Packets.Add(packet);
+        await db.SaveChangesAsync();
+
+        var options = Microsoft.Extensions.Options.Options.Create(
+            new DireControl.Api.Services.DireControlOptions { OurCallsign = "W3UWU" });
+        var service = new DireControl.Api.Services.AprsPacketParsingService(
+            harness.ScopeFactory,
+            new DireControl.Tests.Fakes.NullHubContext(),
+            options,
+            new DireControl.Api.Services.MessageSendingService(
+                harness.Transmitter, harness.AprsIsTxQueue, harness.ScopeFactory, options,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<DireControl.Api.Services.MessageSendingService>.Instance),
+            new DireControl.Api.Services.PendingAlertChannel(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DireControl.Api.Services.AprsPacketParsingService>.Instance);
+
+        await service.ReprocessOneAsync(packet, db, "W3UWU", default);
+
+        Assert.That(packet.HopCount, Is.EqualTo(expectedHopCount));
+        Assert.That(packet.HeardVia, Is.EqualTo(expectedHeardVia));
+        var hops = packet.ResolvedPath;
+        Assert.That(hops.Select(h => h.Callsign), Is.EqualTo(expectedCallsigns).AsCollection);
+        Assert.That(hops.Select(h => h.AliasUsed), Is.EqualTo(expectedAliasUsed).AsCollection);
 
         // Internet tokens must never appear as hop nodes
-        Assert.That(result.Hops, Has.None.Matches<ResolvedPathEntry>(h =>
+        Assert.That(hops, Has.None.Matches<ResolvedPathEntry>(h =>
             h.Callsign.StartsWith("q", System.StringComparison.OrdinalIgnoreCase) ||
             h.Callsign.Equals("TCPIP", System.StringComparison.OrdinalIgnoreCase) ||
             h.Callsign.Equals("TCPXX", System.StringComparison.OrdinalIgnoreCase)));
     }
+
+    [TestCase("K1ABC>APRS,WIDE1-1,WIDE2-1:!test", HeardVia.Direct)]
+    [TestCase("K1ABC>APRS,WE4MB-3*,WIDE2-1:!test", HeardVia.Digi)]
+    [TestCase("K1ABC>APRS,TCPIP*,qAC,T2TEST:!test", HeardVia.Internet)]
+    [TestCase("K1ABC>APRS:!test", HeardVia.Direct)]
+    public void ClassifyHeardViaFromTnc2_UsesTheHeaderPath(string raw, HeardVia expected) =>
+        Assert.That(AprsPathParser.ClassifyHeardViaFromTnc2(raw), Is.EqualTo(expected));
 }

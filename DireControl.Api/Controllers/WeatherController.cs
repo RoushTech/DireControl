@@ -9,12 +9,12 @@ using Microsoft.EntityFrameworkCore;
 namespace DireControl.Api.Controllers;
 
 [ApiController]
-[Route("api/weather")]
+[Route("api/v0/weather")]
 public class WeatherController(
     RainViewerRadarProvider rainViewerProvider,
     IemRadarProvider iemProvider,
     WindTileCache windTileCache,
-    LightningCache lightningCache,
+    LightningStrikeBuffer strikeBuffer,
     DireControlContext db,
     ILogger<WeatherController> logger) : ControllerBase
 {
@@ -32,7 +32,7 @@ public class WeatherController(
 
     // ── Radar ───────────────────────────────────────────────────────────────
 
-    // Route: /api/weather/radar/tile/{z}/{x}/{y}/{**framePath}
+    // Route: /api/v0/weather/radar/tile/{z}/{x}/{y}/{**framePath}
     // framePath captures the provider frame identifier (e.g. "v2/radar/1620046800" for
     // RainViewer, or "nexrad-n0q-900913" for IEM) with the leading slash already stripped.
     [HttpGet("radar/manifest")]
@@ -94,6 +94,7 @@ public class WeatherController(
         catch (HttpRequestException)
         {
             // Upstream rejected the tile; return a transparent tile so Leaflet renders nothing.
+            Response.Headers.CacheControl = "public, max-age=60";
             return File(TransparentTile, "image/png");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -105,6 +106,10 @@ public class WeatherController(
         if (data is null)
             return StatusCode(503, "Radar manifest not yet available.");
 
+        // Frame paths are immutable (RainViewer embeds a timestamp, IEM a 5-minute bucket),
+        // so tiles are safe to cache client-side. Without this, every pan/zoom re-requests
+        // tiles for all attached animation frames and playback fills in sector by sector.
+        Response.Headers.CacheControl = "public, max-age=900";
         return File(data, "image/png");
     }
 
@@ -131,27 +136,78 @@ public class WeatherController(
         return File(data, "image/png");
     }
 
-    // ── Lightning (Tomorrow.io) ────────────────────────────────────────────
+    // ── Lightning (Blitzortung.org) ────────────────────────────────────────
 
-    [HttpGet("lightning/tile/{z:int}/{x:int}/{y:int}")]
-    public async Task<IActionResult> GetLightningTile(int z, int x, int y, CancellationToken ct)
+    [HttpGet("lightning/strikes")]
+    public ActionResult<LightningStrikesDto> GetLightningStrikes(
+        [FromQuery] double minLat = -90, [FromQuery] double maxLat = 90,
+        [FromQuery] double minLon = -180, [FromQuery] double maxLon = 180,
+        [FromQuery] int maxAgeMinutes = 60)
     {
-        var setting = await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct);
-        if (string.IsNullOrWhiteSpace(setting?.TomorrowIoApiKey))
-            return NoContent();
+        maxAgeMinutes = Math.Clamp(maxAgeMinutes, 1, (int)LightningStrikeBuffer.Retention.TotalMinutes);
+        var now = DateTime.UtcNow;
+        var strikes = strikeBuffer.Query(
+            minLat, maxLat, minLon, maxLon,
+            now - TimeSpan.FromMinutes(maxAgeMinutes),
+            limit: 5000);
 
-        byte[] data;
-        try
+        return Ok(new LightningStrikesDto
         {
-            data = await lightningCache.GetTileAsync(z, x, y, setting.TomorrowIoApiKey, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "Failed to fetch Tomorrow.io lightning tile {Z}/{X}/{Y}", z, x, y);
-            return StatusCode(502, "Failed to fetch lightning tile from upstream.");
-        }
+            Connected = strikeBuffer.IsConnected,
+            GeneratedAt = now,
+            Strikes = strikes.Select(s => new LightningStrikeDto
+            {
+                Latitude = s.Latitude,
+                Longitude = s.Longitude,
+                AgeSeconds = (int)Math.Max(0, (now - s.TimeUtc).TotalSeconds),
+            }).ToList(),
+        });
+    }
 
-        return File(data, "image/png");
+    /// <summary>
+    /// Time-windowed strike history from the database, used to replay lightning in sync
+    /// with radar animation frames. Times are Unix epoch seconds to match radar frame times.
+    /// </summary>
+    [HttpGet("lightning/history")]
+    public async Task<ActionResult<LightningHistoryDto>> GetLightningHistory(
+        [FromQuery] long fromSeconds, [FromQuery] long toSeconds,
+        [FromQuery] double minLat = -90, [FromQuery] double maxLat = 90,
+        [FromQuery] double minLon = -180, [FromQuery] double maxLon = 180,
+        CancellationToken ct = default)
+    {
+        const int limit = 10_000;
+
+        var oldestAllowed = DateTime.UtcNow - LightningPersistenceService.HistoryRetention;
+        var fromUtc = DateTimeOffset.FromUnixTimeSeconds(fromSeconds).UtcDateTime;
+        var toUtc = DateTimeOffset.FromUnixTimeSeconds(toSeconds).UtcDateTime;
+        if (fromUtc < oldestAllowed)
+            fromUtc = oldestAllowed;
+        if (toUtc <= fromUtc)
+            return BadRequest("toSeconds must be after fromSeconds.");
+
+        // Newest-first + Take keeps the most recent strikes when the window overflows the limit.
+        var rows = await db.LightningStrikes.AsNoTracking()
+            .ApplyWindow(fromUtc, toUtc)
+            .ApplyBounds(minLat, maxLat, minLon, maxLon)
+            .OrderByDescending(s => s.TimeUtc)
+            .Take(limit)
+            .ToListAsync(ct);
+        rows.Reverse();
+
+        // SQLite materialises DateTime with Kind=Unspecified; all stored values are UTC.
+        var strikes = rows.Select(s => new LightningHistoryStrikeDto
+        {
+            Latitude = s.Latitude,
+            Longitude = s.Longitude,
+            TimeSeconds = new DateTimeOffset(DateTime.SpecifyKind(s.TimeUtc, DateTimeKind.Utc)).ToUnixTimeSeconds(),
+        }).ToList();
+
+        return Ok(new LightningHistoryDto
+        {
+            GeneratedAt = DateTime.UtcNow,
+            Truncated = strikes.Count == limit,
+            Strikes = strikes,
+        });
     }
 
     // ── Status ─────────────────────────────────────────────────────────────
@@ -183,11 +239,11 @@ public class WeatherController(
             Reason = owmConfigured ? null : "API key not configured",
         };
 
-        var tomorrowConfigured = !string.IsNullOrWhiteSpace(setting?.TomorrowIoApiKey);
         var lightningStatus = new WeatherLayerStatusDto
         {
-            Available = tomorrowConfigured,
-            Reason = tomorrowConfigured ? null : "API key not configured",
+            Available = strikeBuffer.IsConnected,
+            LastUpdated = strikeBuffer.LastStrikeUtc,
+            Reason = strikeBuffer.IsConnected ? null : "Not connected to the Blitzortung feed",
         };
 
         return Ok(new WeatherStatusDto

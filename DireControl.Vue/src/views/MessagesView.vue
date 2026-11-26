@@ -1,30 +1,56 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import {
-  HubConnectionBuilder,
-  LogLevel,
-  type HubConnection,
-} from '@microsoft/signalr'
+import { sourceChip, type SourceChip } from '@/types/packet'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useDisplay } from 'vuetify'
 import { useMessagesStore } from '@/stores/messagesStore'
-import { getAllMessages } from '@/api/messagesApi'
+import { usePacketHubStore } from '@/stores/packetHub'
+import { getAllMessages, getMessageCopies } from '@/api/messagesApi'
+import {
+  createPmsMessage,
+  deletePmsMessage,
+  getPmsMessages,
+  killPmsMessage,
+  pmsMessageTypeLabels,
+  PmsMessageTypes,
+  type PmsMessageDto,
+  type PmsMessageType,
+} from '@/api/pmsApi'
+import { apiErrorDetail } from '@/api/axios'
 import { getSettings, getStations } from '@/api/stationsApi'
-import { formatUtc, timeAgo } from '@/utils/time'
-import type {
-  AllMessagePacketDto,
-  InboxMessageDto,
-  MessageAcknowledgedDto,
-  MessageAckDto,
-  MessageFailedDto,
-  MessageRetriedDto,
-} from '@/types/message'
+import { formatDateTime, timeAgo } from '@/utils/time'
+import { APRS_MAX_PARTS, aprsPartCount } from '@/utils/aprsMessage'
+import type { AllMessagePacketDto, InboxMessageDto, MessageCopyDto } from '@/types/message'
 import { RetryState } from '@/types/message'
-import { type StationDto, StationType } from '@/types/station'
+import { HeardVia, type StationDto, StationType } from '@/types/station'
+import { PacketSource } from '@/types/packet'
 import { useUiStore } from '@/stores/uiStore'
+import { useStationSelectionStore } from '@/stores/stationSelection'
+import { useRouter } from 'vue-router'
 import { useTick } from '@/composables/useTick'
+import { useTxStore } from '@/stores/tx'
+import { TxFrameKinds } from '@/api/txApi'
+import TxLifecycle from '@/components/tx/TxLifecycle.vue'
+import MultipartBubble from '@/components/messages/MultipartBubble.vue'
+import MessagePartState from '@/components/messages/MessagePartState.vue'
+import { groupThread, parsePart, retryBadge } from '@/components/messages/messageParts'
+import { useHealthStore } from '@/stores/health'
+import { useToastStore } from '@/stores/toastStore'
 
 const store = useMessagesStore()
+const txStore = useTxStore()
 const uiStore = useUiStore()
+const healthStore = useHealthStore()
+const toasts = useToastStore()
+const stationSelection = useStationSelectionStore()
+const router = useRouter()
 const { now } = useTick(1000)
+
+// Callsigns link to the station page. The station page's
+// "Show on map" covers the old select-on-map behavior.
+function goToStation(callsign: string) {
+  stationSelection.selectStation(callsign)
+  router.push(`/stations/${encodeURIComponent(callsign)}`)
+}
 
 // ─── Settings & stations ────────────────────────────────────────────────────
 const ourCallsign = ref('')
@@ -38,7 +64,11 @@ function stationTypeName(t: StationType): string {
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
-const activeTab = ref<'inbox' | 'all' | 'outbox'>('inbox')
+const activeTab = ref<'threads' | 'all' | 'outbox' | 'pms'>('threads')
+// The tabs share one scroll container; each tab opens at its top.
+watch(activeTab, () => {
+  document.querySelector('.messages-card > .v-window')?.scrollTo({ top: 0 })
+})
 
 // ─── All-messages state ──────────────────────────────────────────────────────
 const filterSender = ref('')
@@ -50,7 +80,9 @@ const allPageSize = ref(50)
 const allTotalCount = ref(0)
 const allLoading = ref(false)
 
-const allTotalPages = computed(() => Math.max(1, Math.ceil(allTotalCount.value / allPageSize.value)))
+const allTotalPages = computed(() =>
+  Math.max(1, Math.ceil(allTotalCount.value / allPageSize.value)),
+)
 
 async function fetchAllMessages() {
   allLoading.value = true
@@ -69,6 +101,12 @@ async function fetchAllMessages() {
   }
 }
 
+function onAllPage() {
+  void fetchAllMessages()
+  // New page starts at its top, not wherever the previous page was scrolled to.
+  document.querySelector('.messages-card > .v-window')?.scrollTo({ top: 0 })
+}
+
 let filterDebounce: ReturnType<typeof setTimeout> | null = null
 watch([filterSender, filterAddressee, filterText], () => {
   if (filterDebounce) clearTimeout(filterDebounce)
@@ -78,17 +116,350 @@ watch([filterSender, filterAddressee, filterText], () => {
   }, 400)
 })
 
-// ─── Inbox / Outbox ──────────────────────────────────────────────────────────
-const inboundMessages = computed(() =>
-  store.inboxMessages.filter(
-    (m) => m.fromCallsign.toUpperCase() !== ourCallsign.value.toUpperCase()
-  )
+// ─── PMS mailbox ─────────────────────────────────────────────────────────────
+const pmsItems = ref<PmsMessageDto[]>([])
+const pmsPage = ref(1)
+const pmsPageSize = ref(50)
+const pmsTotalCount = ref(0)
+const pmsLoading = ref(false)
+const pmsIncludeKilled = ref(false)
+const pmsError = ref('')
+let pmsLoadedOnce = false
+
+const pmsTotalPages = computed(() =>
+  Math.max(1, Math.ceil(pmsTotalCount.value / pmsPageSize.value)),
 )
 
+async function fetchPms() {
+  pmsLoading.value = true
+  pmsError.value = ''
+  try {
+    const result = await getPmsMessages({
+      page: pmsPage.value,
+      pageSize: pmsPageSize.value,
+      includeKilled: pmsIncludeKilled.value,
+    })
+    pmsItems.value = result.messages
+    pmsTotalCount.value = result.totalCount
+    pmsLoadedOnce = true
+  } catch (e: unknown) {
+    pmsError.value = apiErrorDetail(e)
+  } finally {
+    pmsLoading.value = false
+  }
+}
+
+// The PMS list loads lazily on first visit to its tab.
+watch(activeTab, (tab) => {
+  if (tab === 'pms' && !pmsLoadedOnce) void fetchPms()
+})
+
+watch(pmsIncludeKilled, () => {
+  pmsPage.value = 1
+  void fetchPms()
+})
+
+function pmsTypeChip(type: PmsMessageType): { label: string; color: string } {
+  switch (type) {
+    case PmsMessageTypes.Private:
+      return { label: 'P', color: 'primary' }
+    case PmsMessageTypes.Bulletin:
+      return { label: 'B', color: 'orange' }
+    default:
+      return { label: '?', color: 'grey' }
+  }
+}
+
+// PMS compose
+const pmsComposeOpen = ref(false)
+const pmsType = ref<PmsMessageType>(PmsMessageTypes.Private)
+const pmsTo = ref('')
+const pmsSubject = ref('')
+const pmsBody = ref('')
+const pmsSending = ref(false)
+const pmsSendError = ref('')
+
+const pmsTypeItems = [
+  { title: pmsMessageTypeLabels[PmsMessageTypes.Private], value: PmsMessageTypes.Private },
+  { title: pmsMessageTypeLabels[PmsMessageTypes.Bulletin], value: PmsMessageTypes.Bulletin },
+]
+
+function openPmsCompose() {
+  pmsType.value = PmsMessageTypes.Private
+  pmsTo.value = ''
+  pmsSubject.value = ''
+  pmsBody.value = ''
+  pmsSendError.value = ''
+  pmsComposeOpen.value = true
+}
+
+async function doPmsSend() {
+  const to = pmsTo.value.trim().toUpperCase()
+  if (!to) return
+  pmsSending.value = true
+  pmsSendError.value = ''
+  try {
+    await createPmsMessage({
+      type: pmsType.value,
+      toCallsign: to,
+      subject: pmsSubject.value.trim() || undefined,
+      body: pmsBody.value.trim() || undefined,
+    })
+    pmsComposeOpen.value = false
+    await fetchPms()
+  } catch (e: unknown) {
+    pmsSendError.value = apiErrorDetail(e)
+  } finally {
+    pmsSending.value = false
+  }
+}
+
+// PMS kill / delete (both confirmed)
+const pmsConfirm = ref<{ action: 'kill' | 'delete'; msg: PmsMessageDto } | null>(null)
+
+async function doPmsConfirm() {
+  const confirm = pmsConfirm.value
+  if (!confirm) return
+  pmsConfirm.value = null
+  pmsError.value = ''
+  try {
+    if (confirm.action === 'kill') await killPmsMessage(confirm.msg.id)
+    else await deletePmsMessage(confirm.msg.id)
+    await fetchPms()
+  } catch (e: unknown) {
+    pmsError.value = apiErrorDetail(e)
+  }
+}
+
+// ─── Conversations ───────────────────────────────────────────────────────────
+// Inbox and sent messages grouped by the other station, chat-style.  Retried
+// copies are already folded server-side (receiveCount), so a thread shows one
+// bubble per real message.
+interface Conversation {
+  peer: string
+  messages: InboxMessageDto[]
+  last: InboxMessageDto
+  lastAt: string
+  unread: number
+}
+
+const { smAndDown } = useDisplay()
+
+function isOutbound(m: InboxMessageDto): boolean {
+  return !!ourCallsign.value && m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
+}
+
+function peerOf(m: InboxMessageDto): string {
+  return (isOutbound(m) ? m.toCallsign : m.fromCallsign).toUpperCase()
+}
+
+function lastActivityOf(m: InboxMessageDto): string {
+  return isOutbound(m) ? (m.lastSentAt ?? m.receivedAt) : (m.lastReceivedAt ?? m.receivedAt)
+}
+
+const conversations = computed<Conversation[]>(() => {
+  const byPeer = new Map<string, InboxMessageDto[]>()
+  for (const m of store.inboxMessages) {
+    const peer = peerOf(m)
+    const list = byPeer.get(peer)
+    if (list) list.push(m)
+    else byPeer.set(peer, [m])
+  }
+  return [...byPeer]
+    .map(([peer, messages]) => {
+      messages.sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
+      const lastAt = messages
+        .map(lastActivityOf)
+        .reduce((max, t) => (t.localeCompare(max) > 0 ? t : max))
+      return {
+        peer,
+        messages,
+        last: messages[messages.length - 1]!,
+        lastAt,
+        unread: messages.filter((m) => !isOutbound(m) && !m.isRead).length,
+      }
+    })
+    .sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+})
+
+const selectedPeer = ref<string | null>(null)
+
+const selectedConversation = computed(
+  () => conversations.value.find((c) => c.peer === selectedPeer.value) ?? null,
+)
+
+// Desktop opens the most recent thread; on phones the list stays in front
+// until a conversation is tapped.
+watch(
+  conversations,
+  (list) => {
+    if (!selectedPeer.value && !smAndDown.value && list.length > 0) {
+      selectedPeer.value = list[0]!.peer
+    }
+  },
+  { immediate: true },
+)
+
+function selectConversation(peer: string) {
+  selectedPeer.value = peer
+  replyBody.value = ''
+  replyError.value = ''
+  replyErrorFix.value = null
+}
+
+// Opening a thread (or a new message landing in the open one) marks it read.
+watch(
+  () => (activeTab.value === 'threads' ? selectedConversation.value : null),
+  async (conv) => {
+    if (!conv || conv.unread === 0) return
+    const unread = conv.messages.filter((m) => !isOutbound(m) && !m.isRead)
+    await Promise.allSettled(unread.map((m) => store.markRead(m.id)))
+  },
+)
+
+// Keep the thread pinned to the newest message.
+const threadEl = ref<HTMLElement | null>(null)
+watch(
+  () => [selectedPeer.value, selectedConversation.value?.messages.length],
+  async () => {
+    await nextTick()
+    if (threadEl.value) threadEl.value.scrollTop = threadEl.value.scrollHeight
+  },
+)
+
+// Consecutive outbound "(n/m)" parts of one compose render as one bubble.
+const threadItems = computed(() =>
+  selectedConversation.value ? groupThread(selectedConversation.value.messages, isOutbound) : [],
+)
+
+function receiveCountTitle(m: InboxMessageDto): string {
+  const last = m.lastReceivedAt ? `, last ${timeAgo(m.lastReceivedAt, now.value)}` : ''
+  return `Heard ${m.receiveCount} times${last}. The sender retransmitted, usually because it missed our ACK.`
+}
+
+// ─── Message routes ──────────────────────────────────────────────────────────
+// Inbound bubbles show how the first copy arrived (RF / APRS-IS + via-path);
+// the ×N chip expands every copy, since retries often take different routes.
+const HEARD_VIA_LABELS: Partial<Record<HeardVia, string>> = {
+  [HeardVia.Direct]: 'direct',
+  [HeardVia.Digi]: 'via digipeater',
+  [HeardVia.DirectAndDigi]: 'direct & digi',
+  [HeardVia.IgateRf]: 'RF → iGate',
+  [HeardVia.IgateRfDigi]: 'RF → digi → iGate',
+  [HeardVia.Internet]: 'internet',
+}
+
+function routeSource(source: PacketSource | null): SourceChip | null {
+  return source === null ? null : sourceChip(source)
+}
+
+function heardViaText(hv: HeardVia | null): string {
+  return (hv !== null && HEARD_VIA_LABELS[hv]) || ''
+}
+
+function formatPath(path: string | null): string {
+  return path ? path.split(',').join(' › ') : 'direct'
+}
+
+const copiesOpen = ref(new Set<number>())
+const copiesById = ref<Record<number, MessageCopyDto[]>>({})
+const copiesLoading = ref<Record<number, boolean>>({})
+
+async function toggleCopies(msg: InboxMessageDto) {
+  const next = new Set(copiesOpen.value)
+  if (next.has(msg.id)) {
+    next.delete(msg.id)
+    copiesOpen.value = next
+    return
+  }
+  next.add(msg.id)
+  copiesOpen.value = next
+  // Refetch when more copies have been heard since the last load.
+  if ((copiesById.value[msg.id]?.length ?? 0) >= msg.receiveCount) return
+  copiesLoading.value[msg.id] = true
+  try {
+    copiesById.value[msg.id] = await getMessageCopies(msg.id)
+  } catch {
+    copiesById.value[msg.id] = []
+  } finally {
+    delete copiesLoading.value[msg.id]
+  }
+}
+
+// ─── Why sending is blocked ──────────────────────────────────────────────────
+// The composer says why transmit is impossible and links to the fix, rather
+// than letting the operator type into a dead end. Drafting stays enabled.
+interface FixLink {
+  to: string
+  label: string
+}
+
+// The health model says why TX is blocked and which page fixes it.
+const txBlocked = computed<{ reason: string; fix: FixLink } | null>(
+  () => healthStore.health.txBlocked,
+)
+
+/** Send was refused: 409 = callsign not set (N0CALL), 503 = no transmitter. */
+function sendRefusalFix(e: unknown): FixLink | null {
+  const status = (e as { response?: { status?: number } } | null)?.response?.status
+  if (status === 409) return { to: '/settings/station', label: 'Set callsign' }
+  if (status === 503) return { to: '/settings/radios', label: 'Radio settings' }
+  return null
+}
+
+// Inline reply at the bottom of the thread.
+const replyBody = ref('')
+const replySending = ref(false)
+const replyError = ref('')
+const replyErrorFix = ref<FixLink | null>(null)
+// Set when the server queued fewer parts than a multi-part message needed —
+// the transmitter dropped out mid-send, so the peer has an incomplete message.
+const partialSendWarning = ref('')
+
+function checkPartialSend(sentCount: number, expected: number) {
+  partialSendWarning.value =
+    sentCount < expected
+      ? `Only ${sentCount} of ${expected} parts were queued because the transmitter became unavailable mid-send. Send the rest again once TX is back.`
+      : ''
+}
+
+async function sendReply() {
+  const peer = selectedPeer.value
+  const body = replyBody.value.trim()
+  if (!peer || !body || replySending.value || replyParts.value > APRS_MAX_PARTS) return
+  if (txBlocked.value) return
+  replySending.value = true
+  replyError.value = ''
+  replyErrorFix.value = null
+  const expectedParts = replyParts.value
+  try {
+    const sent = await store.send({
+      toCallsign: peer,
+      body,
+      path: defaultOutboundPath.value || undefined,
+    })
+    checkPartialSend(sent.length, expectedParts)
+    replyBody.value = ''
+  } catch (e) {
+    replyError.value = apiErrorDetail(e)
+    replyErrorFix.value = sendRefusalFix(e)
+  } finally {
+    replySending.value = false
+  }
+}
+
+// Everything we sent that hasn't been acknowledged yet.
 const outboxMessages = computed(() =>
   store.inboxMessages.filter(
-    (m) => m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase()
-  )
+    (m) =>
+      m.fromCallsign.toUpperCase() === ourCallsign.value.toUpperCase() &&
+      m.retryState !== RetryState.Acknowledged &&
+      // Cancelled = the operator dismissed it; it stays in its conversation.
+      m.retryState !== RetryState.Cancelled,
+  ),
+)
+const failedOutbox = computed(() =>
+  outboxMessages.value.filter((m) => m.retryState === RetryState.Failed),
 )
 
 const actionLoading = ref<Record<number, 'retry' | 'reset' | 'cancel' | null>>({})
@@ -98,26 +469,18 @@ function secondsUntilRetry(msg: InboxMessageDto): number {
   return Math.max(0, Math.round((new Date(msg.nextRetryAt).getTime() - now.value) / 1000))
 }
 
-function retryBadge(msg: InboxMessageDto): { color: string; text: string } {
-  switch (msg.retryState) {
-    case RetryState.Retrying:
-      return { color: 'warning', text: `Attempt ${msg.retryCount + 1}/${msg.maxRetries}` }
-    case RetryState.Acknowledged:
-      return { color: 'success', text: 'Acknowledged' }
-    case RetryState.Failed:
-      return { color: 'error', text: `Failed after ${msg.retryCount} attempts` }
-    case RetryState.Cancelled:
-      return { color: 'default', text: 'Cancelled' }
-    default:
-      return { color: 'info', text: 'Pending' }
-  }
+/** The latest TX frame for an outbound part (frames carry the APRS message number). */
+function partFrame(msg: InboxMessageDto) {
+  return msg.messageId ? txStore.latestForRef(TxFrameKinds.Message, msg.messageId) : undefined
 }
 
 async function doRetryNow(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'retry'
   try {
     await store.retryNow(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch (e) {
+    toasts.toast(apiErrorDetail(e, "Couldn't retry the message"), 'error')
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -139,7 +502,9 @@ async function confirmReset() {
   actionLoading.value[msg.id] = 'reset'
   try {
     await store.resetRetry(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch (e) {
+    toasts.toast(apiErrorDetail(e, "Couldn't reset retries"), 'error')
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
@@ -148,18 +513,24 @@ async function doCancel(msg: InboxMessageDto) {
   actionLoading.value[msg.id] = 'cancel'
   try {
     await store.cancelRetry(msg.id)
-  } catch { /* ignore */ } finally {
+  } catch (e) {
+    toasts.toast(apiErrorDetail(e, "Couldn't cancel the message"), 'error')
+  } finally {
     delete actionLoading.value[msg.id]
   }
 }
 
-// Failed message toast
-const failedToast = ref(false)
-const failedToastText = ref('')
-
-function showFailedToast(data: MessageFailedDto) {
-  failedToastText.value = `Message to ${data.toCallsign} failed after ${data.retryCount} attempts — no ACK received.`
-  failedToast.value = true
+/** Failed messages: give up on them so they leave the Outbox and the nav badge. */
+const dismissingAll = ref(false)
+async function dismissAllFailed() {
+  dismissingAll.value = true
+  try {
+    const results = await Promise.allSettled(failedOutbox.value.map((m) => store.cancelRetry(m.id)))
+    const bad = results.filter((r) => r.status === 'rejected').length
+    if (bad) toasts.toast(`Couldn't dismiss ${bad} message${bad === 1 ? '' : 's'}`, 'error')
+  } finally {
+    dismissingAll.value = false
+  }
 }
 
 // ─── Compose panel ──────────────────────────────────────────────────────────
@@ -171,7 +542,15 @@ const composeAdvancedOpen = ref(false)
 const defaultOutboundPath = ref('')
 const sending = ref(false)
 const sendError = ref('')
-const MAX_BODY = 67
+const sendErrorFix = ref<FixLink | null>(null)
+// Long text is split server-side into numbered 67-char APRS messages.
+const replyParts = computed(() => aprsPartCount(replyBody.value))
+const composeParts = computed(() => aprsPartCount(composeBody.value))
+
+function partsHint(parts: number): string {
+  if (parts > APRS_MAX_PARTS) return `Too long: ${parts} messages (max ${APRS_MAX_PARTS})`
+  return parts > 1 ? `Sends as ${parts} messages` : ''
+}
 
 const PATH_REGEX = /^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$/
 
@@ -184,9 +563,7 @@ const composePathError = computed(() => {
 const addresseeSuggestions = computed(() => {
   const q = composeTo.value?.trim().toUpperCase()
   if (!q || q.length < 2) return []
-  return allStations.value
-    .filter(s => s.callsign.toUpperCase().startsWith(q))
-    .slice(0, 8)
+  return allStations.value.filter((s) => s.callsign.toUpperCase().startsWith(q)).slice(0, 8)
 })
 
 function openCompose(prefillTo = '') {
@@ -195,6 +572,7 @@ function openCompose(prefillTo = '') {
   composePath.value = defaultOutboundPath.value
   composeAdvancedOpen.value = false
   sendError.value = ''
+  sendErrorFix.value = null
   composeOpen.value = true
 }
 
@@ -203,18 +581,25 @@ async function doSend() {
   if (!to || !composeBody.value.trim()) return
   if (to.length > 9 || !/^[A-Z0-9-]+$/.test(to)) return
   if (composePathError.value) return
+  if (composeParts.value > APRS_MAX_PARTS) return
+  if (txBlocked.value) return
   sending.value = true
   sendError.value = ''
+  sendErrorFix.value = null
+  const expectedParts = composeParts.value
   try {
-    await store.send({
+    const sent = await store.send({
       toCallsign: to,
-      body: composeBody.value.trim().slice(0, MAX_BODY),
+      body: composeBody.value.trim(),
       path: composePath.value.trim() || undefined,
     })
+    checkPartialSend(sent.length, expectedParts)
     composeOpen.value = false
-    activeTab.value = 'outbox'
-  } catch {
-    sendError.value = 'Failed to send. Is Direwolf connected?'
+    activeTab.value = 'threads'
+    selectedPeer.value = to
+  } catch (e) {
+    sendError.value = apiErrorDetail(e)
+    sendErrorFix.value = sendRefusalFix(e)
   } finally {
     sending.value = false
   }
@@ -235,64 +620,42 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // Open compose when triggered via global shortcut (M key from any view)
-watch(() => uiStore.pendingComposeOpen, (pending) => {
-  if (pending) {
-    uiStore.consumeCompose()
-    openCompose()
-  }
-})
+watch(
+  () => uiStore.pendingComposeOpen,
+  (pending) => {
+    if (pending) {
+      uiStore.consumeCompose()
+      openCompose()
+    }
+  },
+)
 
-// ─── Inbox actions ───────────────────────────────────────────────────────────
-async function onRowClick(message: InboxMessageDto) {
-  if (!message.isRead) {
-    await store.markRead(message.id)
-  }
+// ─── Expandable message bodies ───────────────────────────────────────────────
+// APRS messages are ≤67 chars but "all messages" rows (telemetry defs, bulletins)
+// can be long — a click un-clips the row instead of hiding the tail forever.
+const expandedMessages = ref(new Set<string>())
+
+function toggleExpand(id: number | string) {
+  const key = String(id)
+  const next = new Set(expandedMessages.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedMessages.value = next
 }
 
-// ─── SignalR ─────────────────────────────────────────────────────────────────
-let connection: HubConnection | null = null
-const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('connecting')
+function isExpanded(id: number | string): boolean {
+  return expandedMessages.value.has(String(id))
+}
 
-async function connectSignalR() {
-  connectionStatus.value = 'connecting'
-  connection = new HubConnectionBuilder()
-    .withUrl('/hubs/packets')
-    .withAutomaticReconnect()
-    .configureLogging(LogLevel.Warning)
-    .build()
+// ─── SignalR (shared hub) ────────────────────────────────────────────────────
+// Store mutations are registered app-level in messagesStore; this view only
+// adds its UI reaction (browser notification) while mounted; the give-up
+// toast is raised app-wide by messagesStore.
+const hub = usePacketHubStore()
+const connectionStatus = computed(() => hub.state)
 
-  connection.onreconnecting(() => { connectionStatus.value = 'connecting' })
-  connection.onreconnected(() => { connectionStatus.value = 'connected' })
-  connection.onclose(() => { connectionStatus.value = 'disconnected' })
-
-  connection.on('messageReceived', (message: InboxMessageDto) => {
-    store.onMessageReceived(message)
-    showBrowserNotification(message)
-  })
-
-  connection.on('messageAcked', (ack: MessageAckDto) => {
-    store.onMessageAcked(ack)
-  })
-
-  connection.on('messageRetried', (data: MessageRetriedDto) => {
-    store.onMessageRetried(data)
-  })
-
-  connection.on('messageAcknowledged', (data: MessageAcknowledgedDto) => {
-    store.onMessageAcknowledged(data)
-  })
-
-  connection.on('messageFailed', (data: MessageFailedDto) => {
-    store.onMessageFailed(data)
-    showFailedToast(data)
-  })
-
-  try {
-    await connection.start()
-    connectionStatus.value = 'connected'
-  } catch {
-    connectionStatus.value = 'disconnected'
-  }
+function onHubMessageReceived(message: InboxMessageDto) {
+  showBrowserNotification(message)
 }
 
 // ─── Browser notifications ───────────────────────────────────────────────────
@@ -323,319 +686,917 @@ onMounted(async () => {
     ourCallsign.value = settings.ourCallsign
     defaultOutboundPath.value = settings.outboundPath
     composePath.value = settings.outboundPath
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   try {
     const stations = await getStations(true)
     allStations.value = stations
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   await Promise.all([store.fetchInbox(), fetchAllMessages()])
-  await connectSignalR()
+  hub.on('messageReceived', onHubMessageReceived)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  connection?.stop()
+  hub.off('messageReceived', onHubMessageReceived)
 })
-
-function replyTo(message: InboxMessageDto) {
-  openCompose(message.fromCallsign)
-}
 </script>
 
 <template>
   <div class="messages-view">
-    <!-- Header row -->
-    <v-row no-gutters align="center" class="mb-3">
-      <v-col>
-        <div class="d-flex align-center gap-2">
-          <span class="text-h6">Messages</span>
-          <v-chip
-            v-if="store.unreadCount > 0"
-            color="error"
-            size="small"
-            class="ml-2"
-          >
+    <!-- Header (17px/650 title; Compose lives in the card's tab row) -->
+    <div class="d-flex align-center ga-2 mb-3 flex-shrink-0">
+      <span class="page-title">Messages</span>
+      <v-chip
+        v-if="connectionStatus !== 'connected'"
+        :color="connectionStatus === 'connecting' ? 'warning' : 'error'"
+        size="x-small"
+        variant="tonal"
+      >
+        {{ connectionStatus }}
+      </v-chip>
+    </div>
+
+    <!-- Failed sends badge the nav on every screen; clear them from any tab. -->
+    <v-alert
+      v-if="failedOutbox.length"
+      type="error"
+      variant="tonal"
+      density="compact"
+      class="mb-3 flex-shrink-0"
+    >
+      <div class="d-flex align-center flex-wrap ga-2">
+        <span class="text-body-2">
+          {{ failedOutbox.length }} message{{ failedOutbox.length === 1 ? '' : 's' }} gave up
+          without an ACK. Retry them from the Outbox, or dismiss to clear the badge.
+        </span>
+        <v-spacer />
+        <v-btn
+          v-if="activeTab !== 'outbox'"
+          size="small"
+          variant="text"
+          @click="activeTab = 'outbox'"
+        >
+          Show outbox
+        </v-btn>
+        <v-btn
+          size="small"
+          variant="tonal"
+          color="error"
+          :loading="dismissingAll"
+          @click="dismissAllFailed"
+        >
+          Dismiss all failed
+        </v-btn>
+      </div>
+    </v-alert>
+
+    <!-- One card: tab row (with counts + Compose) over the table -->
+    <v-card variant="outlined" class="messages-card">
+      <div class="msg-tabs" role="tablist">
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'threads' }"
+          role="tab"
+          :aria-selected="activeTab === 'threads'"
+          @click="activeTab = 'threads'"
+        >
+          Conversations
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ conversations.length.toLocaleString() }}
+          </v-chip>
+          <v-chip v-if="store.unreadCount > 0" size="x-small" color="error" class="ml-1">
             {{ store.unreadCount }} unread
           </v-chip>
+        </button>
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'outbox' }"
+          role="tab"
+          :aria-selected="activeTab === 'outbox'"
+          @click="activeTab = 'outbox'"
+        >
+          Outbox
           <v-chip
-            v-if="connectionStatus !== 'connected'"
-            :color="connectionStatus === 'connecting' ? 'warning' : 'error'"
             size="x-small"
-            class="ml-2"
+            variant="tonal"
+            :color="failedOutbox.length ? 'error' : undefined"
+            class="ml-1"
           >
-            {{ connectionStatus }}
+            {{ outboxMessages.length.toLocaleString() }}
           </v-chip>
-        </div>
-      </v-col>
-      <v-col cols="auto">
+        </button>
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'all' }"
+          role="tab"
+          :aria-selected="activeTab === 'all'"
+          @click="activeTab = 'all'"
+        >
+          All
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ allTotalCount.toLocaleString() }}
+          </v-chip>
+        </button>
+        <button
+          class="msg-tab"
+          :class="{ 'msg-tab--active': activeTab === 'pms' }"
+          role="tab"
+          :aria-selected="activeTab === 'pms'"
+          @click="activeTab = 'pms'"
+        >
+          PMS
+          <v-chip size="x-small" variant="tonal" class="ml-1">
+            {{ pmsTotalCount.toLocaleString() }}
+          </v-chip>
+        </button>
+        <v-spacer />
         <v-btn
           color="primary"
           prepend-icon="mdi-pencil"
           size="small"
+          class="align-self-center mr-2"
           @click="openCompose()"
         >
           Compose
           <v-tooltip activator="parent" location="bottom">Press M</v-tooltip>
         </v-btn>
-      </v-col>
-    </v-row>
+      </div>
+      <v-divider />
 
-    <!-- Tabs -->
-    <v-tabs v-model="activeTab" density="compact" class="mb-2">
-      <v-tab value="inbox">
-        Inbox
-        <v-badge
-          v-if="store.unreadCount > 0"
-          :content="store.unreadCount"
-          color="error"
-          inline
-          class="ml-2"
-        />
-      </v-tab>
-      <v-tab value="outbox">Outbox</v-tab>
-      <v-tab value="all">All Messages</v-tab>
-    </v-tabs>
-
-    <v-window v-model="activeTab" class="flex-grow-1 overflow-auto">
-      <!-- ── Inbox Tab ───────────────────────────────────────────────────────── -->
-      <v-window-item value="inbox">
-        <v-table density="compact" hover>
-          <thead>
-            <tr>
-              <th>From</th>
-              <th>Message</th>
-              <th>Time</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="msg in inboundMessages"
-              :key="msg.id"
-              :class="{ 'font-weight-bold': !msg.isRead }"
-              style="cursor: pointer"
-              @click="onRowClick(msg)"
+      <v-window v-model="activeTab">
+        <!-- ── Conversations Tab ──────────────────────────────────────────────── -->
+        <v-window-item value="threads">
+          <div v-if="conversations.length === 0" class="text-center py-8">
+            <v-icon size="36" class="text-medium-emphasis mb-2">mdi-forum-outline</v-icon>
+            <div class="text-body-2 font-weight-medium mb-1">No conversations yet</div>
+            <div class="text-caption text-medium-emphasis mb-3">
+              Messages addressed to {{ ourCallsign || 'your station' }} appear here.
+            </div>
+            <v-btn
+              size="small"
+              color="primary"
+              variant="tonal"
+              prepend-icon="mdi-email-edit-outline"
+              @click="openCompose()"
             >
-              <td>
-                <a
-                  href="#"
-                  class="text-decoration-none"
-                  @click.stop.prevent="$router.push('/')"
-                >{{ msg.fromCallsign }}</a>
-              </td>
-              <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
-                {{ msg.body }}
-              </td>
-              <td class="text-no-wrap">
-                <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
-              </td>
-              <td>
-                <v-chip
-                  v-if="!msg.isRead"
-                  color="primary"
-                  size="x-small"
-                  class="mr-1"
-                >
-                  Unread
-                </v-chip>
-              </td>
-              <td>
-                <v-btn
-                  icon="mdi-reply"
-                  size="x-small"
-                  variant="text"
-                  @click.stop="replyTo(msg)"
-                />
-              </td>
-            </tr>
-            <tr v-if="inboundMessages.length === 0">
-              <td colspan="5" class="text-center text-medium-emphasis py-6">
-                No messages yet.
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </v-window-item>
+              Compose your first message
+            </v-btn>
+          </div>
 
-      <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
-      <v-window-item value="outbox">
-        <v-table density="compact">
-          <thead>
-            <tr>
-              <th>To</th>
-              <th>Message</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="msg in outboxMessages" :key="msg.id">
-              <td class="text-no-wrap">{{ msg.toCallsign }}</td>
-              <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
-                {{ msg.body }}
-              </td>
-              <td>
-                <v-chip
-                  :color="retryBadge(msg).color"
-                  size="x-small"
-                  class="mr-1"
-                >
-                  {{ retryBadge(msg).text }}
-                </v-chip>
-                <span
-                  v-if="msg.retryState === RetryState.Retrying && msg.nextRetryAt"
-                  class="text-caption text-medium-emphasis"
-                >
-                  · Next retry in {{ secondsUntilRetry(msg) }}s
-                </span>
-                <span
-                  v-if="msg.lastSentAt"
-                  class="text-caption text-medium-emphasis ml-1"
-                >
-                  · Sent {{ formatUtc(msg.lastSentAt) }}
-                </span>
-              </td>
-              <td class="text-no-wrap">
-                <v-btn
-                  v-if="msg.retryState !== RetryState.Acknowledged"
-                  size="x-small"
-                  variant="tonal"
-                  color="primary"
-                  class="mr-1"
-                  :loading="actionLoading[msg.id] === 'retry'"
-                  :disabled="!!actionLoading[msg.id]"
-                  @click="doRetryNow(msg)"
-                >
-                  {{ actionLoading[msg.id] === 'retry' ? 'Sending…' : 'Retry Now' }}
-                </v-btn>
-                <v-btn
-                  v-if="msg.retryState !== RetryState.Acknowledged"
-                  size="x-small"
-                  variant="tonal"
-                  class="mr-1"
-                  :loading="actionLoading[msg.id] === 'reset'"
-                  :disabled="!!actionLoading[msg.id]"
-                  @click="openResetDialog(msg)"
-                >
-                  Reset
-                </v-btn>
-                <v-btn
-                  v-if="msg.retryState === RetryState.Retrying"
-                  size="x-small"
-                  variant="tonal"
-                  color="error"
-                  :loading="actionLoading[msg.id] === 'cancel'"
-                  :disabled="!!actionLoading[msg.id]"
-                  @click="doCancel(msg)"
-                >
-                  Cancel
-                </v-btn>
-              </td>
-            </tr>
-            <tr v-if="outboxMessages.length === 0">
-              <td colspan="4" class="text-center text-medium-emphasis py-6">
-                No outbound messages.
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </v-window-item>
-
-      <!-- ── All Messages Tab ───────────────────────────────────────────────── -->
-      <v-window-item value="all">
-        <!-- Filters -->
-        <v-row dense class="mb-2 mt-1">
-          <v-col cols="4">
-            <v-text-field
-              v-model="filterSender"
-              label="Filter by sender"
-              density="compact"
-              variant="outlined"
-              clearable
-              hide-details
-            />
-          </v-col>
-          <v-col cols="4">
-            <v-text-field
-              v-model="filterAddressee"
-              label="Filter by addressee"
-              density="compact"
-              variant="outlined"
-              clearable
-              hide-details
-            />
-          </v-col>
-          <v-col cols="4">
-            <v-text-field
-              v-model="filterText"
-              label="Filter by text"
-              density="compact"
-              variant="outlined"
-              clearable
-              hide-details
-            />
-          </v-col>
-        </v-row>
-
-        <v-table density="compact" hover>
-          <thead>
-            <tr>
-              <th>From</th>
-              <th>To</th>
-              <th>Message</th>
-              <th>Time</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="allLoading">
-              <td colspan="4" class="text-center text-medium-emphasis py-6">
-                Loading…
-              </td>
-            </tr>
-            <template v-else>
-              <tr
-                v-for="msg in allItems"
-                :key="msg.packetId"
+          <div
+            v-else
+            class="conv-layout"
+            :class="{ 'conv-layout--thread-open': smAndDown && selectedConversation }"
+          >
+            <!-- Conversation list -->
+            <div class="conv-list">
+              <button
+                v-for="conv in conversations"
+                :key="conv.peer"
+                class="conv-item"
                 :class="{
-                  'bg-blue-lighten-5': msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
+                  'conv-item--active': conv.peer === selectedPeer,
+                  'conv-item--unread': conv.unread > 0,
                 }"
+                @click="selectConversation(conv.peer)"
               >
-                <td>{{ msg.fromCallsign }}</td>
-                <td>{{ msg.toCallsign || '—' }}</td>
-                <td style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+                <div class="d-flex align-center ga-2">
+                  <span class="callsign-plain conv-peer">{{ conv.peer }}</span>
+                  <v-spacer />
+                  <span class="mono-time text-medium-emphasis" :title="formatDateTime(conv.lastAt)">
+                    {{ timeAgo(conv.lastAt, now) }}
+                  </span>
+                </div>
+                <div class="d-flex align-center ga-2">
+                  <span class="conv-snippet">
+                    <span v-if="isOutbound(conv.last)" class="text-medium-emphasis">You: </span
+                    >{{ conv.last.body }}
+                  </span>
+                  <v-spacer />
+                  <v-chip v-if="conv.unread > 0" size="x-small" color="primary">
+                    {{ conv.unread }}
+                  </v-chip>
+                </div>
+              </button>
+            </div>
+
+            <!-- Thread -->
+            <div class="conv-thread">
+              <template v-if="selectedConversation">
+                <div class="conv-thread-header">
+                  <v-btn
+                    v-if="smAndDown"
+                    icon="mdi-arrow-left"
+                    size="small"
+                    variant="text"
+                    aria-label="Back to conversations"
+                    @click="selectedPeer = null"
+                  />
+                  <a
+                    href="#"
+                    class="callsign-link text-decoration-none callsign-plain"
+                    @click.prevent="goToStation(selectedConversation.peer)"
+                    >{{ selectedConversation.peer }}</a
+                  >
+                  <span class="text-caption text-medium-emphasis">
+                    {{ selectedConversation.messages.length }} messages
+                  </span>
+                </div>
+
+                <div ref="threadEl" class="conv-messages">
+                  <template v-for="item in threadItems" :key="item.key">
+                    <div v-if="item.kind === 'multi'" class="bubble-row bubble-row--out">
+                      <div class="bubble bubble--out bubble--multi">
+                        <MultipartBubble
+                          :parts="item.parts"
+                          :total="item.total"
+                          :now="now"
+                          :action-loading="actionLoading"
+                          @retry="doRetryNow"
+                          @cancel="doCancel"
+                        />
+                      </div>
+                    </div>
+                    <div
+                      v-else
+                      class="bubble-row"
+                      :class="isOutbound(item.msg) ? 'bubble-row--out' : 'bubble-row--in'"
+                    >
+                      <div
+                        class="bubble"
+                        :class="isOutbound(item.msg) ? 'bubble--out' : 'bubble--in'"
+                      >
+                        <div class="bubble-body">{{ item.msg.body }}</div>
+                        <div class="bubble-meta">
+                          <span class="mono-time" :title="formatDateTime(item.msg.receivedAt)">
+                            {{ timeAgo(item.msg.receivedAt, now) }}
+                          </span>
+
+                          <!-- Inbound: how many copies we heard; click for each copy's route -->
+                          <v-chip
+                            v-if="!isOutbound(item.msg) && item.msg.receiveCount > 1"
+                            size="x-small"
+                            variant="tonal"
+                            color="warning"
+                            prepend-icon="mdi-repeat"
+                            :append-icon="
+                              copiesOpen.has(item.msg.id) ? 'mdi-chevron-up' : 'mdi-chevron-down'
+                            "
+                            :title="receiveCountTitle(item.msg)"
+                            @click="toggleCopies(item.msg)"
+                          >
+                            ×{{ item.msg.receiveCount }}
+                          </v-chip>
+
+                          <!-- Outbound: delivery state -->
+                          <template v-if="isOutbound(item.msg)">
+                            <v-chip
+                              :color="retryBadge(item.msg).color"
+                              size="x-small"
+                              variant="tonal"
+                            >
+                              {{ retryBadge(item.msg).text }}
+                            </v-chip>
+                            <span
+                              v-if="
+                                item.msg.retryState === RetryState.Retrying && item.msg.nextRetryAt
+                              "
+                              class="text-caption text-medium-emphasis"
+                            >
+                              next in {{ secondsUntilRetry(item.msg) }}s
+                            </span>
+                          </template>
+                        </div>
+                        <!-- Route: how it reached us, or how we sent it -->
+                        <div
+                          v-if="!isOutbound(item.msg) && item.msg.source !== null"
+                          class="bubble-route"
+                        >
+                          <v-chip
+                            :color="routeSource(item.msg.source)!.color"
+                            size="x-small"
+                            variant="flat"
+                            label
+                            >{{ routeSource(item.msg.source)!.label }}</v-chip
+                          >
+                          <span v-if="heardViaText(item.msg.heardVia)">{{
+                            heardViaText(item.msg.heardVia)
+                          }}</span>
+                          <span class="route-path" :title="item.msg.path ?? ''">{{
+                            formatPath(item.msg.path)
+                          }}</span>
+                        </div>
+                        <div v-else-if="isOutbound(item.msg)" class="bubble-route">
+                          <span>sent via</span>
+                          <span class="route-path">{{ formatPath(item.msg.pathUsed) }}</span>
+                        </div>
+                        <!-- This part's latest transmission: queued → clear channel → on air → acked -->
+                        <div v-if="isOutbound(item.msg) && partFrame(item.msg)" class="bubble-tx">
+                          <TxLifecycle
+                            :item="partFrame(item.msg)!"
+                            compact
+                            :acked="item.msg.retryState === RetryState.Acknowledged"
+                            :gave-up="item.msg.retryState === RetryState.Failed"
+                          />
+                          <div
+                            v-if="
+                              partFrame(item.msg)!.reason &&
+                              item.msg.retryState !== RetryState.Acknowledged
+                            "
+                            class="text-caption text-error"
+                          >
+                            {{ partFrame(item.msg)!.reason }}
+                          </div>
+                        </div>
+
+                        <div v-if="copiesOpen.has(item.msg.id)" class="bubble-copies">
+                          <div v-if="copiesLoading[item.msg.id]" class="text-caption">Loading…</div>
+                          <div
+                            v-else-if="(copiesById[item.msg.id] ?? []).length === 0"
+                            class="text-caption text-medium-emphasis"
+                          >
+                            The packets for these copies are no longer in the log.
+                          </div>
+                          <template v-else>
+                            <div
+                              v-for="copy in copiesById[item.msg.id] ?? []"
+                              :key="copy.packetId"
+                              class="bubble-route"
+                            >
+                              <span class="mono-time" :title="formatDateTime(copy.receivedAt)">{{
+                                timeAgo(copy.receivedAt, now)
+                              }}</span>
+                              <v-chip
+                                :color="routeSource(copy.source)!.color"
+                                size="x-small"
+                                variant="flat"
+                                label
+                                >{{ routeSource(copy.source)!.label }}</v-chip
+                              >
+                              <span v-if="heardViaText(copy.heardVia)">{{
+                                heardViaText(copy.heardVia)
+                              }}</span>
+                              <span class="route-path" :title="copy.path">{{
+                                formatPath(copy.path)
+                              }}</span>
+                            </div>
+                          </template>
+                        </div>
+
+                        <div
+                          v-if="
+                            isOutbound(item.msg) &&
+                            (item.msg.retryState === RetryState.Failed ||
+                              item.msg.retryState === RetryState.Retrying)
+                          "
+                          class="d-flex ga-1 mt-1 justify-end"
+                        >
+                          <v-btn
+                            size="small"
+                            variant="text"
+                            color="primary"
+                            :loading="actionLoading[item.msg.id] === 'retry'"
+                            :disabled="!!actionLoading[item.msg.id]"
+                            @click="doRetryNow(item.msg)"
+                          >
+                            Retry now
+                          </v-btn>
+                          <v-btn
+                            size="small"
+                            variant="text"
+                            color="error"
+                            :loading="actionLoading[item.msg.id] === 'cancel'"
+                            :disabled="!!actionLoading[item.msg.id]"
+                            @click="doCancel(item.msg)"
+                          >
+                            {{ item.msg.retryState === RetryState.Failed ? 'Dismiss' : 'Cancel' }}
+                          </v-btn>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <div class="conv-reply">
+                  <v-alert
+                    v-if="partialSendWarning"
+                    type="warning"
+                    density="compact"
+                    variant="tonal"
+                    closable
+                    class="mb-2"
+                    @click:close="partialSendWarning = ''"
+                  >
+                    {{ partialSendWarning }}
+                  </v-alert>
+                  <!-- Why Send is disabled, with the fix one tap away (no hover tooltip) -->
+                  <v-alert
+                    v-if="txBlocked"
+                    type="warning"
+                    density="compact"
+                    variant="tonal"
+                    class="mb-2"
+                    role="status"
+                  >
+                    <div class="composer-block">
+                      <span>Can't send: {{ txBlocked.reason }}</span>
+                      <v-btn size="small" variant="tonal" :to="txBlocked.fix.to">
+                        {{ txBlocked.fix.label }}
+                      </v-btn>
+                    </div>
+                  </v-alert>
+                  <v-alert
+                    v-else-if="replyError"
+                    type="error"
+                    density="compact"
+                    variant="tonal"
+                    closable
+                    class="mb-2"
+                    @click:close="replyError = ''"
+                  >
+                    <div class="composer-block">
+                      <span>{{ replyError }}</span>
+                      <v-btn
+                        v-if="replyErrorFix"
+                        size="small"
+                        variant="tonal"
+                        :to="replyErrorFix.to"
+                      >
+                        {{ replyErrorFix.label }}
+                      </v-btn>
+                    </div>
+                  </v-alert>
+                  <v-text-field
+                    v-model="replyBody"
+                    :placeholder="`Message ${selectedConversation.peer}`"
+                    density="compact"
+                    variant="outlined"
+                    :error-messages="replyParts > APRS_MAX_PARTS ? partsHint(replyParts) : ''"
+                    :hint="partsHint(replyParts)"
+                    persistent-hint
+                    hide-details="auto"
+                    @keydown.enter.prevent="sendReply"
+                  >
+                    <template #append-inner>
+                      <v-btn
+                        icon="mdi-send"
+                        size="small"
+                        variant="text"
+                        color="primary"
+                        aria-label="Send"
+                        :loading="replySending"
+                        :disabled="!replyBody.trim() || replyParts > APRS_MAX_PARTS || !!txBlocked"
+                        @click="sendReply"
+                      />
+                    </template>
+                  </v-text-field>
+                </div>
+              </template>
+              <div v-else class="conv-empty text-medium-emphasis text-body-2">
+                Pick a conversation.
+              </div>
+            </div>
+          </div>
+        </v-window-item>
+
+        <!-- ── Outbox Tab ─────────────────────────────────────────────────────── -->
+        <v-window-item value="outbox">
+          <!-- v-table scrolls horizontally inside the card on narrow screens -->
+          <v-table density="compact" class="outbox-table">
+            <thead>
+              <tr>
+                <th>To</th>
+                <th>Message</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="msg in outboxMessages" :key="msg.id">
+                <td class="text-no-wrap">
+                  <a
+                    href="#"
+                    class="callsign-link text-decoration-none"
+                    @click.stop.prevent="goToStation(msg.toCallsign)"
+                    >{{ msg.toCallsign }}</a
+                  >
+                </td>
+                <td
+                  class="msg-body msg-body--narrow"
+                  :class="{ 'msg-body--open': isExpanded(`out-${msg.id}`) }"
+                  :title="isExpanded(`out-${msg.id}`) ? undefined : msg.body"
+                  style="cursor: pointer"
+                  @click="toggleExpand(`out-${msg.id}`)"
+                >
                   {{ msg.body }}
                 </td>
+                <td>
+                  <!-- Stacked: TX state on top (held / lifecycle / outcome), detail under it -->
+                  <div class="d-flex flex-column align-start ga-1 py-1">
+                    <span v-if="parsePart(msg.body)" class="text-caption text-medium-emphasis">
+                      Part {{ parsePart(msg.body)!.n }} of {{ parsePart(msg.body)!.m }}
+                    </span>
+                    <MessagePartState :msg="msg" :part-no="parsePart(msg.body)?.n" :now="now" />
+                    <span
+                      v-if="msg.lastSentAt"
+                      class="text-caption text-medium-emphasis"
+                      :title="formatDateTime(msg.lastSentAt)"
+                    >
+                      sent {{ timeAgo(msg.lastSentAt, now) }}
+                    </span>
+                  </div>
+                </td>
                 <td class="text-no-wrap">
-                  <span :title="formatUtc(msg.receivedAt)">{{ timeAgo(msg.receivedAt) }}</span>
+                  <v-btn
+                    v-if="msg.retryState !== RetryState.Acknowledged"
+                    size="small"
+                    variant="tonal"
+                    color="primary"
+                    class="mr-1"
+                    :loading="actionLoading[msg.id] === 'retry'"
+                    :disabled="!!actionLoading[msg.id]"
+                    @click="doRetryNow(msg)"
+                  >
+                    Retry now
+                  </v-btn>
+                  <v-btn
+                    v-if="msg.retryState !== RetryState.Acknowledged"
+                    size="small"
+                    variant="tonal"
+                    class="mr-1"
+                    :loading="actionLoading[msg.id] === 'reset'"
+                    :disabled="!!actionLoading[msg.id]"
+                    @click="openResetDialog(msg)"
+                  >
+                    Reset
+                  </v-btn>
+                  <v-btn
+                    v-if="
+                      msg.retryState === RetryState.Retrying || msg.retryState === RetryState.Failed
+                    "
+                    size="small"
+                    variant="tonal"
+                    color="error"
+                    :loading="actionLoading[msg.id] === 'cancel'"
+                    :disabled="!!actionLoading[msg.id]"
+                    @click="doCancel(msg)"
+                  >
+                    {{ msg.retryState === RetryState.Failed ? 'Dismiss' : 'Cancel' }}
+                  </v-btn>
                 </td>
               </tr>
-              <tr v-if="allItems.length === 0">
-                <td colspan="4" class="text-center text-medium-emphasis py-6">
-                  No messages match the filter.
-                </td>
+              <tr v-if="outboxMessages.length === 0">
+                <td colspan="4" class="text-center text-medium-emphasis py-6">Outbox is empty.</td>
               </tr>
-            </template>
-          </tbody>
-        </v-table>
+            </tbody>
+          </v-table>
+        </v-window-item>
 
-        <div class="d-flex align-center justify-space-between mt-2">
-          <span class="text-caption text-medium-emphasis">
-            {{ allTotalCount }} total
-          </span>
-          <v-pagination
-            v-if="allTotalPages > 1"
-            v-model="allPage"
-            :length="allTotalPages"
-            :total-visible="7"
-            density="compact"
-            @update:model-value="fetchAllMessages"
+        <!-- ── All Messages Tab ───────────────────────────────────────────────── -->
+        <v-window-item value="all">
+          <!-- Filters -->
+          <v-row dense class="px-3 pt-3">
+            <v-col cols="12" sm="4">
+              <v-text-field
+                v-model="filterSender"
+                label="Filter by sender"
+                density="compact"
+                variant="outlined"
+                clearable
+                hide-details
+              />
+            </v-col>
+            <v-col cols="12" sm="4">
+              <v-text-field
+                v-model="filterAddressee"
+                label="Filter by addressee"
+                density="compact"
+                variant="outlined"
+                clearable
+                hide-details
+              />
+            </v-col>
+            <v-col cols="12" sm="4">
+              <v-text-field
+                v-model="filterText"
+                label="Filter by text"
+                density="compact"
+                variant="outlined"
+                clearable
+                hide-details
+              />
+            </v-col>
+          </v-row>
+
+          <v-table density="compact" hover>
+            <thead>
+              <tr>
+                <th>From</th>
+                <th>To</th>
+                <th>Message</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="allLoading">
+                <td colspan="4" class="text-center text-medium-emphasis py-6">Loading…</td>
+              </tr>
+              <template v-else>
+                <tr
+                  v-for="msg in allItems"
+                  :key="msg.packetId"
+                  :class="{
+                    'msg-row-own':
+                      msg.toCallsign.toUpperCase() === ourCallsign.toUpperCase() && ourCallsign,
+                  }"
+                >
+                  <td class="callsign-plain">{{ msg.fromCallsign }}</td>
+                  <td class="callsign-plain">{{ msg.toCallsign || '—' }}</td>
+                  <td
+                    class="msg-body"
+                    :class="{ 'msg-body--open': isExpanded(`all-${msg.packetId}`) }"
+                    :title="isExpanded(`all-${msg.packetId}`) ? undefined : msg.body"
+                    style="cursor: pointer"
+                    @click="toggleExpand(`all-${msg.packetId}`)"
+                  >
+                    {{ msg.body }}
+                  </td>
+                  <td class="text-no-wrap mono-time">
+                    <span :title="formatDateTime(msg.receivedAt)">{{
+                      timeAgo(msg.receivedAt, now)
+                    }}</span>
+                  </td>
+                </tr>
+                <tr v-if="allItems.length === 0">
+                  <td colspan="4" class="text-center text-medium-emphasis py-6">
+                    No messages match the filter.
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </v-table>
+
+          <div class="all-pager d-flex align-center flex-wrap ga-2 px-3 py-2">
+            <span class="text-caption text-medium-emphasis">
+              <template v-if="allTotalCount">
+                {{ ((allPage - 1) * allPageSize + 1).toLocaleString() }}–{{
+                  Math.min(allPage * allPageSize, allTotalCount).toLocaleString()
+                }}
+                of {{ allTotalCount.toLocaleString() }}
+              </template>
+              <template v-else>0 messages</template>
+            </span>
+            <v-spacer />
+            <v-pagination
+              v-if="allTotalPages > 1"
+              v-model="allPage"
+              :length="allTotalPages"
+              :total-visible="5"
+              density="compact"
+              size="small"
+              @update:model-value="onAllPage"
+            />
+          </div>
+        </v-window-item>
+
+        <!-- ── PMS Mailbox Tab ────────────────────────────────────────────────── -->
+        <v-window-item value="pms">
+          <div class="d-flex align-center flex-wrap ga-3 px-3 pt-3">
+            <v-btn
+              color="primary"
+              size="small"
+              prepend-icon="mdi-email-edit-outline"
+              @click="openPmsCompose"
+            >
+              Compose PMS
+            </v-btn>
+            <v-switch
+              v-model="pmsIncludeKilled"
+              label="Include killed"
+              color="primary"
+              density="compact"
+              hide-details
+            />
+            <v-spacer />
+            <v-btn
+              aria-label="Refresh mailbox"
+              icon="mdi-refresh"
+              size="small"
+              variant="text"
+              :loading="pmsLoading"
+              @click="fetchPms"
+            />
+          </div>
+
+          <v-alert v-if="pmsError" type="error" variant="tonal" density="compact" class="mx-3 mt-2">
+            {{ pmsError }}
+          </v-alert>
+
+          <v-table density="compact" hover>
+            <thead>
+              <tr>
+                <th style="width: 60px">#</th>
+                <th style="width: 60px">Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Subject</th>
+                <th>Date</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="pmsLoading && pmsItems.length === 0">
+                <td colspan="8" class="text-center text-medium-emphasis py-6">Loading…</td>
+              </tr>
+              <template v-else>
+                <tr v-for="msg in pmsItems" :key="msg.id">
+                  <td class="mono-time">{{ msg.id }}</td>
+                  <td>
+                    <v-chip
+                      :color="pmsTypeChip(msg.type).color"
+                      size="x-small"
+                      variant="tonal"
+                      :title="pmsMessageTypeLabels[msg.type]"
+                    >
+                      {{ pmsTypeChip(msg.type).label }}
+                    </v-chip>
+                  </td>
+                  <td class="callsign-plain">{{ msg.fromCallsign }}</td>
+                  <td class="callsign-plain">{{ msg.toCallsign }}</td>
+                  <td
+                    class="msg-body"
+                    :class="{ 'msg-body--open': isExpanded(`pms-${msg.id}`) }"
+                    :title="isExpanded(`pms-${msg.id}`) ? undefined : (msg.body ?? undefined)"
+                    style="cursor: pointer"
+                    @click="toggleExpand(`pms-${msg.id}`)"
+                  >
+                    <span class="font-weight-medium">{{ msg.subject || '(no subject)' }}</span>
+                    <template v-if="isExpanded(`pms-${msg.id}`) && msg.body">
+                      <br />
+                      <span class="text-medium-emphasis">{{ msg.body }}</span>
+                    </template>
+                  </td>
+                  <td class="text-no-wrap mono-time">
+                    <span :title="formatDateTime(msg.createdAt)">{{
+                      timeAgo(msg.createdAt, now)
+                    }}</span>
+                  </td>
+                  <td>
+                    <div class="d-flex ga-1">
+                      <v-chip v-if="msg.isKilled" color="error" size="x-small" variant="tonal">
+                        killed
+                      </v-chip>
+                      <v-chip
+                        v-else-if="msg.readAt"
+                        size="x-small"
+                        variant="tonal"
+                        class="msg-chip-read"
+                      >
+                        read
+                      </v-chip>
+                      <v-chip v-else color="primary" size="x-small" variant="tonal">unread</v-chip>
+                    </div>
+                  </td>
+                  <td class="text-no-wrap text-right">
+                    <v-btn
+                      v-if="!msg.isKilled"
+                      size="small"
+                      variant="tonal"
+                      color="warning"
+                      class="mr-1"
+                      title="Kill (BBS-style soft delete)"
+                      @click="pmsConfirm = { action: 'kill', msg }"
+                    >
+                      Kill
+                    </v-btn>
+                    <v-btn
+                      aria-label="Delete permanently"
+                      icon="mdi-delete-outline"
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      title="Delete permanently"
+                      @click="pmsConfirm = { action: 'delete', msg }"
+                    />
+                  </td>
+                </tr>
+                <tr v-if="pmsItems.length === 0">
+                  <td colspan="8" class="text-center py-8">
+                    <v-icon size="36" class="text-medium-emphasis mb-2">
+                      mdi-mailbox-open-outline
+                    </v-icon>
+                    <div class="text-body-2 font-weight-medium mb-1">The mailbox is empty</div>
+                    <div class="text-caption text-medium-emphasis">
+                      Messages left on your PMS appear here.
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </v-table>
+
+          <div class="d-flex align-center justify-space-between px-3 py-2">
+            <span class="text-caption text-medium-emphasis">{{ pmsTotalCount }} total</span>
+            <v-pagination
+              v-if="pmsTotalPages > 1"
+              v-model="pmsPage"
+              :length="pmsTotalPages"
+              :total-visible="7"
+              density="compact"
+              @update:model-value="fetchPms"
+            />
+          </div>
+        </v-window-item>
+      </v-window>
+    </v-card>
+
+    <!-- ── PMS Compose Dialog ─────────────────────────────────────────────── -->
+    <v-dialog v-model="pmsComposeOpen" max-width="520" @keydown.esc="pmsComposeOpen = false">
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2">mdi-mailbox-open-outline</v-icon>
+          Compose PMS Message
+        </v-card-title>
+        <v-card-text>
+          <v-select
+            v-model="pmsType"
+            :items="pmsTypeItems"
+            label="Type"
+            class="mb-3"
+            hide-details
           />
-        </div>
-      </v-window-item>
-    </v-window>
+          <v-text-field
+            v-model="pmsTo"
+            label="To callsign"
+            placeholder="e.g. W3UWU or ALL for bulletins"
+            class="mb-3"
+            hide-details="auto"
+            :rules="[(v: string) => !!v?.trim() || 'Required']"
+          />
+          <v-text-field v-model="pmsSubject" label="Subject" class="mb-3" hide-details />
+          <v-textarea
+            v-model="pmsBody"
+            label="Body"
+            variant="outlined"
+            density="compact"
+            rows="4"
+            hide-details
+          />
+          <v-alert v-if="pmsSendError" type="error" density="compact" variant="tonal" class="mt-3">
+            {{ pmsSendError }}
+          </v-alert>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="pmsComposeOpen = false">Cancel</v-btn>
+          <v-btn color="primary" :loading="pmsSending" :disabled="!pmsTo.trim()" @click="doPmsSend">
+            Save to mailbox
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ── PMS Kill / Delete Confirmation ─────────────────────────────────── -->
+    <v-dialog
+      :model-value="pmsConfirm !== null"
+      max-width="440"
+      @update:model-value="pmsConfirm = null"
+    >
+      <v-card v-if="pmsConfirm">
+        <v-card-title>
+          {{ pmsConfirm.action === 'kill' ? 'Kill message?' : 'Delete message?' }}
+        </v-card-title>
+        <v-card-text>
+          <template v-if="pmsConfirm.action === 'kill'">
+            Kill message #{{ pmsConfirm.msg.id }} to
+            <strong>{{ pmsConfirm.msg.toCallsign }}</strong>? Killed messages are hidden from
+            connecting stations and purged after the retention period.
+          </template>
+          <template v-else>
+            Permanently delete message #{{ pmsConfirm.msg.id }} to
+            <strong>{{ pmsConfirm.msg.toCallsign }}</strong>? This cannot be undone.
+          </template>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="pmsConfirm = null">Cancel</v-btn>
+          <v-btn
+            :color="pmsConfirm.action === 'kill' ? 'warning' : 'error'"
+            variant="tonal"
+            @click="doPmsConfirm"
+          >
+            {{ pmsConfirm.action === 'kill' ? 'Kill' : 'Delete' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- ── Compose Dialog ─────────────────────────────────────────────────── -->
     <v-dialog v-model="composeOpen" max-width="520" @keydown.esc="composeOpen = false">
@@ -648,6 +1609,7 @@ function replyTo(message: InboxMessageDto) {
         <v-card-text>
           <v-combobox
             v-model="composeTo"
+            autofocus
             :items="addresseeSuggestions"
             item-title="callsign"
             item-value="callsign"
@@ -663,13 +1625,14 @@ function replyTo(message: InboxMessageDto) {
             :rules="[
               (v: string) => !!v?.trim() || 'Required',
               (v: string) => !v || v.trim().length <= 9 || 'Max 9 characters',
-              (v: string) => !v || /^[A-Za-z0-9-]+$/.test(v.trim()) || 'Letters, digits, and - only',
+              (v: string) =>
+                !v || /^[A-Za-z0-9-]+$/.test(v.trim()) || 'Letters, digits, and - only',
             ]"
           >
             <template #item="{ item, props: itemProps }">
               <v-list-item
                 v-bind="itemProps"
-                :subtitle="`${stationTypeName(item.stationType)} · ${timeAgo(item.lastSeen)}`"
+                :subtitle="`${stationTypeName(item.stationType)} · ${timeAgo(item.lastSeen, now)}`"
               />
             </template>
           </v-combobox>
@@ -679,7 +1642,7 @@ function replyTo(message: InboxMessageDto) {
             <v-btn
               v-for="gw in COMMON_GATEWAYS"
               :key="gw"
-              size="x-small"
+              size="small"
               variant="tonal"
               @click="composeTo = gw"
             >
@@ -690,12 +1653,15 @@ function replyTo(message: InboxMessageDto) {
           <v-textarea
             v-model="composeBody"
             label="Message"
+            @keydown.ctrl.enter.prevent="doSend"
+            @keydown.meta.enter.prevent="doSend"
             density="compact"
             variant="outlined"
             rows="3"
-            :maxlength="MAX_BODY"
-            :counter="MAX_BODY"
-            :hint="`${MAX_BODY - composeBody.length} characters remaining`"
+            :error-messages="composeParts > APRS_MAX_PARTS ? partsHint(composeParts) : ''"
+            :hint="
+              partsHint(composeParts) || `${67 - composeBody.length} characters left in one message`
+            "
             persistent-hint
             hide-details="auto"
             no-resize
@@ -725,21 +1691,40 @@ function replyTo(message: InboxMessageDto) {
               />
               <div class="d-flex align-center flex-wrap gap-1 mb-1">
                 <span class="text-caption text-medium-emphasis mr-1">Common paths:</span>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'">WIDE1-1,WIDE2-1</v-btn>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE2-1'">WIDE2-1</v-btn>
-                <v-btn size="x-small" variant="tonal" @click="composePath = 'WIDE1-1'">WIDE1-1</v-btn>
-                <v-btn size="x-small" variant="tonal" @click="composePath = ''">Direct (no path)</v-btn>
+                <v-btn size="small" variant="tonal" @click="composePath = 'WIDE1-1,WIDE2-1'"
+                  >WIDE1-1,WIDE2-1</v-btn
+                >
+                <v-btn size="small" variant="tonal" @click="composePath = 'WIDE2-1'">WIDE2-1</v-btn>
+                <v-btn size="small" variant="tonal" @click="composePath = 'WIDE1-1'">WIDE1-1</v-btn>
+                <v-btn size="small" variant="tonal" @click="composePath = ''"
+                  >Direct (no path)</v-btn
+                >
               </div>
             </div>
           </div>
 
           <v-alert
-            v-if="sendError"
-            type="error"
+            v-if="txBlocked"
+            type="warning"
             density="compact"
+            variant="tonal"
             class="mt-3"
+            role="status"
           >
-            {{ sendError }}
+            <div class="composer-block">
+              <span>Can't send: {{ txBlocked.reason }}</span>
+              <v-btn size="small" variant="tonal" :to="txBlocked.fix.to">
+                {{ txBlocked.fix.label }}
+              </v-btn>
+            </div>
+          </v-alert>
+          <v-alert v-else-if="sendError" type="error" density="compact" class="mt-3">
+            <div class="composer-block">
+              <span>{{ sendError }}</span>
+              <v-btn v-if="sendErrorFix" size="small" variant="tonal" :to="sendErrorFix.to">
+                {{ sendErrorFix.label }}
+              </v-btn>
+            </div>
           </v-alert>
         </v-card-text>
 
@@ -749,7 +1734,12 @@ function replyTo(message: InboxMessageDto) {
           <v-btn
             color="primary"
             :loading="sending"
-            :disabled="!composeTo?.trim() || !composeBody.trim()"
+            :disabled="
+              !composeTo?.trim() ||
+              !composeBody.trim() ||
+              composeParts > APRS_MAX_PARTS ||
+              !!txBlocked
+            "
             @click="doSend"
           >
             Send
@@ -774,16 +1764,323 @@ function replyTo(message: InboxMessageDto) {
     </v-dialog>
 
     <!-- ── Failed Message Toast ───────────────────────────────────────────── -->
-    <v-snackbar v-model="failedToast" color="error" :timeout="6000" location="bottom right">
-      {{ failedToastText }}
-      <template #actions>
-        <v-btn variant="text" @click="failedToast = false">Dismiss</v-btn>
-      </template>
-    </v-snackbar>
   </div>
 </template>
 
 <style scoped>
+.page-title {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.messages-card {
+  display: flex;
+  flex-direction: column;
+  /* Fill the page; the tab row stays put and only the tab content scrolls. */
+  flex: 1 1 auto;
+  min-height: 360px;
+}
+
+.messages-card > .v-window {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* All tab: the pager stays reachable at the bottom while the rows scroll. */
+.all-pager {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: rgb(var(--v-theme-surface));
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+/* Tab row: underline text tabs with count chips, Compose at the right. */
+.msg-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 0 10px;
+  overflow-x: auto;
+}
+
+.msg-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.msg-tab:hover {
+  color: rgba(var(--v-theme-on-surface), 0.9);
+}
+
+.msg-tab--active {
+  color: rgb(var(--v-theme-primary));
+  border-bottom-color: rgb(var(--v-theme-primary));
+}
+
+/* Theme-safe "addressed to us" highlight (works in light and dark). */
+.msg-row-own td {
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+.msg-chip-read {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.mono-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.callsign-plain {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+}
+
+/* Clipped by default; click expands to the full text. */
+.msg-body {
+  max-width: 400px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msg-body--narrow {
+  max-width: 300px;
+}
+
+.msg-body--open {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+/* ── Conversations ─────────────────────────────────────────────────────── */
+.conv-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  height: max(360px, calc(100vh - 190px));
+}
+
+.conv-list {
+  overflow-y: auto;
+  border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.conv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.conv-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.conv-item--active {
+  background: rgba(var(--v-theme-primary), 0.12);
+}
+
+.conv-item--unread .conv-snippet {
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.conv-peer {
+  color: rgb(var(--v-theme-primary));
+}
+
+.conv-snippet {
+  min-width: 0;
+  font-size: 0.82rem;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conv-thread {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.conv-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.conv-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-row--out {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: min(520px, 80%);
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.bubble--in {
+  background: rgba(var(--v-theme-on-surface), 0.07);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble--out {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-bottom-right-radius: 4px;
+}
+
+/* Multi-part: per-part state rows need more width than a chat line. */
+.bubble--multi {
+  width: min(560px, 92%);
+  max-width: none;
+}
+
+.bubble-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.bubble-route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.route-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.bubble-tx {
+  margin-top: 4px;
+}
+
+.bubble-copies {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.bubble-row--out .bubble-route {
+  justify-content: flex-end;
+}
+
+.bubble-row--out .bubble-meta {
+  justify-content: flex-end;
+}
+
+/* Blocked-send / refused-send reason with its fix button; wraps on phones. */
+.composer-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-block > span {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* Outbox: the table scrolls inside the card, never the page. */
+.outbox-table {
+  max-width: 100%;
+}
+
+.outbox-table td:nth-child(3) {
+  min-width: 220px;
+}
+
+.conv-reply {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.conv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+}
+
+/* Phones: one pane at a time — list, or the open thread. */
+@media (max-width: 959px) {
+  .conv-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .conv-list {
+    border-right: none;
+  }
+
+  .conv-layout .conv-thread {
+    display: none;
+  }
+
+  .conv-layout--thread-open .conv-list {
+    display: none;
+  }
+
+  .conv-layout--thread-open .conv-thread {
+    display: flex;
+  }
+}
+
 .messages-view {
   display: flex;
   flex-direction: column;

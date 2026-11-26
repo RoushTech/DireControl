@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <VersionPrefix>0.2.0</VersionPrefix>
+    <VersionPrefix>0.4.0</VersionPrefix>
   </PropertyGroup>
 
   <Target Name="SetSourceRevisionId" BeforeTargets="InitializeSourceControlInformation">
@@ -14,11 +14,11 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="RoushTech.APRSsharp.AprsIsClient" Version="0.5.1-rc.2" />
-    <PackageReference Include="RoushTech.APRSsharp.AprsParser" Version="0.5.1-rc.2" />
-    <PackageReference Include="RoushTech.APRSsharp.KissTnc" Version="0.5.1-rc.2" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.3">
+    <PackageReference Include="RoushTech.APRSsharp.AprsIsClient" Version="0.5.1-rc.3" />
+    <PackageReference Include="RoushTech.APRSsharp.AprsParser" Version="0.5.1-rc.3" />
+    <PackageReference Include="RoushTech.APRSsharp.KissTnc" Version="0.5.1-rc.3" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.15" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DireControl\DireControl.csproj" />
+    <ProjectReference Include="..\DireControl.Modem\DireControl.Modem.csproj" />
   </ItemGroup>
 
 </Project>

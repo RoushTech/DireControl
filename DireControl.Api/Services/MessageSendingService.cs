@@ -1,37 +1,66 @@
-using System.Text;
 using DireControl.Data;
 using DireControl.Data.Models;
 using DireControl.Enums;
+using DireControl.Modem.Ax25;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace DireControl.Api.Services;
 
 /// <summary>
-/// Formats APRS message packets, encodes them as AX.25/KISS frames, and
-/// writes them to Direwolf via the shared <see cref="KissConnectionHolder"/>.
+/// Formats APRS message packets, encodes them as AX.25 frames, and sends
+/// them over RF via the shared <see cref="IFrameTransmitter"/>.
 /// Outbound messages are stored in the <see cref="Message"/> table.
 /// </summary>
 public sealed class MessageSendingService(
-    KissConnectionHolder connectionHolder,
+    IFrameTransmitter transmitter,
+    AprsIsTxQueue aprsIsTxQueue,
     IServiceScopeFactory scopeFactory,
     IOptions<DireControlOptions> options,
     ILogger<MessageSendingService> logger)
 {
-    private static int _msgIdCounter;
+    private readonly SemaphoreSlim _idSeedLock = new(1, 1);
+    private int _lastMsgNumber = -1;
 
     /// <summary>
-    /// Generates a unique 1–5 character alphanumeric APRS message ID.
+    /// Generates the next 1–5 character APRS message ID.  The sequence resumes
+    /// from the newest outbound message in the database on first use, so a
+    /// restart never reissues IDs that peers may still be deduplicating on.
     /// </summary>
-    public static string GenerateMessageId()
+    public async Task<string> NextMessageIdAsync(DireControlContext db, CancellationToken ct = default)
     {
-        var n = Interlocked.Increment(ref _msgIdCounter) % 99999;
-        return (n == 0 ? 1 : n).ToString();
+        if (Volatile.Read(ref _lastMsgNumber) < 0)
+        {
+            await _idSeedLock.WaitAsync(ct);
+            try
+            {
+                if (_lastMsgNumber < 0)
+                {
+                    var lastId = await MessageHandlingLogic.FindLastOutboundMessageIdAsync(
+                        db, options.Value.OurCallsign, ct);
+                    Volatile.Write(ref _lastMsgNumber, MessageHandlingLogic.NextMessageNumber(lastId) - 1);
+                }
+            }
+            finally
+            {
+                _idSeedLock.Release();
+            }
+        }
+
+        int last, next;
+        do
+        {
+            last = Volatile.Read(ref _lastMsgNumber);
+            next = MessageHandlingLogic.NextMessageNumber(last.ToString());
+        }
+        while (Interlocked.CompareExchange(ref _lastMsgNumber, next, last) != last);
+        return next.ToString();
     }
 
     /// <summary>
     /// Sends a message to <paramref name="toCallsign"/>, stores it in the
     /// database with <c>AckSent = false</c>, and returns the saved record.
-    /// Returns <see langword="null"/> if no active Direwolf connection is available.
+    /// Returns <see langword="null"/> if no RF transmit backend is available.
     /// </summary>
     /// <param name="path">
     /// VIA digipeater path (e.g. "WIDE1-1,WIDE2-1"). Pass an empty string to
@@ -46,12 +75,13 @@ public sealed class MessageSendingService(
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildMessageInfo(toCallsign, body, messageId);
-        var frame = BuildAx25Frame(ourCallsign, info, path);
+        var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, path);
 
-        if (!connectionHolder.TrySend(frame))
+        if (transmitter.Send(frame, 0, new TxFrameInfo(
+                TxFrameKind.Message, $"Message to {toCallsign.Trim().ToUpperInvariant()}", messageId)) is null)
         {
             logger.LogWarning(
-                "Cannot send message to {ToCallsign}: no active Direwolf connection.",
+                "Cannot send message to {ToCallsign}: no RF transmit backend available.",
                 toCallsign);
             return null;
         }
@@ -89,26 +119,99 @@ public sealed class MessageSendingService(
     }
 
     /// <summary>
-    /// Sends an ACK for a received message. ACKs are sent direct (no path).
-    /// Does not store anything new in the database; the caller is responsible
-    /// for setting <c>AckSent = true</c> on the corresponding
-    /// <see cref="Message"/> record.
+    /// Stores a later part of a multi-part message without transmitting it.
+    /// Held parts are Pending with no <see cref="Message.LastSentAt"/>;
+    /// <see cref="MessageRetryService"/> sends each one only once every earlier
+    /// message to the same peer has been acknowledged or has failed, so the
+    /// parts go out — and retry — one at a time instead of as a burst.
     /// </summary>
-    public void SendAck(string toCallsign, string originalMessageId)
+    public async Task<Message> QueueHeldPartAsync(
+        string toCallsign,
+        string body,
+        string messageId,
+        string path,
+        CancellationToken ct = default)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+
+        var message = new Message
+        {
+            FromCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant(),
+            ToCallsign = toCallsign.Trim().ToUpperInvariant(),
+            Body = body,
+            MessageId = messageId,
+            PathUsed = string.IsNullOrWhiteSpace(path) ? null : path.Trim(),
+            ReceivedAt = DateTime.UtcNow,
+            IsRead = true,
+            MaxRetries = options.Value.MaxRetryAttempts,
+            RetryState = RetryState.Pending,
+            LastSentAt = null,
+            NextRetryAt = null,
+        };
+
+        db.Messages.Add(message);
+        await db.SaveChangesAsync(ct);
+        return message;
+    }
+
+    /// <summary>
+    /// Sends an ACK for a received message back the way the sender can hear it.
+    /// RF ACKs use the outbound digipeater path: a sender we heard through a
+    /// digipeater is usually out of direct range, and a digipeated ACK also
+    /// reaches iGates and therefore APRS-IS.  A message that arrived over
+    /// APRS-IS is also ACKed directly on APRS-IS, because the sender may not be
+    /// on our RF frequency at all; RF is added only when the sender was heard
+    /// on RF recently (the standard IS→RF rule).
+    /// Does not store anything; the caller sets <c>AckSent</c>.
+    /// </summary>
+    public async Task SendAckAsync(
+        string toCallsign,
+        string originalMessageId,
+        PacketSource arrivedVia,
+        CancellationToken ct = default)
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildAckInfo(toCallsign, originalMessageId);
-        var frame = BuildAx25Frame(ourCallsign, info, path: string.Empty);
 
-        if (!connectionHolder.TrySend(frame))
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DireControlContext>();
+        var settings = await db.UserSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct)
+                       ?? new UserSetting { Id = 1 };
+
+        var sendRf = true;
+        if (arrivedVia == PacketSource.AprsIs)
+        {
+            if (settings.AprsIsEnabled)
+            {
+                aprsIsTxQueue.Enqueue(IgateLogic.BuildIsOriginatedLine(ourCallsign, info));
+                logger.LogDebug("Queued APRS-IS ACK to {ToCallsign} for message id={MessageId}.",
+                    toCallsign, originalMessageId);
+
+                var heardCutoff = DateTime.UtcNow.AddMinutes(-Math.Max(1, settings.IsToRfRecentHeardMinutes));
+                var peer = toCallsign.Trim().ToUpperInvariant();
+                sendRf = await db.Stations.AnyAsync(
+                    s => s.Callsign == peer && s.LastHeardRf != null && s.LastHeardRf >= heardCutoff,
+                    ct);
+            }
+        }
+
+        if (!sendRf)
+            return;
+
+        var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, settings.OutboundPath ?? string.Empty);
+        if (transmitter.Send(frame, 0, new TxFrameInfo(
+                TxFrameKind.Ack, $"ACK to {toCallsign.Trim().ToUpperInvariant()}", originalMessageId)) is null)
         {
             logger.LogWarning(
-                "Cannot send ACK to {ToCallsign}: no active Direwolf connection.",
+                "Cannot send RF ACK to {ToCallsign}: no RF transmit backend available.",
                 toCallsign);
             return;
         }
 
-        logger.LogDebug("Sent ACK to {ToCallsign} for message id={MessageId}.", toCallsign, originalMessageId);
+        logger.LogDebug("Sent RF ACK to {ToCallsign} for message id={MessageId} via {Path}.",
+            toCallsign, originalMessageId,
+            string.IsNullOrEmpty(settings.OutboundPath) ? "(direct)" : settings.OutboundPath);
     }
 
     /// <summary>
@@ -121,12 +224,13 @@ public sealed class MessageSendingService(
     {
         var ourCallsign = options.Value.OurCallsign.Trim().ToUpperInvariant();
         var info = BuildMessageInfo(message.ToCallsign, message.Body, message.MessageId);
-        var frame = BuildAx25Frame(ourCallsign, info, message.PathUsed ?? string.Empty);
+        var frame = Ax25Encoder.EncodeUiFrame(ourCallsign, info, message.PathUsed ?? string.Empty);
 
-        var sent = connectionHolder.TrySend(frame);
+        var sent = transmitter.Send(frame, 0, new TxFrameInfo(
+            TxFrameKind.Message, $"Message to {message.ToCallsign} (retry)", message.MessageId)) is not null;
         if (!sent)
             logger.LogWarning(
-                "Cannot retransmit message {Id} to {ToCallsign}: no active Direwolf connection.",
+                "Cannot retransmit message {Id} to {ToCallsign}: no RF transmit backend available.",
                 message.Id, message.ToCallsign);
 
         if (sent)
@@ -165,79 +269,5 @@ public sealed class MessageSendingService(
     {
         var addressee = toCallsign.ToUpperInvariant().PadRight(9)[..9];
         return $":{addressee}:ack{originalMessageId}";
-    }
-
-    // -------------------------------------------------------------------------
-    // AX.25 frame encoding
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Builds a raw AX.25 UI frame suitable for passing to
-    /// <see cref="AprsSharp.KissTnc.Tnc.SendData"/>.
-    /// </summary>
-    /// <param name="path">
-    /// Comma-separated digipeater path (e.g. "WIDE1-1,WIDE2-1").
-    /// Pass an empty string for direct/no-path operation.
-    /// </param>
-    private static byte[] BuildAx25Frame(string sourceCallsign, string aprsInfo, string path)
-    {
-        // APRS destination — "APRS" is the standard tocall for generic APRS.
-        const string destination = "APRS";
-
-        var (destBase, destSsid) = SplitCallsign(destination);
-        var (srcBase, srcSsid) = SplitCallsign(sourceCallsign);
-
-        var pathItems = string.IsNullOrWhiteSpace(path)
-            ? []
-            : path.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var frame = new List<byte>(128);
-
-        // Destination address (never the last address in the frame)
-        frame.AddRange(EncodeAddress(destBase, destSsid, isLast: false));
-
-        // Source address (last address only when there is no digipeater path)
-        frame.AddRange(EncodeAddress(srcBase, srcSsid, isLast: pathItems.Length == 0));
-
-        // Digipeater path addresses
-        for (var i = 0; i < pathItems.Length; i++)
-        {
-            var (dBase, dSsid) = SplitCallsign(pathItems[i]);
-            frame.AddRange(EncodeAddress(dBase, dSsid, isLast: i == pathItems.Length - 1));
-        }
-
-        // AX.25 UI frame control + PID
-        frame.Add(0x03); // Control: Unnumbered Information (UI)
-        frame.Add(0xF0); // PID: no layer-3 protocol
-
-        // APRS info field
-        frame.AddRange(Encoding.ASCII.GetBytes(aprsInfo));
-
-        return [.. frame];
-    }
-
-    /// <summary>
-    /// Encodes a single AX.25 address field (7 bytes).
-    /// </summary>
-    private static byte[] EncodeAddress(string callsign, int ssid, bool isLast)
-    {
-        // Pad or truncate to exactly 6 characters.
-        var padded = callsign.ToUpperInvariant().PadRight(6)[..6];
-
-        var bytes = new byte[7];
-        for (var i = 0; i < 6; i++)
-            bytes[i] = (byte)((padded[i] & 0x7F) << 1);
-
-        // SSID byte: bits 7-6 = 1 (H/C reserved), bits 4-1 = SSID, bit 0 = end
-        bytes[6] = (byte)(0x60 | ((ssid & 0x0F) << 1) | (isLast ? 0x01 : 0x00));
-
-        return bytes;
-    }
-
-    private static (string callsign, int ssid) SplitCallsign(string raw)
-    {
-        var parts = raw.Split('-', 2);
-        var ssid = parts.Length > 1 && int.TryParse(parts[1], out var n) ? n : 0;
-        return (parts[0], ssid);
     }
 }

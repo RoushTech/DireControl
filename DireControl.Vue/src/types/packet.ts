@@ -8,6 +8,9 @@ export enum PacketType {
   Status = 6,
   Unknown = 7,
   Unparseable = 8,
+  ThirdParty = 9,
+  StationCapabilities = 10,
+  Beacon = 11,
 }
 
 export enum PacketSource {
@@ -26,6 +29,9 @@ export const PACKET_TYPE_LABELS: Record<PacketType, string> = {
   [PacketType.Status]: 'Status',
   [PacketType.Unknown]: 'Unknown',
   [PacketType.Unparseable]: 'Unparseable',
+  [PacketType.ThirdParty]: 'Third-party',
+  [PacketType.StationCapabilities]: 'Capabilities',
+  [PacketType.Beacon]: 'Beacon',
 }
 
 export const PACKET_TYPE_COLORS: Record<PacketType, string> = {
@@ -38,6 +44,9 @@ export const PACKET_TYPE_COLORS: Record<PacketType, string> = {
   [PacketType.Status]: 'blue-grey',
   [PacketType.Unknown]: 'grey',
   [PacketType.Unparseable]: 'grey',
+  [PacketType.ThirdParty]: 'indigo',
+  [PacketType.StationCapabilities]: 'cyan',
+  [PacketType.Beacon]: 'brown',
 }
 
 /** Maps the string name from PacketBroadcastDto to the enum value. */
@@ -52,6 +61,9 @@ export function parsedTypeFromString(s: string): PacketType {
     Status: PacketType.Status,
     Unknown: PacketType.Unknown,
     Unparseable: PacketType.Unparseable,
+    ThirdParty: PacketType.ThirdParty,
+    StationCapabilities: PacketType.StationCapabilities,
+    Beacon: PacketType.Beacon,
   }
   return map[s] ?? PacketType.Unknown
 }
@@ -94,6 +106,23 @@ export interface PacketBroadcastDto {
   source: PacketSource
 }
 
+/** Projects a full PacketDto (REST) down to the lightweight live-stream shape. */
+export function packetDtoToBroadcast(p: PacketDto): PacketBroadcastDto {
+  return {
+    id: p.id,
+    callsign: p.stationCallsign,
+    parsedType: PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown',
+    receivedAt:
+      typeof p.receivedAt === 'string' ? p.receivedAt : new Date(p.receivedAt).toISOString(),
+    latitude: p.latitude,
+    longitude: p.longitude,
+    summary: p.comment || (PACKET_TYPE_LABELS[p.parsedType as PacketType] ?? 'Unknown'),
+    hopCount: p.hopCount,
+    resolvedPath: p.resolvedPath,
+    source: p.source,
+  }
+}
+
 export interface TrackPointDto {
   latitude: number
   longitude: number
@@ -114,12 +143,21 @@ export interface ResolvedPathEntry {
 export interface SignalData {
   decodeQuality: number | null
   frequencyOffsetHz: number | null
+  audioLevel: number | null
+  demodProfile: string | null
+  /** Bit decisions the modem inverted to make the checksum pass; null when valid as received. */
+  repairedBits?: number | null
 }
 
 export interface SignalPointDto {
   receivedAt: string
   decodeQuality: number | null
   frequencyOffsetHz: number | null
+  audioLevel: number | null
+  demodProfile: string | null
+  hopCount: number
+  /** First digipeater the packet came through; null when heard direct. */
+  firstDigi: string | null
 }
 
 export interface PacketDto {
@@ -156,4 +194,36 @@ export interface WeatherReadingDto {
   rainLastHour: number | null
   rainLast24h: number | null
   rainSinceMidnight: number | null
+}
+
+/** The RF / IS / OWN label shown on packets across the app. */
+export interface SourceChip {
+  label: string
+  color: string
+}
+
+/**
+ * One rule for labelling where a packet came from.  Our own transmissions are
+ * looped back and stored as RF, so callers pass `isOwn` (see
+ * {@link isOwnCallsign}) to tell them apart from stations we actually heard.
+ */
+export function sourceChip(source: PacketSource | null | undefined, isOwn = false): SourceChip {
+  if (isOwn || source === PacketSource.Own) return { label: 'OWN', color: 'own' }
+  return source === PacketSource.AprsIs
+    ? { label: 'IS', color: 'is' }
+    : { label: 'RF', color: 'rf' }
+}
+
+/** True when `callsign` is our station under any SSID. */
+export function isOwnCallsign(
+  callsign: string | null | undefined,
+  ourCallsign: string | null,
+): boolean {
+  if (!callsign || !ourCallsign) return false
+  return baseCallsign(callsign) === baseCallsign(ourCallsign)
+}
+
+/** The callsign without its SSID, upper-cased: "w3uwu-10" → "W3UWU". */
+export function baseCallsign(callsign: string): string {
+  return callsign.trim().toUpperCase().split('-')[0] ?? ''
 }

@@ -1,3 +1,60 @@
+import type { PttMethod } from '@/api/modemApi'
+
+/** Per-radio sound modem + PTT configuration (audio feed). */
+export interface RadioModemConfig {
+  modemEnabled: boolean
+  modemCaptureDevice: string
+  modemPlaybackDevice: string
+  /** Receive bit repair depth: 0 off, 1 (default) or 2 bits. */
+  rxBitRepair: number
+  txEnabled: boolean
+  txAudioLevelPct: number
+  /** Space (2200 Hz) tone boost over mark, dB 0–6; 0 = equal levels. */
+  txSpaceBoostDb: number
+  txDelayMs: number
+  txTailMs: number
+  txPersistence: number
+  txSlotTimeMs: number
+  pttMethod: PttMethod
+  pttSerialPort: string | null
+  pttSerialUseRts: boolean
+  pttSerialUseDtr: boolean
+  pttHidDevice: string | null
+  pttHidPin: number
+  pttGpioChip: number
+  pttGpioLine: number
+  pttGpioActiveLow: boolean
+  pttRigctldHost: string
+  pttRigctldPort: number
+}
+
+export function defaultRadioModemConfig(): RadioModemConfig {
+  return {
+    modemEnabled: false,
+    modemCaptureDevice: 'default',
+    modemPlaybackDevice: 'default',
+    rxBitRepair: 1,
+    txEnabled: false,
+    txAudioLevelPct: 80,
+    txSpaceBoostDb: 0,
+    txDelayMs: 300,
+    txTailMs: 50,
+    txPersistence: 63,
+    txSlotTimeMs: 100,
+    pttMethod: 1,
+    pttSerialPort: null,
+    pttSerialUseRts: true,
+    pttSerialUseDtr: false,
+    pttHidDevice: null,
+    pttHidPin: 3,
+    pttGpioChip: 0,
+    pttGpioLine: 0,
+    pttGpioActiveLow: false,
+    pttRigctldHost: 'localhost',
+    pttRigctldPort: 4532,
+  }
+}
+
 export interface RadioDto {
   id: string
   name: string
@@ -10,7 +67,12 @@ export interface RadioDto {
   beaconSymbol: string | null
   beaconComment: string | null
   isActive: boolean
+  frequencyMhz: number | null
+  mode: string | null
+  modem: RadioModemConfig
   expectedIntervalSeconds: number
+  autoBeaconEnabled: boolean
+  autoBeaconIntervalSeconds: number
   lastBeaconedAt: string | null
   secondsSinceBeacon: number | null
   confirmationCount: number
@@ -27,6 +89,11 @@ export interface CreateRadioRequest {
   beaconSymbol: string | null
   beaconComment: string | null
   expectedIntervalSeconds: number
+  autoBeaconEnabled: boolean
+  autoBeaconIntervalSeconds: number
+  frequencyMhz: number | null
+  mode: string | null
+  modem: RadioModemConfig
 }
 
 export interface UpdateRadioRequest {
@@ -39,6 +106,11 @@ export interface UpdateRadioRequest {
   beaconSymbol: string | null
   beaconComment: string | null
   expectedIntervalSeconds: number
+  autoBeaconEnabled: boolean
+  autoBeaconIntervalSeconds: number
+  frequencyMhz: number | null
+  mode: string | null
+  modem: RadioModemConfig
 }
 
 export interface DigiConfirmationDto {

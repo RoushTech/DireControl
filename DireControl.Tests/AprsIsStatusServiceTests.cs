@@ -1,7 +1,5 @@
-using DireControl.Api.Hubs;
 using DireControl.Api.Services;
 using DireControl.Enums;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 
@@ -11,7 +9,7 @@ namespace DireControl.Tests;
 public class AprsIsStatusServiceTests
 {
     private static AprsIsStatusService CreateService() =>
-        new(new FakeHubContext(), NullLogger<AprsIsStatusService>.Instance);
+        new(NullLogger<AprsIsStatusService>.Instance);
 
     [Test]
     public void RecordFailure_StampsFirstDisconnectedOnce_AndCountsAttempts()
@@ -77,40 +75,41 @@ public class AprsIsStatusServiceTests
             Assert.That(svc.FirstDisconnectedAt, Is.Not.Null);
         });
     }
-
-    // ─── Minimal SignalR fakes (no mocking library is referenced) ─────────────
-
-    private sealed class FakeHubContext : IHubContext<PacketHub>
+    [Test]
+    public void IncrementPacketCount_StampsLastPacketAt_AndKeepsItAcrossDisconnects()
     {
-        public IHubClients Clients { get; } = new FakeHubClients();
-        public IGroupManager Groups { get; } = new FakeGroupManager();
+        var svc = CreateService();
+        Assert.That(svc.LastPacketAt, Is.Null);
+
+        svc.IncrementPacketCount();
+        var stamp = svc.LastPacketAt;
+        svc.SetState(AprsIsConnectionState.Disconnected);
+        svc.ResetSessionCount();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamp, Is.Not.Null);
+            Assert.That(stamp!.Value.Kind, Is.EqualTo(DateTimeKind.Utc));
+            Assert.That(svc.LastPacketAt, Is.EqualTo(stamp), "IS freshness outlives the connection");
+        });
     }
 
-    private sealed class FakeHubClients : IHubClients
+    [TestCase(AprsIsConnectionState.Connected, true)]
+    [TestCase(AprsIsConnectionState.Connecting, false)]
+    [TestCase(AprsIsConnectionState.AuthFailed, false)]
+    [TestCase(AprsIsConnectionState.Disconnected, false)]
+    [TestCase(AprsIsConnectionState.Disabled, false)]
+    public void Verified_OnlyWhileConnected(AprsIsConnectionState state, bool verified)
     {
-        public IClientProxy All { get; } = new FakeClientProxy();
-        public IClientProxy AllExcept(IReadOnlyList<string> excludedConnectionIds) => All;
-        public IClientProxy Client(string connectionId) => All;
-        public IClientProxy Clients(IReadOnlyList<string> connectionIds) => All;
-        public IClientProxy Group(string groupName) => All;
-        public IClientProxy GroupExcept(string groupName, IReadOnlyList<string> excludedConnectionIds) => All;
-        public IClientProxy Groups(IReadOnlyList<string> groupNames) => All;
-        public IClientProxy User(string userId) => All;
-        public IClientProxy Users(IReadOnlyList<string> userIds) => All;
+        var svc = CreateService();
+        svc.SetState(state);
+        Assert.That(svc.Verified, Is.EqualTo(verified));
     }
 
-    private sealed class FakeClientProxy : IClientProxy
+    [Test]
+    public void ConnectionState_HasUnknownZero()
     {
-        public Task SendCoreAsync(string method, object?[] args, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class FakeGroupManager : IGroupManager
-    {
-        public Task AddToGroupAsync(string connectionId, string groupName, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
-
-        public Task RemoveFromGroupAsync(string connectionId, string groupName, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        Assert.That((int)AprsIsConnectionState.Unknown, Is.Zero);
+        Assert.That(default(AprsIsConnectionState), Is.EqualTo(AprsIsConnectionState.Unknown));
     }
 }

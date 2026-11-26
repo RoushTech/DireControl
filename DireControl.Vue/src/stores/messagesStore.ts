@@ -11,20 +11,24 @@ import {
 import type {
   InboxMessageDto,
   MessageAcknowledgedDto,
-  MessageAckDto,
   MessageFailedDto,
   MessageRetriedDto,
   SendMessageRequest,
 } from '@/types/message'
 import { RetryState } from '@/types/message'
+import { usePacketHubStore } from '@/stores/packetHub'
+import { useToastStore } from '@/stores/toastStore'
 
 export const useMessagesStore = defineStore('messages', () => {
   const inboxMessages = ref<InboxMessageDto[]>([])
   const loading = ref(false)
 
-  const unreadCount = computed(
-    () => inboxMessages.value.filter((m) => !m.isRead).length,
+  const unreadCount = computed(() => inboxMessages.value.filter((m) => !m.isRead).length)
+  /** Outbound messages that gave up without an ACK — badged on the Comms nav. */
+  const failedCount = computed(
+    () => inboxMessages.value.filter((m) => m.retryState === RetryState.Failed).length,
   )
+  const toastStore = useToastStore()
 
   async function fetchInbox() {
     loading.value = true
@@ -41,11 +45,10 @@ export const useMessagesStore = defineStore('messages', () => {
     if (idx !== -1) inboxMessages.value[idx] = updated
   }
 
-  async function send(request: SendMessageRequest): Promise<InboxMessageDto> {
+  async function send(request: SendMessageRequest): Promise<InboxMessageDto[]> {
     const sent = await sendMessage(request)
-    // Sent messages that are TO us appear in inbox; others go to "all messages" eventually,
-    // but we optimistically add them to inbox as outbound records.
-    inboxMessages.value.unshift(sent)
+    // Outbound records live alongside the inbox (threads pair them by peer).
+    inboxMessages.value.unshift(...[...sent].reverse())
     return sent
   }
 
@@ -73,10 +76,11 @@ export const useMessagesStore = defineStore('messages', () => {
     if (!exists) inboxMessages.value.unshift(message)
   }
 
-  /** Called when SignalR delivers an ACK for one of our sent messages. */
-  function onMessageAcked(ack: MessageAckDto) {
-    const msg = inboxMessages.value.find((m) => m.id === ack.id)
-    if (msg) msg.ackSent = true
+  /** Called when an existing message changes server-side (e.g. a retransmission was heard). */
+  function onMessageUpdated(message: InboxMessageDto) {
+    const idx = inboxMessages.value.findIndex((m) => m.id === message.id)
+    if (idx !== -1) inboxMessages.value[idx] = message
+    else inboxMessages.value.unshift(message)
   }
 
   /** Called when the retry service retransmits a message. Updates attempt info. */
@@ -109,6 +113,13 @@ export const useMessagesStore = defineStore('messages', () => {
       msg.nextRetryAt = null
       msg.retryCount = data.retryCount
     }
+    // Announced app-wide: a give-up matters on whatever screen is open.
+    toastStore.toast(
+      `Message to ${data.toCallsign} failed after ${data.retryCount} attempt(s): no ACK received.`,
+      'error',
+      10000,
+      { label: 'View', to: '/messages' },
+    )
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
@@ -118,10 +129,21 @@ export const useMessagesStore = defineStore('messages', () => {
     if (idx !== -1) inboxMessages.value[idx] = updated
   }
 
+  // Store-level hub subscriptions: retry-state changes and the unread badge
+  // stay live on every screen, not just while the Messages view is open.
+  const hub = usePacketHubStore()
+  hub.on('messageReceived', (message: InboxMessageDto) => onMessageReceived(message))
+  hub.on('messageUpdated', (message: InboxMessageDto) => onMessageUpdated(message))
+  hub.on('messageRetried', (data: MessageRetriedDto) => onMessageRetried(data))
+  hub.on('messageAcknowledged', (data: MessageAcknowledgedDto) => onMessageAcknowledged(data))
+  hub.on('messageFailed', (data: MessageFailedDto) => onMessageFailed(data))
+  hub.onReconnected(() => fetchInbox(), 'messages')
+
   return {
     inboxMessages,
     loading,
     unreadCount,
+    failedCount,
     fetchInbox,
     markRead,
     send,
@@ -129,7 +151,7 @@ export const useMessagesStore = defineStore('messages', () => {
     resetRetry,
     cancelRetry,
     onMessageReceived,
-    onMessageAcked,
+    onMessageUpdated,
     onMessageRetried,
     onMessageAcknowledged,
     onMessageFailed,
